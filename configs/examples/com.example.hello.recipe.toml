@@ -1,0 +1,51 @@
+# Example Keystone recipe (TOML) - native process
+
+[metadata]
+name = "com.example.hello"
+version = "1.0.0"
+description = "Demo component that prints heartbeats"
+publisher = "Keystone Project"
+type = "generic"         # generic | container (future)
+
+[config.defaults]
+log_level = "INFO"
+interval_seconds = 30
+message = "Hello from Keystone"
+
+[[artifacts]]
+uri = "https://artifacts.example.com/hello/1.0.0/hello-linux-amd64"
+sha256 = "<REPLACE_WITH_SHA256>"
+unpack = false
+
+[lifecycle.install]
+require_privilege = false
+script = """
+chmod +x ./hello
+"""
+
+[lifecycle.run.exec]
+command = "./hello"
+args = ["--log-level", "${config.log_level}", "--interval", "${config.interval_seconds}", "--message", "${config.message}"]
+env.LOG_LEVEL = "${config.log_level}"
+working_dir = "."
+
+[lifecycle.run.health]
+check = "tcp://127.0.0.1:8080"
+interval = "10s"
+timeout = "3s"
+failure_threshold = 3
+restart_policy = "always"  # never | on-failure | always
+
+[lifecycle.shutdown]
+script = "echo 'bye'"
+
+[security]
+run_as = "ks_user:ks_group"
+seccomp_profile = "default"   # default | unconfined | path:/etc/keystone/seccomp.json
+capabilities = ["CAP_NET_BIND_SERVICE"]
+
+[resources]
+cpu_quota = 40
+memory_limit = "128Mi"
+open_files = 4096
+

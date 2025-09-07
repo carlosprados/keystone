@@ -1,0 +1,24 @@
+[Unit]
+Description=Keystone Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/opt/keystone/bin/keystone-agent --http=:8080
+Restart=on-failure
+RestartSec=3
+User=keystone
+Group=keystone
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+
