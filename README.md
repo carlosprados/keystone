@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="keystone_logo.png" alt="Keystone Logo" width="200"/>
+</p>
+
 # Keystone — Lightweight Edge Orchestration in Go
 
 Keystone is a minimal, robust, and secure edge orchestration agent written in Go. It manages local components (native processes by default; containers optional later), executes deployments atomically with rollback, and keeps devices converging to a desired state — even with flaky networks.
@@ -111,6 +115,18 @@ go build -o keystonectl ./cmd/keystonectl
 ./keystonectl stop-plan
 ./keystonectl stop hello
 ./keystonectl restart hello
+./keystonectl graph
+./keystonectl restart-dry hello
+./keystonectl apply-dry configs/examples/plan.toml
+```
+
+Graph and dry-run from API directly:
+
+```
+curl -s localhost:8080/v1/plan/graph | jq
+curl -s -X POST localhost:8080/v1/components/hello:restart?dry=true | jq
+curl -s -X POST localhost:8080/v1/plan/apply -H 'Content-Type: application/json' \
+  -d '{"planPath":"configs/examples/plan.toml","dry":true}'
 ```
 
 ## Concepts (Preview)

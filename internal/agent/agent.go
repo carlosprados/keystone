@@ -196,6 +196,16 @@ func (a *Agent) Router() http.Handler {
         _ = json.NewEncoder(w).Encode(map[string]any{"nodes": nodes, "edges": edges, "order": order})
     })
 
+    // Plan apply: POST {"planPath":"...", "dry":bool}
+    mux.HandleFunc("/v1/plan/apply", func(w http.ResponseWriter, r *http.Request) {
+        if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
+        var req struct{ PlanPath string `json:"planPath"`; Dry bool `json:"dry"` }
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil { w.WriteHeader(http.StatusBadRequest); _, _ = w.Write([]byte(err.Error())); return }
+        if req.PlanPath == "" { w.WriteHeader(http.StatusBadRequest); _, _ = w.Write([]byte("missing planPath")); return }
+        if err := a.ApplyPlanAPI(req.PlanPath, req.Dry); err != nil { w.WriteHeader(http.StatusInternalServerError); _, _ = w.Write([]byte(err.Error())); return }
+        w.WriteHeader(http.StatusAccepted)
+    })
+
     // Plan stop (POST)
     mux.HandleFunc("/v1/plan/stop", func(w http.ResponseWriter, r *http.Request) {
         if r.Method != http.MethodPost {
@@ -666,4 +676,14 @@ func topoOrder(edges map[string][]string, indeg map[string]int) []string {
         for _, v := range edges[u] { in[v]--; if in[v] == 0 { q = append(q, v) } }
     }
     return order
+}
+
+// ApplyPlanAPI runs ApplyPlan with optional dry-run override.
+func (a *Agent) ApplyPlanAPI(planPath string, dry bool) error {
+    if dry {
+        saved := a.dryRun
+        a.dryRun = true
+        defer func(){ a.dryRun = saved }()
+    }
+    return a.ApplyPlan(planPath)
 }

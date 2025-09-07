@@ -25,6 +25,10 @@ func main() {
         doGET(*addr+"/v1/components")
     case "stop-plan":
         doPOST(*addr+"/v1/plan/stop")
+    case "apply-dry":
+        if flag.NArg() < 2 { fmt.Fprintln(os.Stderr, "missing plan path"); os.Exit(2) }
+        plan := flag.Arg(1)
+        doPOSTJSON(*addr+"/v1/plan/apply", map[string]any{"planPath": plan, "dry": true})
     case "graph":
         doGET(*addr+"/v1/plan/graph")
     case "restart-dry":
@@ -51,6 +55,7 @@ func usage() {
     fmt.Println("  status                   Show plan status")
     fmt.Println("  components               List components")
     fmt.Println("  stop-plan                Stop all components")
+    fmt.Println("  apply-dry <plan>         Apply plan (dry-run) and show order")
     fmt.Println("  stop <name>              Stop a component")
     fmt.Println("  restart <name>           Restart a component")
     fmt.Println("  restart-dry <name>       Show restart order (dry-run)")
@@ -76,6 +81,17 @@ func doGET(url string) {
 
 func doPOST(url string) {
     req, _ := http.NewRequest("POST", url, nil)
+    resp, err := http.DefaultClient.Do(req)
+    if err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
+    defer resp.Body.Close()
+    if resp.StatusCode >= 300 { io.Copy(os.Stderr, resp.Body); os.Exit(1) }
+    fmt.Println("OK")
+}
+
+func doPOSTJSON(url string, body any) {
+    b, _ := json.Marshal(body)
+    req, _ := http.NewRequest("POST", url, strings.NewReader(string(b)))
+    req.Header.Set("Content-Type", "application/json")
     resp, err := http.DefaultClient.Do(req)
     if err != nil { fmt.Fprintln(os.Stderr, err); os.Exit(1) }
     defer resp.Body.Close()
