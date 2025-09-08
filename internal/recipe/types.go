@@ -14,6 +14,8 @@ type Artifact struct {
     URI    string `toml:"uri"`
     SHA256 string `toml:"sha256"`
     Unpack bool   `toml:"unpack"`
+    SigURI string `toml:"sig_uri"`   // detached signature file
+    CertURI string `toml:"cert_uri"` // optional leaf cert if not provisioned
 }
 
 type LifecycleInstall struct {

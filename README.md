@@ -104,6 +104,13 @@ Notes:
 - Metrics (Prometheus):
   - `curl -s localhost:8080/metrics | head`
 
+### Signed Artifacts
+
+- Provide a trust bundle (PEM) via `KEYSTONE_TRUST_BUNDLE` and a leaf certificate via `KEYSTONE_LEAF_CERT`, or include `cert_uri` in the recipe.
+- Add `sig_uri` to each artifact entry in the recipe to enable signature verification.
+- Signature format: detached signature over SHA-256 of the artifact, produced with OpenSSL (`openssl dgst -sha256 -sign ...`).
+- See `configs/trust/README.md` for a quick, dev-friendly CA and signing walkthrough.
+
 ### keystonectl (CLI)
 
 Build and use the local CLI for convenience:

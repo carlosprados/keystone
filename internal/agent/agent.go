@@ -14,12 +14,14 @@ import (
     "sync"
     "sync/atomic"
     "time"
+    "crypto/x509"
 
     "github.com/carlosprados/keystone/internal/metrics"
     "github.com/carlosprados/keystone/internal/deploy"
     "github.com/carlosprados/keystone/internal/recipe"
     "github.com/carlosprados/keystone/internal/artifact"
     "github.com/carlosprados/keystone/internal/runner"
+    "github.com/carlosprados/keystone/internal/security"
     "github.com/carlosprados/keystone/internal/state"
     "github.com/carlosprados/keystone/internal/store"
     "github.com/carlosprados/keystone/internal/supervisor"
@@ -53,6 +55,9 @@ type Agent struct {
     // cache budget
     artifactCacheLimit int64
     dryRun bool
+    // trust
+    trustPool *x509.CertPool
+    trustPath string
 }
 
 // New creates an Agent with the provided options.
@@ -70,6 +75,16 @@ func New(opts Options) *Agent {
         a.planErr = snap.Plan.Error
         for _, ci := range snap.Components { a.comps.Upsert(ci) }
         a.planComps = snap.PlanComponents
+    }
+    // Load trust bundle if provided via env KEYSTONE_TRUST_BUNDLE
+    if tb := os.Getenv("KEYSTONE_TRUST_BUNDLE"); tb != "" {
+        if pool, err := security.LoadTrustBundle(tb); err == nil {
+            // cache in context or in agent; store path and pool for use during apply
+            a.trustPool = pool
+            a.trustPath = tb
+        } else {
+            log.Printf("failed to load trust bundle: %v", err)
+        }
     }
     // Periodic snapshots
     go func() {
@@ -363,6 +378,22 @@ func (a *Agent) ApplyPlan(planPath string) error {
             for _, adef := range r.Artifacts {
                 path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0)
                 if err != nil { return err }
+                // Signature verification if configured
+                if adef.SigURI != "" && a.trustPool != nil {
+                    sigPath, _, err := artifact.Ensure(artDir, adef.SigURI, "", 0)
+                    if err != nil { return fmt.Errorf("sig download: %w", err) }
+                    // Cert can come from recipe or env KEYSTONE_LEAF_CERT
+                    certPath := os.Getenv("KEYSTONE_LEAF_CERT")
+                    if adef.CertURI != "" {
+                        cp, _, err := artifact.Ensure(artDir, adef.CertURI, "", 0)
+                        if err != nil { return fmt.Errorf("cert download: %w", err) }
+                        certPath = cp
+                    }
+                    if certPath == "" { return fmt.Errorf("no certificate specified for signature verification") }
+                    if err := security.VerifyDetached(path, sigPath, certPath, a.trustPool); err != nil {
+                        return fmt.Errorf("signature verify failed for %s: %w", filepath.Base(path), err)
+                    }
+                }
                 if adef.Unpack {
                     marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
                     if _, err := os.Stat(marker); os.IsNotExist(err) {
