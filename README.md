@@ -60,6 +60,7 @@ curl -s localhost:8080/metrics | head
 See KeyStone.md for the architecture proposal and delivery plan.
 
 Implemented preview pieces in this repo:
+
 - Basic supervisor and DAG execution model
 - In-memory component store and `/v1/components`
 - `/metrics` (Prometheus) with simple component state gauge
@@ -84,6 +85,7 @@ go run ./cmd/keystone --apply configs/examples/plan.toml --http :8080
 ```
 
 Notes:
+
 - The example recipe points to a placeholder artifact URL; replace with a real binary and SHA256 for a working flow.
 - Install script runs in the component work dir and can mark binaries executable.
 - ProcessRunner applies basic `RLIMIT_NOFILE`; cgroups integration is a safe no-op placeholder for now.
@@ -157,4 +159,4 @@ We welcome contributors who care about reliability at the edge.
 
 ## License
 
-Apache-2.0
+📃 Apache-2.0
