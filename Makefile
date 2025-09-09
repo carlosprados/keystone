@@ -27,3 +27,8 @@ tidy:
 plan-dry:
 	@test -n "$(PLAN)" || (echo "Usage: make plan-dry PLAN=path/to/plan.toml" && exit 1)
 	go run ./cmd/keystone --apply $(PLAN) --dry-run --http :0
+
+.PHONY: hooks
+hooks:
+	@chmod +x .githooks/pre-commit scripts/setup-git-hooks.sh || true
+	@./scripts/setup-git-hooks.sh

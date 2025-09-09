@@ -1,0 +1,14 @@
+#!/bin/sh
+# Pre-commit hook to automatically format Go code
+
+echo "Running go fmt on all Go files..."
+
+go fmt ./...
+
+if ! git diff --quiet; then
+  echo "Go files were formatted, adding changes to commit..."
+  git add -u
+fi
+
+echo "Go code is properly formatted. Proceeding with commit."
+

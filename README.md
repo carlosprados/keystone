@@ -138,6 +138,16 @@ curl -s -X POST localhost:8080/v1/plan/apply -H 'Content-Type: application/json'
   -d '{"planPath":"configs/examples/plan.toml","dry":true}'
 ```
 
+## Git hooks
+
+Run once after cloning to enable the repo’s versioned hooks:
+
+```
+make hooks   # or: ./scripts/setup-git-hooks.sh
+```
+
+This sets `core.hooksPath` to `.githooks`, where the `pre-commit` hook runs `go fmt ./...` and stages formatting changes automatically.
+
 ## Concepts (Preview)
 
 - Recipe (TOML): describes a component (artifacts, lifecycle, security, resources)
