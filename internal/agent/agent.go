@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/carlosprados/keystone/internal/artifact"
+	"github.com/carlosprados/keystone/internal/config"
 	"github.com/carlosprados/keystone/internal/deploy"
 	"github.com/carlosprados/keystone/internal/metrics"
 	"github.com/carlosprados/keystone/internal/recipe"
@@ -62,6 +63,10 @@ type Agent struct {
 
 // New creates an Agent with the provided options.
 func New(opts Options) *Agent {
+	// Load .env (best-effort) before anything else so that subsequent code
+	// can use variables (e.g., tokens for artifact downloads).
+	config.LoadDotEnvDefault()
+
 	a := &Agent{opts: opts, start: time.Now(), comps: store.NewMemoryStore(), procs: make(map[string]*runner.ProcessHandle), cancels: make(map[string]context.CancelFunc), stateDir: filepath.Join("runtime", "state"), dryRun: opts.DryRun}
 	// Set artifact cache limit from env (bytes). Default: 2 GiB.
 	a.artifactCacheLimit = 2 * 1024 * 1024 * 1024
@@ -181,23 +186,59 @@ func (a *Agent) Router() http.Handler {
 				})
 				return
 			}
+			// Parse wait mode and timeout
+			mode := strings.ToLower(r.URL.Query().Get("wait"))
+			if mode == "" {
+				mode = defaultRestartWaitMode()
+			}
+			to := parseDurationDefault(r.URL.Query().Get("timeout"), defaultRestartTimeout())
+
 			// stop dependents first
+			log.Printf("api: restart %s stop dependents: %v", name, depsOrder)
 			for _, dn := range depsOrder {
+				log.Printf("api: stopping dependent %s", dn)
 				a.stopComponent(dn)
 			}
 			// stop target
+			log.Printf("api: stopping target %s", name)
 			a.stopComponent(name)
 			// start target
+			log.Printf("api: starting target %s", name)
 			if err := a.restartFromPlan(name); err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(err.Error()))
+				log.Printf("api: restart %s failed to start: %v", name, err)
 				return
 			}
-			// start dependents in order
-			for _, dn := range depsOrder {
-				_ = a.restartFromPlan(dn)
+			// wait target
+			log.Printf("api: waiting %s for %s (timeout=%s)", mode, name, to)
+			if err := a.waitReady(name, mode, to); err != nil {
+				w.WriteHeader(http.StatusGatewayTimeout)
+				_, _ = w.Write([]byte(err.Error()))
+				log.Printf("api: restart %s wait failed: %v", name, err)
+				return
 			}
-			w.WriteHeader(http.StatusAccepted)
+			log.Printf("api: target %s ready pid=%d", name, a.currentPID(name))
+			// start dependents in order and wait for each (best-effort)
+			depPIDs := map[string]int{}
+			for _, dn := range depsOrder {
+				log.Printf("api: starting dependent %s", dn)
+				_ = a.restartFromPlan(dn)
+				if err := a.waitReady(dn, mode, to); err != nil {
+					log.Printf("api: dependent %s not ready: %v", dn, err)
+				}
+				if pid := a.currentPID(dn); pid > 0 {
+					depPIDs[dn] = pid
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"component":  name,
+				"pid":        a.currentPID(name),
+				"dependents": depPIDs,
+				"wait":       mode,
+				"timeout":    to.String(),
+			})
 		}
 	})
 
@@ -427,6 +468,8 @@ func (a *Agent) ApplyPlan(planPath string) error {
 	}
 	// Build supervisor components now using computed deps
 	pr := runner.New()
+	// readiness channels per component (closed when process actually starts)
+	compReady := make(map[string]chan struct{})
 	for _, l := range loadedList {
 		// find deps for this comp
 		var depNames []string
@@ -438,31 +481,34 @@ func (a *Agent) ApplyPlan(planPath string) error {
 		}
 		r := l.rec
 		it := l.item
+		var startedOnce sync.Once
+		healthBasedReady := false
 		// Prepare workspace per component version
 		workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
 		artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)
-		installFn := func(ctx context.Context) error {
-			// Download and verify artifacts
-			for _, adef := range r.Artifacts {
-				path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0)
-				if err != nil {
-					return err
-				}
-				// Signature verification if configured
-				if adef.SigURI != "" && a.trustPool != nil {
-					sigPath, _, err := artifact.Ensure(artDir, adef.SigURI, "", 0)
-					if err != nil {
-						return fmt.Errorf("sig download: %w", err)
-					}
-					// Cert can come from recipe or env KEYSTONE_LEAF_CERT
-					certPath := os.Getenv("KEYSTONE_LEAF_CERT")
-					if adef.CertURI != "" {
-						cp, _, err := artifact.Ensure(artDir, adef.CertURI, "", 0)
-						if err != nil {
-							return fmt.Errorf("cert download: %w", err)
-						}
-						certPath = cp
-					}
+            installFn := func(ctx context.Context) error {
+                // Download and verify artifacts
+                for _, adef := range r.Artifacts {
+                    httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
+                    path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0, httpOpts)
+                    if err != nil {
+                        return err
+                    }
+                    // Signature verification if configured
+                    if adef.SigURI != "" && a.trustPool != nil {
+                        sigPath, _, err := artifact.Ensure(artDir, adef.SigURI, "", 0, httpOpts)
+                        if err != nil {
+                            return fmt.Errorf("sig download: %w", err)
+                        }
+                        // Cert can come from recipe or env KEYSTONE_LEAF_CERT
+                        certPath := os.Getenv("KEYSTONE_LEAF_CERT")
+                        if adef.CertURI != "" {
+                            cp, _, err := artifact.Ensure(artDir, adef.CertURI, "", 0, httpOpts)
+                            if err != nil {
+                                return fmt.Errorf("cert download: %w", err)
+                            }
+                            certPath = cp
+                        }
 					if certPath == "" {
 						return fmt.Errorf("no certificate specified for signature verification")
 					}
@@ -470,17 +516,17 @@ func (a *Agent) ApplyPlan(planPath string) error {
 						return fmt.Errorf("signature verify failed for %s: %w", filepath.Base(path), err)
 					}
 				}
-				if adef.Unpack {
-					marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
-					if _, err := os.Stat(marker); os.IsNotExist(err) {
-						if err := artifact.Unpack(path, workDir); err != nil {
-							return err
-						}
-						_ = os.MkdirAll(filepath.Dir(marker), 0o755)
-						_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
-					}
-				}
-			}
+                    if adef.Unpack {
+                        marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
+                        if _, err := os.Stat(marker); os.IsNotExist(err) {
+                            if err := artifact.Unpack(path, workDir); err != nil {
+                                return err
+                            }
+                            _ = os.MkdirAll(filepath.Dir(marker), 0o755)
+                            _ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+                        }
+                    }
+                }
 			// If not unpacked, ensure working dir exists
 			if _, err := os.Stat(workDir); os.IsNotExist(err) {
 				if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -505,6 +551,7 @@ func (a *Agent) ApplyPlan(planPath string) error {
 			hc := runner.HealthConfig{}
 			if r.Lifecycle.Run.Health.Check != "" {
 				hc.Check = r.Lifecycle.Run.Health.Check
+				healthBasedReady = true
 			}
 			if d, err := time.ParseDuration(defaultString(r.Lifecycle.Run.Health.Interval, "10s")); err == nil {
 				hc.Interval = d
@@ -521,6 +568,19 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				rp = runner.RestartAlways
 			}
 
+			// Validate command availability early to surface clear errors
+			cmdPath := r.Lifecycle.Run.Exec.Command
+			if cmdPath == "" {
+				return fmt.Errorf("empty run.exec.command")
+			}
+			// If relative like ./bin, ensure it exists under workDir
+			if strings.HasPrefix(cmdPath, "./") {
+				abs := filepath.Join(workDir, strings.TrimPrefix(cmdPath, "./"))
+				if st, err := os.Stat(abs); err != nil || st.IsDir() {
+					return fmt.Errorf("run command not found: %s", abs)
+				}
+			}
+
 			opts := runner.Options{
 				Name:       it.Name,
 				Command:    r.Lifecycle.Run.Exec.Command,
@@ -529,6 +589,7 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				WorkingDir: workDir,
 				NoFile:     r.Resources.OpenFiles,
 			}
+			log.Printf("starting component %s: cwd=%s cmd=%s args=%v", it.Name, workDir, opts.Command, opts.Args)
 			// Run managed in background and capture first start handle for metrics/stop
 			go func() {
 				// component-specific context for stop
@@ -555,6 +616,14 @@ func (a *Agent) ApplyPlan(planPath string) error {
 							a.comps.Upsert(ci)
 						}
 						a.mu.Unlock()
+						// signal readiness once on first successful start (if no health check)
+						if !healthBasedReady {
+							startedOnce.Do(func() {
+								if ch, ok := compReady[it.Name]; ok && ch != nil {
+									close(ch)
+								}
+							})
+						}
 						go metrics.SampleProcessMetrics(ctx2, it.Name, h.PID)
 					},
 					func(ok bool) {
@@ -571,6 +640,13 @@ func (a *Agent) ApplyPlan(planPath string) error {
 						}
 						a.mu.Unlock()
 						metrics.SetHealthy(it.Name, ok)
+						if healthBasedReady && ok {
+							startedOnce.Do(func() {
+								if ch, ok := compReady[it.Name]; ok && ch != nil {
+									close(ch)
+								}
+							})
+						}
 					},
 				)
 			}()
@@ -585,7 +661,12 @@ func (a *Agent) ApplyPlan(planPath string) error {
 			}
 			return pr.Stop(ctx, h, 10*time.Second)
 		}
-		comps = append(comps, supervisor.NewComponent(it.Name, depNames, installFn, startFn, stopFn))
+		// Create component with readiness channel and register it
+		readyCh := make(chan struct{})
+		c := supervisor.NewComponent(it.Name, depNames, installFn, startFn, stopFn)
+		c.ReadyCh = readyCh
+		comps = append(comps, c)
+		compReady[it.Name] = readyCh
 	}
 	// If dry-run, set status and return after printing order
 	if a.dryRun {
@@ -616,25 +697,32 @@ func (a *Agent) ApplyPlan(planPath string) error {
 	for _, c := range comps {
 		a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: string(c.State())})
 	}
-	// Poll states to store and component-state metric
-	go func() {
-		t := time.NewTicker(500 * time.Millisecond)
-		defer t.Stop()
-		for range t.C {
-			if a.closed.Load() {
-				return
-			}
-			for _, c := range comps {
-				st := string(c.State())
-				a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: st})
-				// read health for label
-				ci, _ := a.comps.Get(c.Name)
-				metrics.ObserveComponentState(c.Name, st)
-				metrics.ObserveComponentStateWithHealth(c.Name, st, ci.LastHealth)
-			}
-			a.persistSnapshot()
-		}
-	}()
+    // Poll states to store and component-state metric
+    go func() {
+        t := time.NewTicker(500 * time.Millisecond)
+        defer t.Stop()
+        for range t.C {
+            if a.closed.Load() {
+                return
+            }
+            for _, c := range comps {
+                // Derive running/stopped from presence of a managed process handle.
+                a.mu.RLock()
+                _, running := a.procs[c.Name]
+                a.mu.RUnlock()
+                st := "stopped"
+                if running {
+                    st = "running"
+                }
+                a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: st})
+                // read health for label
+                ci, _ := a.comps.Get(c.Name)
+                metrics.ObserveComponentState(c.Name, st)
+                metrics.ObserveComponentStateWithHealth(c.Name, st, ci.LastHealth)
+            }
+            a.persistSnapshot()
+        }
+    }()
 
 	err = supervisor.StartStack(context.Background(), comps)
 	a.mu.Lock()
@@ -716,22 +804,23 @@ func (a *Agent) restartFromPlan(name string) error {
 	workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
 	artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)
 	// Ensure artifacts and (optional) unpack
-	for _, adef := range r.Artifacts {
-		path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0)
-		if err != nil {
-			return err
-		}
-		if adef.Unpack {
-			marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
-			if _, err := os.Stat(marker); os.IsNotExist(err) {
-				if err := artifact.Unpack(path, workDir); err != nil {
-					return err
-				}
-				_ = os.MkdirAll(filepath.Dir(marker), 0o755)
-				_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
-			}
-		}
-	}
+    for _, adef := range r.Artifacts {
+        httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
+        path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0, httpOpts)
+        if err != nil {
+            return err
+        }
+        if adef.Unpack {
+            marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
+            if _, err := os.Stat(marker); os.IsNotExist(err) {
+                if err := artifact.Unpack(path, workDir); err != nil {
+                    return err
+                }
+                _ = os.MkdirAll(filepath.Dir(marker), 0o755)
+                _ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+            }
+        }
+    }
 	if _, err := os.Stat(workDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
 			return err
@@ -767,7 +856,15 @@ func (a *Agent) restartFromPlan(name string) error {
 	if rp == "" {
 		rp = runner.RestartAlways
 	}
+	// Validate command presence if relative
+	if cmd := r.Lifecycle.Run.Exec.Command; strings.HasPrefix(cmd, "./") {
+		abs := filepath.Join(workDir, strings.TrimPrefix(cmd, "./"))
+		if st, err := os.Stat(abs); err != nil || st.IsDir() {
+			return fmt.Errorf("run command not found: %s", abs)
+		}
+	}
 	opts := runner.Options{Name: name, Command: r.Lifecycle.Run.Exec.Command, Args: r.Lifecycle.Run.Exec.Args, Env: env, WorkingDir: workDir, NoFile: r.Resources.OpenFiles}
+	log.Printf("restarting component %s: cwd=%s cmd=%s args=%v", name, workDir, opts.Command, opts.Args)
 	go func() {
 		ctx2, cancel := context.WithCancel(context.Background())
 		a.mu.Lock()
@@ -816,21 +913,39 @@ func (a *Agent) restartFromPlan(name string) error {
 
 // stopComponent cancels managed loop and stops process, updating store.
 func (a *Agent) stopComponent(name string) {
+	log.Printf("agent: stopComponent start name=%s", name)
+	// Grab references under lock, but perform blocking ops outside the lock
 	a.mu.Lock()
-	if cancel := a.cancels[name]; cancel != nil {
-		cancel()
+	cancel := a.cancels[name]
+	var pid int
+	var h *runner.ProcessHandle
+	if cancel != nil {
 		delete(a.cancels, name)
 	}
-	if h := a.procs[name]; h != nil {
-		_ = (&runner.ProcessRunner{}).Stop(context.Background(), h, 5*time.Second)
+	if ph, ok := a.procs[name]; ok && ph != nil {
+		h = ph
+		pid = ph.PID
 		delete(a.procs, name)
 	}
+	a.mu.Unlock()
+
+	if cancel != nil {
+		log.Printf("agent: cancel managed loop for %s", name)
+		cancel()
+	}
+    if h != nil {
+        log.Printf("agent: stopping process %s pid=%d", name, pid)
+        if err := (&runner.ProcessRunner{}).Stop(context.Background(), h, 5*time.Second); err != nil {
+            log.Printf("agent: stopComponent Stop error name=%s pid=%d err=%v", name, pid, err)
+        }
+    }
+	// Update store (no need to hold a.mu here)
 	ci, ok := a.comps.Get(name)
 	if ok {
 		ci.State = "stopped"
 		a.comps.Upsert(ci)
 	}
-	a.mu.Unlock()
+	log.Printf("agent: stopComponent done name=%s", name)
 }
 
 // planDependentsTopological returns dependents of 'name' in topological order (closest first -> farthest last).
@@ -943,4 +1058,69 @@ func (a *Agent) ApplyPlanAPI(planPath string, dry bool) error {
 		defer func() { a.dryRun = saved }()
 	}
 	return a.ApplyPlan(planPath)
+}
+
+// Helpers for synchronous restart
+func (a *Agent) currentPID(name string) int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if h := a.procs[name]; h != nil {
+		return h.PID
+	}
+	return 0
+}
+
+// waitReady waits until a component has a PID (wait=pid) or reports healthy (wait=health).
+// mode: "pid" (default) or "health". timeout caps wait time.
+func (a *Agent) waitReady(name, mode string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	lastLog := time.Now().Add(-10 * time.Second)
+	for {
+		if mode == "health" {
+			if ci, ok := a.comps.Get(name); ok && ci.LastHealth == "healthy" {
+				return nil
+			}
+		} else { // pid
+			if pid := a.currentPID(name); pid > 0 {
+				return nil
+			}
+		}
+		if time.Since(lastLog) >= 5*time.Second {
+			// periodic progress log
+			pid := a.currentPID(name)
+			ci, _ := a.comps.Get(name)
+			log.Printf("waitReady: name=%s mode=%s pid=%d last_health=%s remaining=%s", name, mode, pid, ci.LastHealth, time.Until(deadline).Truncate(time.Second))
+			lastLog = time.Now()
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("wait for %s %s timed out after %s", name, mode, timeout)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func defaultRestartWaitMode() string {
+	if v := strings.ToLower(os.Getenv("KEYSTONE_RESTART_WAIT")); v == "health" {
+		return "health"
+	}
+	return "pid"
+}
+
+func defaultRestartTimeout() time.Duration {
+	if v := os.Getenv("KEYSTONE_RESTART_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 60 * time.Second
+}
+
+func parseDurationDefault(s string, d time.Duration) time.Duration {
+	if s == "" {
+		return d
+	}
+	if dd, err := time.ParseDuration(s); err == nil && dd > 0 {
+		return dd
+	}
+	return d
 }

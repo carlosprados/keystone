@@ -22,6 +22,7 @@ type ProcessHandle struct {
 	Cmd       *exec.Cmd
 	Name      string
 	StartedAt time.Time
+	Done      chan error // signaled when process exits
 }
 
 // Options specifies how to start the process.
@@ -57,16 +58,16 @@ func (r *ProcessRunner) Start(ctx context.Context, opts Options) (*ProcessHandle
 	// Log capture pipes
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
+    if err := cmd.Start(); err != nil {
+        return nil, err
+    }
 	if stdout != nil {
 		go streamLogs(ctx, opts.Name, "stdout", stdout)
 	}
 	if stderr != nil {
 		go streamLogs(ctx, opts.Name, "stderr", stderr)
 	}
-	return &ProcessHandle{PID: cmd.Process.Pid, Cmd: cmd, Name: opts.Command, StartedAt: time.Now()}, nil
+    return &ProcessHandle{PID: cmd.Process.Pid, Cmd: cmd, Name: opts.Command, StartedAt: time.Now(), Done: make(chan error, 1)}, nil
 }
 
 // Stop sends SIGTERM to the process group and waits, then SIGKILL on timeout.
@@ -77,16 +78,22 @@ func (r *ProcessRunner) Stop(ctx context.Context, h *ProcessHandle, timeout time
 	// Send SIGTERM to the group
 	pgid := -h.Cmd.Process.Pid
 	_ = syscall.Kill(pgid, syscall.SIGTERM)
-	done := make(chan error, 1)
-	go func() { done <- h.Cmd.Wait() }()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case err := <-done:
+	case err := <-h.Done:
 		return err
 	case <-time.After(timeout):
 		_ = syscall.Kill(pgid, syscall.SIGKILL)
-		return <-done
+		select {
+		case err := <-h.Done:
+			return err
+		case <-time.After(3 * time.Second):
+			return fmt.Errorf("process did not exit after SIGKILL")
+		}
 	}
 }
 
@@ -131,7 +138,21 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 
 		// Watch process exit
 		exitCh := make(chan error, 1)
-		go func(h *ProcessHandle) { exitCh <- h.Cmd.Wait() }(handle)
+        go func(h *ProcessHandle) {
+            err := h.Cmd.Wait()
+            // log process exit for diagnostics
+            if err != nil {
+                log.Error().Str("component", name).Int("pid", h.PID).Err(err).Msg("process exited with error")
+            } else {
+                log.Info().Str("component", name).Int("pid", h.PID).Msg("process exited cleanly")
+            }
+            exitCh <- err
+            // notify handle.Done for external waiters
+            select {
+            case h.Done <- err:
+            default:
+            }
+        }(handle)
 
 		// Health loop ticker
 		failures := 0
@@ -145,9 +166,10 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 		run := true
 		for run {
 			select {
-			case <-ctx.Done():
-				_ = r.Stop(context.Background(), handle, 5*time.Second)
-				return nil
+            case <-ctx.Done():
+                // External caller is responsible for stopping the process.
+                // Avoid double-stop races with agent.stopComponent.
+                return nil
 			case err := <-exitCh:
 				// Process exited
 				if err != nil && policy != RestartNever {
