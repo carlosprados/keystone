@@ -546,12 +546,21 @@ func (a *Agent) ApplyPlan(planPath string) error {
 					return err
 				}
 			}
-			// Run install script if any
-			if r.Lifecycle.Install.Script != "" {
-				cmd := exec.CommandContext(ctx, "/bin/sh", "-c", r.Lifecycle.Install.Script)
-				cmd.Dir = workDir
-				return cmd.Run()
-			}
+			// Run install script if any (idempotent via .installed marker)
+			installedMarker := filepath.Join(workDir, ".installed")
+            if r.Lifecycle.Install.Script != "" {
+                    if _, err := os.Stat(installedMarker); err == nil {
+                        // already installed
+                        return nil
+                    }
+                out, err := runShellWithOutput(ctx, workDir, r.Lifecycle.Install.Script)
+                if err != nil {
+                        // include trimmed output for diagnostics
+                        return fmt.Errorf("install script failed: %v\n--- output ---\n%s", err, out)
+                    }
+                    _ = os.WriteFile(installedMarker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+                    return nil
+            }
 			return nil
 		}
 		startFn := func(ctx context.Context) error {
@@ -839,13 +848,16 @@ func (a *Agent) restartFromPlan(name string) error {
 			return err
 		}
 	}
-	if r.Lifecycle.Install.Script != "" {
-		cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", r.Lifecycle.Install.Script)
-		cmd.Dir = workDir
-		if err := cmd.Run(); err != nil {
-			return err
-		}
-	}
+    if r.Lifecycle.Install.Script != "" {
+        installedMarker := filepath.Join(workDir, ".installed")
+        if _, err := os.Stat(installedMarker); os.IsNotExist(err) {
+            out, err := runShellWithOutput(context.Background(), workDir, r.Lifecycle.Install.Script)
+            if err != nil {
+                return fmt.Errorf("install script failed: %v\n--- output ---\n%s", err, out)
+            }
+            _ = os.WriteFile(installedMarker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+        }
+    }
 	// Start managed
 	pr := runner.New()
 	var env []string
@@ -1112,22 +1124,6 @@ func (a *Agent) waitReady(name, mode string, timeout time.Duration) error {
 	}
 }
 
-func defaultRestartWaitMode() string {
-	if v := strings.ToLower(os.Getenv("KEYSTONE_RESTART_WAIT")); v == "health" {
-		return "health"
-	}
-	return "pid"
-}
-
-func defaultRestartTimeout() time.Duration {
-	if v := os.Getenv("KEYSTONE_RESTART_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
-		}
-	}
-	return 60 * time.Second
-}
-
 func parseDurationDefault(s string, d time.Duration) time.Duration {
 	if s == "" {
 		return d
@@ -1136,4 +1132,17 @@ func parseDurationDefault(s string, d time.Duration) time.Duration {
 		return dd
 	}
 	return d
+}
+
+// runShellWithOutput runs a shell script in the given working directory and returns trimmed combined output.
+func runShellWithOutput(ctx context.Context, workDir, script string) (string, error) {
+    cmd := exec.CommandContext(ctx, "/bin/sh", "-c", script)
+    cmd.Dir = workDir
+    out, err := cmd.CombinedOutput()
+    const limit = 8192 // cap output to 8KiB
+    if len(out) > limit {
+        // keep tail
+        out = out[len(out)-limit:]
+    }
+    return string(out), err
 }

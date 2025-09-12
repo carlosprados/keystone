@@ -103,22 +103,22 @@ func (c *Component) Start(ctx context.Context) error {
 		if timeout <= 0 {
 			timeout = 15 * time.Second
 		}
-		c.mu.Unlock()
-		select {
-		case <-ch:
-			// ready
-		case <-ctx.Done():
-			c.mu.Lock()
-			c.setState(StateFailed)
-			c.mu.Unlock()
-			return ctx.Err()
-		case <-time.After(timeout):
-			c.mu.Lock()
-			c.setState(StateFailed)
-			c.mu.Unlock()
-			return errors.New("start readiness timeout")
-		}
-		c.mu.Lock()
+    c.mu.Unlock()
+    select {
+    case <-ch:
+        // ready
+    case <-ctx.Done():
+        c.mu.Lock()
+        c.setState(StateFailed)
+        // Do not unlock here; defer will release the lock acquired at function entry
+        return ctx.Err()
+    case <-time.After(timeout):
+        c.mu.Lock()
+        c.setState(StateFailed)
+        // Do not unlock here; defer will release the lock acquired at function entry
+        return errors.New("start readiness timeout")
+    }
+    c.mu.Lock()
 	}
 	c.setState(StateRunning)
 	return nil

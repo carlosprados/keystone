@@ -5,6 +5,7 @@ SHELL := /bin/bash
 build:
 	go build ./cmd/keystone
 	go build ./cmd/keystonectl
+	go build ./cmd/keystoneserver
 
 run:
 	go run ./cmd/keystone --http :8080
