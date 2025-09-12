@@ -24,10 +24,10 @@ type Snapshot struct {
 
 // PlanComponent persists mapping from component name to recipe and deps.
 type PlanComponent struct {
-	Name       string   `json:"name"`
-	RecipePath string   `json:"recipe_path"`
-	RecipeMeta string   `json:"recipe_meta"`
-	Deps       []string `json:"deps"`
+    Name       string   `json:"name"`
+    RecipePath string   `json:"recipe_path"`
+    RecipeMeta string   `json:"recipe_meta"`
+    Deps       []string `json:"deps"`
 }
 
 func Save(dir string, snap Snapshot) error {

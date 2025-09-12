@@ -13,8 +13,8 @@ type Plan struct {
 }
 
 type Component struct {
-	Name       string `toml:"name"`
-	RecipePath string `toml:"recipe"`
+    Name       string `toml:"name"`
+    RecipePath string `toml:"recipe"`
 }
 
 func Load(path string) (*Plan, error) {

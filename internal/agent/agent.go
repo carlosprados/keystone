@@ -186,12 +186,20 @@ func (a *Agent) Router() http.Handler {
 				})
 				return
 			}
-			// Parse wait mode and timeout
-			mode := strings.ToLower(r.URL.Query().Get("wait"))
-			if mode == "" {
-				mode = defaultRestartWaitMode()
-			}
-			to := parseDurationDefault(r.URL.Query().Get("timeout"), defaultRestartTimeout())
+            // Determine wait mode and timeout with precedence: Query > Default (pid, 60s)
+            mode := strings.ToLower(r.URL.Query().Get("wait"))
+            if mode == "" {
+                mode = "pid"
+            }
+            if mode != "health" {
+                mode = "pid"
+            }
+            var to time.Duration
+            if qto := r.URL.Query().Get("timeout"); qto != "" {
+                to = parseDurationDefault(qto, 60*time.Second)
+            } else {
+                to = 60 * time.Second
+            }
 
 			// stop dependents first
 			log.Printf("api: restart %s stop dependents: %v", name, depsOrder)
@@ -456,16 +464,21 @@ func (a *Agent) ApplyPlan(planPath string) error {
 		metaToComp[r.Metadata.Name] = it.Name
 	}
 	// Second pass: compute deps among plan components using recipe dependencies
-	for _, l := range loadedList {
-		// compute dep component names
-		var depNames []string
-		for _, d := range l.rec.Dependencies {
-			if compName, ok := metaToComp[d.Name]; ok {
-				depNames = append(depNames, compName)
-			}
-		}
-		planMap = append(planMap, state.PlanComponent{Name: l.item.Name, RecipePath: l.item.RecipePath, RecipeMeta: l.rec.Metadata.Name, Deps: depNames})
-	}
+    for _, l := range loadedList {
+        // compute dep component names
+        var depNames []string
+        for _, d := range l.rec.Dependencies {
+            if compName, ok := metaToComp[d.Name]; ok {
+                depNames = append(depNames, compName)
+            }
+        }
+        planMap = append(planMap, state.PlanComponent{
+            Name:       l.item.Name,
+            RecipePath: l.item.RecipePath,
+            RecipeMeta: l.rec.Metadata.Name,
+            Deps:       depNames,
+        })
+    }
 	// Build supervisor components now using computed deps
 	pr := runner.New()
 	// readiness channels per component (closed when process actually starts)
