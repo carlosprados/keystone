@@ -16,6 +16,11 @@ message = "Hello from Keystone"
 uri = "https://artifacts.example.com/hello/1.0.0/hello-linux-amd64"
 sha256 = "<REPLACE_WITH_SHA256>"
 unpack = false
+# Optional token/headers (uncomment and set if needed)
+# github_token = ""   # for github.com/api.github.com; sets Authorization: Bearer <token> if no Authorization header below
+# [artifacts.headers]
+# Authorization = "Bearer <TOKEN>"
+# Accept = "application/octet-stream"
 
 [lifecycle.install]
 require_privilege = false
@@ -48,4 +53,3 @@ capabilities = ["CAP_NET_BIND_SERVICE"]
 cpu_quota = 40
 memory_limit = "128Mi"
 open_files = 4096
-

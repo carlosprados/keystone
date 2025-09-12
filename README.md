@@ -113,6 +113,23 @@ Notes:
 - Signature format: detached signature over SHA-256 of the artifact, produced with OpenSSL (`openssl dgst -sha256 -sign ...`).
 - See `configs/trust/README.md` for a quick, dev-friendly CA and signing walkthrough.
 
+### Artifact Download Headers (TOML)
+
+- Configure per-artifact HTTP headers directly in the recipe under `[[artifacts]].headers`.
+- For GitHub artifacts (`github.com` or `api.github.com`), set `github_token` (at the same level as `uri`) to inject `Authorization: Bearer <token>` when no `Authorization` header is provided.
+
+Example snippet inside a recipe:
+
+```
+[[artifacts]]
+uri = "https://api.github.com/repos/org/repo/actions/artifacts/123/zip"
+sha256 = "sha256:<...>"
+unpack = true
+github_token = ""
+[artifacts.headers]
+Accept = "application/vnd.github+json"   # para endpoint de Actions /artifacts/{id}/zip (302 hacia S3)
+```
+
 ### keystonectl (CLI)
 
 Build and use the local CLI for convenience:
