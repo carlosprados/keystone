@@ -1,38 +1,38 @@
 package artifact
 
 import (
-    "archive/tar"
-    "archive/zip"
-    "compress/gzip"
-    "context"
-    "crypto/sha256"
-    "encoding/hex"
-    "errors"
-    "fmt"
-    "io"
-    "net/http"
-    "net/url"
-    "os"
-    "path/filepath"
-    "strings"
-    "time"
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
-    retryablehttp "github.com/hashicorp/go-retryablehttp"
+	retryablehttp "github.com/hashicorp/go-retryablehttp"
 )
 
 // HTTPOptions allows callers to attach headers and optional GitHub token.
 type HTTPOptions struct {
-    Headers     map[string]string
-    GithubToken string
+	Headers     map[string]string
+	GithubToken string
 }
 
 // Download downloads the given URI to destDir, with retries and resume support.
 func Download(destDir, uri string, timeout time.Duration, httpOpts HTTPOptions) (string, error) {
-    if err := os.MkdirAll(destDir, 0o755); err != nil {
-        return "", err
-    }
-    u, err := url.Parse(uri)
-    if err != nil {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return "", err
+	}
+	u, err := url.Parse(uri)
+	if err != nil {
 		return "", err
 	}
 	base := filepath.Base(u.Path)
@@ -47,17 +47,17 @@ func Download(destDir, uri string, timeout time.Duration, httpOpts HTTPOptions) 
 	client.RetryWaitMax = 2 * time.Second
 	client.Logger = nil
 
-    req, err := retryablehttp.NewRequest("GET", uri, nil)
-    if err != nil {
-        return "", err
-    }
-    // Attach headers from environment (e.g., Authorization)
-    attachRequestHeaders(req.Request, httpOpts)
-    ctx := context.Background()
-    var cancel func()
-    if timeout > 0 {
-        ctx, cancel = context.WithTimeout(ctx, timeout)
-        defer cancel()
+	req, err := retryablehttp.NewRequest("GET", uri, nil)
+	if err != nil {
+		return "", err
+	}
+	// Attach headers from environment (e.g., Authorization)
+	attachRequestHeaders(req.Request, httpOpts)
+	ctx := context.Background()
+	var cancel func()
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 	resp, err := client.Do(req.WithContext(ctx))
 	if err != nil {
@@ -83,24 +83,24 @@ func Download(destDir, uri string, timeout time.Duration, httpOpts HTTPOptions) 
 
 // attachRequestHeaders adds headers from HTTPOptions only.
 func attachRequestHeaders(r *http.Request, opts HTTPOptions) {
-    // Always set a User-Agent
-    if r.Header.Get("User-Agent") == "" {
-        r.Header.Set("User-Agent", "keystone-agent")
-    }
-    // Headers from recipe options
-    for k, v := range opts.Headers {
-        if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
-            continue
-        }
-        r.Header.Set(k, v)
-    }
-    // GitHub token from recipe options (if no Authorization already set)
-    host := r.URL.Hostname()
-    if (host == "github.com" || host == "api.github.com") && r.Header.Get("Authorization") == "" {
-        if opts.GithubToken != "" {
-            r.Header.Set("Authorization", "Bearer "+opts.GithubToken)
-        }
-    }
+	// Always set a User-Agent
+	if r.Header.Get("User-Agent") == "" {
+		r.Header.Set("User-Agent", "keystone-agent")
+	}
+	// Headers from recipe options
+	for k, v := range opts.Headers {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		r.Header.Set(k, v)
+	}
+	// GitHub token from recipe options (if no Authorization already set)
+	host := r.URL.Hostname()
+	if (host == "github.com" || host == "api.github.com") && r.Header.Get("Authorization") == "" {
+		if opts.GithubToken != "" {
+			r.Header.Set("Authorization", "Bearer "+opts.GithubToken)
+		}
+	}
 }
 
 // splitHeader/splitMulti removed: configuration now only via recipe TOML.
@@ -110,22 +110,22 @@ func attachRequestHeaders(r *http.Request, opts HTTPOptions) {
 // it downloads the artifact and updates the index. Returns local path and
 // whether it reused (true) or downloaded (false).
 func Ensure(destRoot, uri, sha string, timeout time.Duration, httpOpts HTTPOptions) (string, bool, error) {
-    idx, _ := LoadIndex(destRoot)
-    if e, ok := idx.Get(uri); ok {
-        if _, err := os.Stat(e.Path); err == nil {
-            // If SHA provided, verify before reuse
-            if sha == "" || VerifySHA256(e.Path, sha) == nil {
-                return e.Path, true, nil
-            }
-        }
-    }
-    // Download fresh
-    path, err := Download(destRoot, uri, timeout, httpOpts)
-    if err != nil {
-        return "", false, err
-    }
-    // Update index with size and sha
-    st, _ := os.Stat(path)
+	idx, _ := LoadIndex(destRoot)
+	if e, ok := idx.Get(uri); ok {
+		if _, err := os.Stat(e.Path); err == nil {
+			// If SHA provided, verify before reuse
+			if sha == "" || VerifySHA256(e.Path, sha) == nil {
+				return e.Path, true, nil
+			}
+		}
+	}
+	// Download fresh
+	path, err := Download(destRoot, uri, timeout, httpOpts)
+	if err != nil {
+		return "", false, err
+	}
+	// Update index with size and sha
+	st, _ := os.Stat(path)
 	idx.Put(IndexEntry{URI: uri, SHA256: sha, Path: path, Size: st.Size()})
 	_ = idx.Save()
 	return path, false, nil

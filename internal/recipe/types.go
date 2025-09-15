@@ -11,21 +11,21 @@ type Metadata struct {
 }
 
 type Artifact struct {
-    URI     string `toml:"uri"`
-    SHA256  string `toml:"sha256"`
-    Unpack  bool   `toml:"unpack"`
-    SigURI  string `toml:"sig_uri"`  // detached signature file
-    CertURI string `toml:"cert_uri"` // optional leaf cert if not provisioned
-    // Optional HTTP headers to attach when downloading this artifact/signature/cert.
-    // Example:
-    //   [ [artifacts] ]
-    //   uri = "https://..."
-    //   [artifacts.headers]
-    //   Accept = "application/zip"
-    Headers map[string]string `toml:"headers"`
-    // Optional GitHub token to set Authorization for github.com/api.github.com downloads
-    // when Authorization is not already provided via Headers.
-    GithubToken string `toml:"github_token"`
+	URI     string `toml:"uri"`
+	SHA256  string `toml:"sha256"`
+	Unpack  bool   `toml:"unpack"`
+	SigURI  string `toml:"sig_uri"`  // detached signature file
+	CertURI string `toml:"cert_uri"` // optional leaf cert if not provisioned
+	// Optional HTTP headers to attach when downloading this artifact/signature/cert.
+	// Example:
+	//   [ [artifacts] ]
+	//   uri = "https://..."
+	//   [artifacts.headers]
+	//   Accept = "application/zip"
+	Headers map[string]string `toml:"headers"`
+	// Optional GitHub token to set Authorization for github.com/api.github.com downloads
+	// when Authorization is not already provided via Headers.
+	GithubToken string `toml:"github_token"`
 }
 
 type LifecycleInstall struct {

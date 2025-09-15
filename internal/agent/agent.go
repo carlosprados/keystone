@@ -186,20 +186,20 @@ func (a *Agent) Router() http.Handler {
 				})
 				return
 			}
-            // Determine wait mode and timeout with precedence: Query > Default (pid, 60s)
-            mode := strings.ToLower(r.URL.Query().Get("wait"))
-            if mode == "" {
-                mode = "pid"
-            }
-            if mode != "health" {
-                mode = "pid"
-            }
-            var to time.Duration
-            if qto := r.URL.Query().Get("timeout"); qto != "" {
-                to = parseDurationDefault(qto, 60*time.Second)
-            } else {
-                to = 60 * time.Second
-            }
+			// Determine wait mode and timeout with precedence: Query > Default (pid, 60s)
+			mode := strings.ToLower(r.URL.Query().Get("wait"))
+			if mode == "" {
+				mode = "pid"
+			}
+			if mode != "health" {
+				mode = "pid"
+			}
+			var to time.Duration
+			if qto := r.URL.Query().Get("timeout"); qto != "" {
+				to = parseDurationDefault(qto, 60*time.Second)
+			} else {
+				to = 60 * time.Second
+			}
 
 			// stop dependents first
 			log.Printf("api: restart %s stop dependents: %v", name, depsOrder)
@@ -464,21 +464,21 @@ func (a *Agent) ApplyPlan(planPath string) error {
 		metaToComp[r.Metadata.Name] = it.Name
 	}
 	// Second pass: compute deps among plan components using recipe dependencies
-    for _, l := range loadedList {
-        // compute dep component names
-        var depNames []string
-        for _, d := range l.rec.Dependencies {
-            if compName, ok := metaToComp[d.Name]; ok {
-                depNames = append(depNames, compName)
-            }
-        }
-        planMap = append(planMap, state.PlanComponent{
-            Name:       l.item.Name,
-            RecipePath: l.item.RecipePath,
-            RecipeMeta: l.rec.Metadata.Name,
-            Deps:       depNames,
-        })
-    }
+	for _, l := range loadedList {
+		// compute dep component names
+		var depNames []string
+		for _, d := range l.rec.Dependencies {
+			if compName, ok := metaToComp[d.Name]; ok {
+				depNames = append(depNames, compName)
+			}
+		}
+		planMap = append(planMap, state.PlanComponent{
+			Name:       l.item.Name,
+			RecipePath: l.item.RecipePath,
+			RecipeMeta: l.rec.Metadata.Name,
+			Deps:       depNames,
+		})
+	}
 	// Build supervisor components now using computed deps
 	pr := runner.New()
 	// readiness channels per component (closed when process actually starts)
@@ -499,29 +499,29 @@ func (a *Agent) ApplyPlan(planPath string) error {
 		// Prepare workspace per component version
 		workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
 		artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)
-            installFn := func(ctx context.Context) error {
-                // Download and verify artifacts
-                for _, adef := range r.Artifacts {
-                    httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
-                    path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0, httpOpts)
-                    if err != nil {
-                        return err
-                    }
-                    // Signature verification if configured
-                    if adef.SigURI != "" && a.trustPool != nil {
-                        sigPath, _, err := artifact.Ensure(artDir, adef.SigURI, "", 0, httpOpts)
-                        if err != nil {
-                            return fmt.Errorf("sig download: %w", err)
-                        }
-                        // Cert can come from recipe or env KEYSTONE_LEAF_CERT
-                        certPath := os.Getenv("KEYSTONE_LEAF_CERT")
-                        if adef.CertURI != "" {
-                            cp, _, err := artifact.Ensure(artDir, adef.CertURI, "", 0, httpOpts)
-                            if err != nil {
-                                return fmt.Errorf("cert download: %w", err)
-                            }
-                            certPath = cp
-                        }
+		installFn := func(ctx context.Context) error {
+			// Download and verify artifacts
+			for _, adef := range r.Artifacts {
+				httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
+				path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0, httpOpts)
+				if err != nil {
+					return err
+				}
+				// Signature verification if configured
+				if adef.SigURI != "" && a.trustPool != nil {
+					sigPath, _, err := artifact.Ensure(artDir, adef.SigURI, "", 0, httpOpts)
+					if err != nil {
+						return fmt.Errorf("sig download: %w", err)
+					}
+					// Cert can come from recipe or env KEYSTONE_LEAF_CERT
+					certPath := os.Getenv("KEYSTONE_LEAF_CERT")
+					if adef.CertURI != "" {
+						cp, _, err := artifact.Ensure(artDir, adef.CertURI, "", 0, httpOpts)
+						if err != nil {
+							return fmt.Errorf("cert download: %w", err)
+						}
+						certPath = cp
+					}
 					if certPath == "" {
 						return fmt.Errorf("no certificate specified for signature verification")
 					}
@@ -529,17 +529,17 @@ func (a *Agent) ApplyPlan(planPath string) error {
 						return fmt.Errorf("signature verify failed for %s: %w", filepath.Base(path), err)
 					}
 				}
-                    if adef.Unpack {
-                        marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
-                        if _, err := os.Stat(marker); os.IsNotExist(err) {
-                            if err := artifact.Unpack(path, workDir); err != nil {
-                                return err
-                            }
-                            _ = os.MkdirAll(filepath.Dir(marker), 0o755)
-                            _ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
-                        }
-                    }
-                }
+				if adef.Unpack {
+					marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
+					if _, err := os.Stat(marker); os.IsNotExist(err) {
+						if err := artifact.Unpack(path, workDir); err != nil {
+							return err
+						}
+						_ = os.MkdirAll(filepath.Dir(marker), 0o755)
+						_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+					}
+				}
+			}
 			// If not unpacked, ensure working dir exists
 			if _, err := os.Stat(workDir); os.IsNotExist(err) {
 				if err := os.MkdirAll(workDir, 0o755); err != nil {
@@ -548,19 +548,19 @@ func (a *Agent) ApplyPlan(planPath string) error {
 			}
 			// Run install script if any (idempotent via .installed marker)
 			installedMarker := filepath.Join(workDir, ".installed")
-            if r.Lifecycle.Install.Script != "" {
-                    if _, err := os.Stat(installedMarker); err == nil {
-                        // already installed
-                        return nil
-                    }
-                out, err := runShellWithOutput(ctx, workDir, r.Lifecycle.Install.Script)
-                if err != nil {
-                        // include trimmed output for diagnostics
-                        return fmt.Errorf("install script failed: %v\n--- output ---\n%s", err, out)
-                    }
-                    _ = os.WriteFile(installedMarker, []byte(time.Now().Format(time.RFC3339)), 0o644)
-                    return nil
-            }
+			if r.Lifecycle.Install.Script != "" {
+				if _, err := os.Stat(installedMarker); err == nil {
+					// already installed
+					return nil
+				}
+				out, err := runShellWithOutput(ctx, workDir, r.Lifecycle.Install.Script)
+				if err != nil {
+					// include trimmed output for diagnostics
+					return fmt.Errorf("install script failed: %v\n--- output ---\n%s", err, out)
+				}
+				_ = os.WriteFile(installedMarker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+				return nil
+			}
 			return nil
 		}
 		startFn := func(ctx context.Context) error {
@@ -719,32 +719,32 @@ func (a *Agent) ApplyPlan(planPath string) error {
 	for _, c := range comps {
 		a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: string(c.State())})
 	}
-    // Poll states to store and component-state metric
-    go func() {
-        t := time.NewTicker(500 * time.Millisecond)
-        defer t.Stop()
-        for range t.C {
-            if a.closed.Load() {
-                return
-            }
-            for _, c := range comps {
-                // Derive running/stopped from presence of a managed process handle.
-                a.mu.RLock()
-                _, running := a.procs[c.Name]
-                a.mu.RUnlock()
-                st := "stopped"
-                if running {
-                    st = "running"
-                }
-                a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: st})
-                // read health for label
-                ci, _ := a.comps.Get(c.Name)
-                metrics.ObserveComponentState(c.Name, st)
-                metrics.ObserveComponentStateWithHealth(c.Name, st, ci.LastHealth)
-            }
-            a.persistSnapshot()
-        }
-    }()
+	// Poll states to store and component-state metric
+	go func() {
+		t := time.NewTicker(500 * time.Millisecond)
+		defer t.Stop()
+		for range t.C {
+			if a.closed.Load() {
+				return
+			}
+			for _, c := range comps {
+				// Derive running/stopped from presence of a managed process handle.
+				a.mu.RLock()
+				_, running := a.procs[c.Name]
+				a.mu.RUnlock()
+				st := "stopped"
+				if running {
+					st = "running"
+				}
+				a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: st})
+				// read health for label
+				ci, _ := a.comps.Get(c.Name)
+				metrics.ObserveComponentState(c.Name, st)
+				metrics.ObserveComponentStateWithHealth(c.Name, st, ci.LastHealth)
+			}
+			a.persistSnapshot()
+		}
+	}()
 
 	err = supervisor.StartStack(context.Background(), comps)
 	a.mu.Lock()
@@ -826,38 +826,38 @@ func (a *Agent) restartFromPlan(name string) error {
 	workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
 	artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)
 	// Ensure artifacts and (optional) unpack
-    for _, adef := range r.Artifacts {
-        httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
-        path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0, httpOpts)
-        if err != nil {
-            return err
-        }
-        if adef.Unpack {
-            marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
-            if _, err := os.Stat(marker); os.IsNotExist(err) {
-                if err := artifact.Unpack(path, workDir); err != nil {
-                    return err
-                }
-                _ = os.MkdirAll(filepath.Dir(marker), 0o755)
-                _ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
-            }
-        }
-    }
+	for _, adef := range r.Artifacts {
+		httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
+		path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0, httpOpts)
+		if err != nil {
+			return err
+		}
+		if adef.Unpack {
+			marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
+			if _, err := os.Stat(marker); os.IsNotExist(err) {
+				if err := artifact.Unpack(path, workDir); err != nil {
+					return err
+				}
+				_ = os.MkdirAll(filepath.Dir(marker), 0o755)
+				_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+			}
+		}
+	}
 	if _, err := os.Stat(workDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(workDir, 0o755); err != nil {
 			return err
 		}
 	}
-    if r.Lifecycle.Install.Script != "" {
-        installedMarker := filepath.Join(workDir, ".installed")
-        if _, err := os.Stat(installedMarker); os.IsNotExist(err) {
-            out, err := runShellWithOutput(context.Background(), workDir, r.Lifecycle.Install.Script)
-            if err != nil {
-                return fmt.Errorf("install script failed: %v\n--- output ---\n%s", err, out)
-            }
-            _ = os.WriteFile(installedMarker, []byte(time.Now().Format(time.RFC3339)), 0o644)
-        }
-    }
+	if r.Lifecycle.Install.Script != "" {
+		installedMarker := filepath.Join(workDir, ".installed")
+		if _, err := os.Stat(installedMarker); os.IsNotExist(err) {
+			out, err := runShellWithOutput(context.Background(), workDir, r.Lifecycle.Install.Script)
+			if err != nil {
+				return fmt.Errorf("install script failed: %v\n--- output ---\n%s", err, out)
+			}
+			_ = os.WriteFile(installedMarker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+		}
+	}
 	// Start managed
 	pr := runner.New()
 	var env []string
@@ -958,12 +958,12 @@ func (a *Agent) stopComponent(name string) {
 		log.Printf("agent: cancel managed loop for %s", name)
 		cancel()
 	}
-    if h != nil {
-        log.Printf("agent: stopping process %s pid=%d", name, pid)
-        if err := (&runner.ProcessRunner{}).Stop(context.Background(), h, 5*time.Second); err != nil {
-            log.Printf("agent: stopComponent Stop error name=%s pid=%d err=%v", name, pid, err)
-        }
-    }
+	if h != nil {
+		log.Printf("agent: stopping process %s pid=%d", name, pid)
+		if err := (&runner.ProcessRunner{}).Stop(context.Background(), h, 5*time.Second); err != nil {
+			log.Printf("agent: stopComponent Stop error name=%s pid=%d err=%v", name, pid, err)
+		}
+	}
 	// Update store (no need to hold a.mu here)
 	ci, ok := a.comps.Get(name)
 	if ok {
@@ -1136,13 +1136,13 @@ func parseDurationDefault(s string, d time.Duration) time.Duration {
 
 // runShellWithOutput runs a shell script in the given working directory and returns trimmed combined output.
 func runShellWithOutput(ctx context.Context, workDir, script string) (string, error) {
-    cmd := exec.CommandContext(ctx, "/bin/sh", "-c", script)
-    cmd.Dir = workDir
-    out, err := cmd.CombinedOutput()
-    const limit = 8192 // cap output to 8KiB
-    if len(out) > limit {
-        // keep tail
-        out = out[len(out)-limit:]
-    }
-    return string(out), err
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", script)
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	const limit = 8192 // cap output to 8KiB
+	if len(out) > limit {
+		// keep tail
+		out = out[len(out)-limit:]
+	}
+	return string(out), err
 }
