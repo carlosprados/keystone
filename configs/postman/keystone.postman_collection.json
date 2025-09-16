@@ -1,0 +1,79 @@
+{
+  "info": {
+    "name": "Keystone Agent API",
+    "description": "Colección de endpoints locales del agente Keystone (health, métricas, plan y control de componentes).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "component", "value": "telegraf" },
+    { "key": "planPath", "value": "configs/examples/plan.toml" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": { "method": "GET", "url": "{{baseUrl}}/healthz" }
+    },
+    {
+      "name": "Root",
+      "request": { "method": "GET", "url": "{{baseUrl}}/" }
+    },
+    {
+      "name": "Metrics (Prometheus)",
+      "request": { "method": "GET", "url": "{{baseUrl}}/metrics" }
+    },
+    {
+      "name": "List Components",
+      "request": { "method": "GET", "url": "{{baseUrl}}/v1/components" }
+    },
+    {
+      "name": "Plan Status",
+      "request": { "method": "GET", "url": "{{baseUrl}}/v1/plan/status" }
+    },
+    {
+      "name": "Plan Graph",
+      "request": { "method": "GET", "url": "{{baseUrl}}/v1/plan/graph" }
+    },
+    {
+      "name": "Apply Plan",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"planPath\": \"{{planPath}}\",\n  \"dry\": false\n}"
+        },
+        "url": "{{baseUrl}}/v1/plan/apply"
+      }
+    },
+    {
+      "name": "Apply Plan (Dry-Run)",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"planPath\": \"{{planPath}}\",\n  \"dry\": true\n}"
+        },
+        "url": "{{baseUrl}}/v1/plan/apply"
+      }
+    },
+    {
+      "name": "Stop Plan",
+      "request": { "method": "POST", "url": "{{baseUrl}}/v1/plan/stop" }
+    },
+    {
+      "name": "Component Stop",
+      "request": { "method": "POST", "url": "{{baseUrl}}/v1/components/{{component}}:stop" }
+    },
+    {
+      "name": "Component Restart",
+      "request": { "method": "POST", "url": "{{baseUrl}}/v1/components/{{component}}:restart" }
+    },
+    {
+      "name": "Component Restart (Dry-Run)",
+      "request": { "method": "POST", "url": "{{baseUrl}}/v1/components/{{component}}:restart?dry=true" }
+    }
+  ]
+}
+

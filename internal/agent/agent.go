@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/carlosprados/keystone/internal/artifact"
+	"github.com/carlosprados/keystone/internal/config"
 	"github.com/carlosprados/keystone/internal/deploy"
 	"github.com/carlosprados/keystone/internal/metrics"
 	"github.com/carlosprados/keystone/internal/recipe"
@@ -62,6 +63,10 @@ type Agent struct {
 
 // New creates an Agent with the provided options.
 func New(opts Options) *Agent {
+	// Load .env (best-effort) before anything else so that subsequent code
+	// can use variables (e.g., tokens for artifact downloads).
+	config.LoadDotEnvDefault()
+
 	a := &Agent{opts: opts, start: time.Now(), comps: store.NewMemoryStore(), procs: make(map[string]*runner.ProcessHandle), cancels: make(map[string]context.CancelFunc), stateDir: filepath.Join("runtime", "state"), dryRun: opts.DryRun}
 	// Set artifact cache limit from env (bytes). Default: 2 GiB.
 	a.artifactCacheLimit = 2 * 1024 * 1024 * 1024
@@ -181,23 +186,67 @@ func (a *Agent) Router() http.Handler {
 				})
 				return
 			}
+			// Determine wait mode and timeout with precedence: Query > Default (pid, 60s)
+			mode := strings.ToLower(r.URL.Query().Get("wait"))
+			if mode == "" {
+				mode = "pid"
+			}
+			if mode != "health" {
+				mode = "pid"
+			}
+			var to time.Duration
+			if qto := r.URL.Query().Get("timeout"); qto != "" {
+				to = parseDurationDefault(qto, 60*time.Second)
+			} else {
+				to = 60 * time.Second
+			}
+
 			// stop dependents first
+			log.Printf("api: restart %s stop dependents: %v", name, depsOrder)
 			for _, dn := range depsOrder {
+				log.Printf("api: stopping dependent %s", dn)
 				a.stopComponent(dn)
 			}
 			// stop target
+			log.Printf("api: stopping target %s", name)
 			a.stopComponent(name)
 			// start target
+			log.Printf("api: starting target %s", name)
 			if err := a.restartFromPlan(name); err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(err.Error()))
+				log.Printf("api: restart %s failed to start: %v", name, err)
 				return
 			}
-			// start dependents in order
-			for _, dn := range depsOrder {
-				_ = a.restartFromPlan(dn)
+			// wait target
+			log.Printf("api: waiting %s for %s (timeout=%s)", mode, name, to)
+			if err := a.waitReady(name, mode, to); err != nil {
+				w.WriteHeader(http.StatusGatewayTimeout)
+				_, _ = w.Write([]byte(err.Error()))
+				log.Printf("api: restart %s wait failed: %v", name, err)
+				return
 			}
-			w.WriteHeader(http.StatusAccepted)
+			log.Printf("api: target %s ready pid=%d", name, a.currentPID(name))
+			// start dependents in order and wait for each (best-effort)
+			depPIDs := map[string]int{}
+			for _, dn := range depsOrder {
+				log.Printf("api: starting dependent %s", dn)
+				_ = a.restartFromPlan(dn)
+				if err := a.waitReady(dn, mode, to); err != nil {
+					log.Printf("api: dependent %s not ready: %v", dn, err)
+				}
+				if pid := a.currentPID(dn); pid > 0 {
+					depPIDs[dn] = pid
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"component":  name,
+				"pid":        a.currentPID(name),
+				"dependents": depPIDs,
+				"wait":       mode,
+				"timeout":    to.String(),
+			})
 		}
 	})
 
@@ -423,10 +472,17 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				depNames = append(depNames, compName)
 			}
 		}
-		planMap = append(planMap, state.PlanComponent{Name: l.item.Name, RecipePath: l.item.RecipePath, RecipeMeta: l.rec.Metadata.Name, Deps: depNames})
+		planMap = append(planMap, state.PlanComponent{
+			Name:       l.item.Name,
+			RecipePath: l.item.RecipePath,
+			RecipeMeta: l.rec.Metadata.Name,
+			Deps:       depNames,
+		})
 	}
 	// Build supervisor components now using computed deps
 	pr := runner.New()
+	// readiness channels per component (closed when process actually starts)
+	compReady := make(map[string]chan struct{})
 	for _, l := range loadedList {
 		// find deps for this comp
 		var depNames []string
@@ -438,26 +494,29 @@ func (a *Agent) ApplyPlan(planPath string) error {
 		}
 		r := l.rec
 		it := l.item
+		var startedOnce sync.Once
+		healthBasedReady := false
 		// Prepare workspace per component version
 		workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
 		artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)
 		installFn := func(ctx context.Context) error {
 			// Download and verify artifacts
 			for _, adef := range r.Artifacts {
-				path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0)
+				httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
+				path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0, httpOpts)
 				if err != nil {
 					return err
 				}
 				// Signature verification if configured
 				if adef.SigURI != "" && a.trustPool != nil {
-					sigPath, _, err := artifact.Ensure(artDir, adef.SigURI, "", 0)
+					sigPath, _, err := artifact.Ensure(artDir, adef.SigURI, "", 0, httpOpts)
 					if err != nil {
 						return fmt.Errorf("sig download: %w", err)
 					}
 					// Cert can come from recipe or env KEYSTONE_LEAF_CERT
 					certPath := os.Getenv("KEYSTONE_LEAF_CERT")
 					if adef.CertURI != "" {
-						cp, _, err := artifact.Ensure(artDir, adef.CertURI, "", 0)
+						cp, _, err := artifact.Ensure(artDir, adef.CertURI, "", 0, httpOpts)
 						if err != nil {
 							return fmt.Errorf("cert download: %w", err)
 						}
@@ -487,11 +546,20 @@ func (a *Agent) ApplyPlan(planPath string) error {
 					return err
 				}
 			}
-			// Run install script if any
+			// Run install script if any (idempotent via .installed marker)
+			installedMarker := filepath.Join(workDir, ".installed")
 			if r.Lifecycle.Install.Script != "" {
-				cmd := exec.CommandContext(ctx, "/bin/sh", "-c", r.Lifecycle.Install.Script)
-				cmd.Dir = workDir
-				return cmd.Run()
+				if _, err := os.Stat(installedMarker); err == nil {
+					// already installed
+					return nil
+				}
+				out, err := runShellWithOutput(ctx, workDir, r.Lifecycle.Install.Script)
+				if err != nil {
+					// include trimmed output for diagnostics
+					return fmt.Errorf("install script failed: %v\n--- output ---\n%s", err, out)
+				}
+				_ = os.WriteFile(installedMarker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+				return nil
 			}
 			return nil
 		}
@@ -505,6 +573,7 @@ func (a *Agent) ApplyPlan(planPath string) error {
 			hc := runner.HealthConfig{}
 			if r.Lifecycle.Run.Health.Check != "" {
 				hc.Check = r.Lifecycle.Run.Health.Check
+				healthBasedReady = true
 			}
 			if d, err := time.ParseDuration(defaultString(r.Lifecycle.Run.Health.Interval, "10s")); err == nil {
 				hc.Interval = d
@@ -521,6 +590,19 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				rp = runner.RestartAlways
 			}
 
+			// Validate command availability early to surface clear errors
+			cmdPath := r.Lifecycle.Run.Exec.Command
+			if cmdPath == "" {
+				return fmt.Errorf("empty run.exec.command")
+			}
+			// If relative like ./bin, ensure it exists under workDir
+			if strings.HasPrefix(cmdPath, "./") {
+				abs := filepath.Join(workDir, strings.TrimPrefix(cmdPath, "./"))
+				if st, err := os.Stat(abs); err != nil || st.IsDir() {
+					return fmt.Errorf("run command not found: %s", abs)
+				}
+			}
+
 			opts := runner.Options{
 				Name:       it.Name,
 				Command:    r.Lifecycle.Run.Exec.Command,
@@ -529,6 +611,7 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				WorkingDir: workDir,
 				NoFile:     r.Resources.OpenFiles,
 			}
+			log.Printf("starting component %s: cwd=%s cmd=%s args=%v", it.Name, workDir, opts.Command, opts.Args)
 			// Run managed in background and capture first start handle for metrics/stop
 			go func() {
 				// component-specific context for stop
@@ -555,6 +638,14 @@ func (a *Agent) ApplyPlan(planPath string) error {
 							a.comps.Upsert(ci)
 						}
 						a.mu.Unlock()
+						// signal readiness once on first successful start (if no health check)
+						if !healthBasedReady {
+							startedOnce.Do(func() {
+								if ch, ok := compReady[it.Name]; ok && ch != nil {
+									close(ch)
+								}
+							})
+						}
 						go metrics.SampleProcessMetrics(ctx2, it.Name, h.PID)
 					},
 					func(ok bool) {
@@ -571,6 +662,13 @@ func (a *Agent) ApplyPlan(planPath string) error {
 						}
 						a.mu.Unlock()
 						metrics.SetHealthy(it.Name, ok)
+						if healthBasedReady && ok {
+							startedOnce.Do(func() {
+								if ch, ok := compReady[it.Name]; ok && ch != nil {
+									close(ch)
+								}
+							})
+						}
 					},
 				)
 			}()
@@ -585,7 +683,12 @@ func (a *Agent) ApplyPlan(planPath string) error {
 			}
 			return pr.Stop(ctx, h, 10*time.Second)
 		}
-		comps = append(comps, supervisor.NewComponent(it.Name, depNames, installFn, startFn, stopFn))
+		// Create component with readiness channel and register it
+		readyCh := make(chan struct{})
+		c := supervisor.NewComponent(it.Name, depNames, installFn, startFn, stopFn)
+		c.ReadyCh = readyCh
+		comps = append(comps, c)
+		compReady[it.Name] = readyCh
 	}
 	// If dry-run, set status and return after printing order
 	if a.dryRun {
@@ -625,7 +728,14 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				return
 			}
 			for _, c := range comps {
-				st := string(c.State())
+				// Derive running/stopped from presence of a managed process handle.
+				a.mu.RLock()
+				_, running := a.procs[c.Name]
+				a.mu.RUnlock()
+				st := "stopped"
+				if running {
+					st = "running"
+				}
 				a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: st})
 				// read health for label
 				ci, _ := a.comps.Get(c.Name)
@@ -717,7 +827,8 @@ func (a *Agent) restartFromPlan(name string) error {
 	artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)
 	// Ensure artifacts and (optional) unpack
 	for _, adef := range r.Artifacts {
-		path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0)
+		httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
+		path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0, httpOpts)
 		if err != nil {
 			return err
 		}
@@ -738,10 +849,13 @@ func (a *Agent) restartFromPlan(name string) error {
 		}
 	}
 	if r.Lifecycle.Install.Script != "" {
-		cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", r.Lifecycle.Install.Script)
-		cmd.Dir = workDir
-		if err := cmd.Run(); err != nil {
-			return err
+		installedMarker := filepath.Join(workDir, ".installed")
+		if _, err := os.Stat(installedMarker); os.IsNotExist(err) {
+			out, err := runShellWithOutput(context.Background(), workDir, r.Lifecycle.Install.Script)
+			if err != nil {
+				return fmt.Errorf("install script failed: %v\n--- output ---\n%s", err, out)
+			}
+			_ = os.WriteFile(installedMarker, []byte(time.Now().Format(time.RFC3339)), 0o644)
 		}
 	}
 	// Start managed
@@ -767,7 +881,15 @@ func (a *Agent) restartFromPlan(name string) error {
 	if rp == "" {
 		rp = runner.RestartAlways
 	}
+	// Validate command presence if relative
+	if cmd := r.Lifecycle.Run.Exec.Command; strings.HasPrefix(cmd, "./") {
+		abs := filepath.Join(workDir, strings.TrimPrefix(cmd, "./"))
+		if st, err := os.Stat(abs); err != nil || st.IsDir() {
+			return fmt.Errorf("run command not found: %s", abs)
+		}
+	}
 	opts := runner.Options{Name: name, Command: r.Lifecycle.Run.Exec.Command, Args: r.Lifecycle.Run.Exec.Args, Env: env, WorkingDir: workDir, NoFile: r.Resources.OpenFiles}
+	log.Printf("restarting component %s: cwd=%s cmd=%s args=%v", name, workDir, opts.Command, opts.Args)
 	go func() {
 		ctx2, cancel := context.WithCancel(context.Background())
 		a.mu.Lock()
@@ -816,21 +938,39 @@ func (a *Agent) restartFromPlan(name string) error {
 
 // stopComponent cancels managed loop and stops process, updating store.
 func (a *Agent) stopComponent(name string) {
+	log.Printf("agent: stopComponent start name=%s", name)
+	// Grab references under lock, but perform blocking ops outside the lock
 	a.mu.Lock()
-	if cancel := a.cancels[name]; cancel != nil {
-		cancel()
+	cancel := a.cancels[name]
+	var pid int
+	var h *runner.ProcessHandle
+	if cancel != nil {
 		delete(a.cancels, name)
 	}
-	if h := a.procs[name]; h != nil {
-		_ = (&runner.ProcessRunner{}).Stop(context.Background(), h, 5*time.Second)
+	if ph, ok := a.procs[name]; ok && ph != nil {
+		h = ph
+		pid = ph.PID
 		delete(a.procs, name)
 	}
+	a.mu.Unlock()
+
+	if cancel != nil {
+		log.Printf("agent: cancel managed loop for %s", name)
+		cancel()
+	}
+	if h != nil {
+		log.Printf("agent: stopping process %s pid=%d", name, pid)
+		if err := (&runner.ProcessRunner{}).Stop(context.Background(), h, 5*time.Second); err != nil {
+			log.Printf("agent: stopComponent Stop error name=%s pid=%d err=%v", name, pid, err)
+		}
+	}
+	// Update store (no need to hold a.mu here)
 	ci, ok := a.comps.Get(name)
 	if ok {
 		ci.State = "stopped"
 		a.comps.Upsert(ci)
 	}
-	a.mu.Unlock()
+	log.Printf("agent: stopComponent done name=%s", name)
 }
 
 // planDependentsTopological returns dependents of 'name' in topological order (closest first -> farthest last).
@@ -943,4 +1083,66 @@ func (a *Agent) ApplyPlanAPI(planPath string, dry bool) error {
 		defer func() { a.dryRun = saved }()
 	}
 	return a.ApplyPlan(planPath)
+}
+
+// Helpers for synchronous restart
+func (a *Agent) currentPID(name string) int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if h := a.procs[name]; h != nil {
+		return h.PID
+	}
+	return 0
+}
+
+// waitReady waits until a component has a PID (wait=pid) or reports healthy (wait=health).
+// mode: "pid" (default) or "health". timeout caps wait time.
+func (a *Agent) waitReady(name, mode string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	lastLog := time.Now().Add(-10 * time.Second)
+	for {
+		if mode == "health" {
+			if ci, ok := a.comps.Get(name); ok && ci.LastHealth == "healthy" {
+				return nil
+			}
+		} else { // pid
+			if pid := a.currentPID(name); pid > 0 {
+				return nil
+			}
+		}
+		if time.Since(lastLog) >= 5*time.Second {
+			// periodic progress log
+			pid := a.currentPID(name)
+			ci, _ := a.comps.Get(name)
+			log.Printf("waitReady: name=%s mode=%s pid=%d last_health=%s remaining=%s", name, mode, pid, ci.LastHealth, time.Until(deadline).Truncate(time.Second))
+			lastLog = time.Now()
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("wait for %s %s timed out after %s", name, mode, timeout)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func parseDurationDefault(s string, d time.Duration) time.Duration {
+	if s == "" {
+		return d
+	}
+	if dd, err := time.ParseDuration(s); err == nil && dd > 0 {
+		return dd
+	}
+	return d
+}
+
+// runShellWithOutput runs a shell script in the given working directory and returns trimmed combined output.
+func runShellWithOutput(ctx context.Context, workDir, script string) (string, error) {
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", script)
+	cmd.Dir = workDir
+	out, err := cmd.CombinedOutput()
+	const limit = 8192 // cap output to 8KiB
+	if len(out) > limit {
+		// keep tail
+		out = out[len(out)-limit:]
+	}
+	return string(out), err
 }

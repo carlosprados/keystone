@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 )
@@ -34,11 +35,17 @@ type Component struct {
 	InstallFn func(ctx context.Context) error
 	StartFn   func(ctx context.Context) error
 	StopFn    func(ctx context.Context) error
+	// ReadyCh is an optional channel that should be closed by the component
+	// implementation when the service has actually started (e.g., child
+	// process spawned). If set, Start will wait for it up to ReadyTimeout
+	// before transitioning to Running.
+	ReadyCh      chan struct{}
+	ReadyTimeout time.Duration
 }
 
 // NewComponent creates a component with the provided hooks.
 func NewComponent(name string, deps []string, install, start, stop func(context.Context) error) *Component {
-	return &Component{Name: name, Deps: deps, state: StateNone, InstallFn: install, StartFn: start, StopFn: stop}
+	return &Component{Name: name, Deps: deps, state: StateNone, InstallFn: install, StartFn: start, StopFn: stop, ReadyTimeout: 15 * time.Second}
 }
 
 // State returns the current component state.
@@ -89,6 +96,29 @@ func (c *Component) Start(ctx context.Context) error {
 			c.setState(StateFailed)
 			return err
 		}
+	}
+	// If a readiness channel is provided, wait for it before moving to running
+	if ch := c.ReadyCh; ch != nil {
+		timeout := c.ReadyTimeout
+		if timeout <= 0 {
+			timeout = 15 * time.Second
+		}
+		c.mu.Unlock()
+		select {
+		case <-ch:
+			// ready
+		case <-ctx.Done():
+			c.mu.Lock()
+			c.setState(StateFailed)
+			// Do not unlock here; defer will release the lock acquired at function entry
+			return ctx.Err()
+		case <-time.After(timeout):
+			c.mu.Lock()
+			c.setState(StateFailed)
+			// Do not unlock here; defer will release the lock acquired at function entry
+			return errors.New("start readiness timeout")
+		}
+		c.mu.Lock()
 	}
 	c.setState(StateRunning)
 	return nil
@@ -177,8 +207,9 @@ func (g *Graph) TopoLayers() ([][]string, error) {
 
 // StartStack starts components respecting the DAG.
 func StartStack(parent context.Context, comps []*Component) error {
+	// Create a derived context, but do not cancel it on successful return.
+	// Cancellation is used only on failure to stop started components.
 	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
 
 	g := BuildGraph(comps)
 	layers, err := g.TopoLayers()
@@ -192,13 +223,14 @@ func StartStack(parent context.Context, comps []*Component) error {
 		var wg sync.WaitGroup
 		errCh := make(chan error, len(layer))
 
+		installTimeout := installTimeoutFromEnv()
 		for _, name := range layer {
 			comp := g.Nodes[name]
 			wg.Add(1)
 			go func(c *Component) {
 				defer wg.Done()
 				// Install with a bounded timeout, start without (managed by caller)
-				installCtx, cancelInstall := context.WithTimeout(ctx, 30*time.Second)
+				installCtx, cancelInstall := context.WithTimeout(ctx, installTimeout)
 				defer cancelInstall()
 				if err := c.Install(installCtx); err != nil {
 					errCh <- fmt.Errorf("%s install: %w", c.Name, err)
@@ -229,6 +261,19 @@ func StartStack(parent context.Context, comps []*Component) error {
 	}
 	log.Printf("all components running")
 	return nil
+}
+
+// installTimeoutFromEnv returns a timeout for the install phase. Default 2m.
+// Override with KEYSTONE_INSTALL_TIMEOUT (e.g., "90s", "5m").
+func installTimeoutFromEnv() time.Duration {
+	v := os.Getenv("KEYSTONE_INSTALL_TIMEOUT")
+	if v == "" {
+		return 2 * time.Minute
+	}
+	if d, err := time.ParseDuration(v); err == nil && d > 0 {
+		return d
+	}
+	return 2 * time.Minute
 }
 
 // Demo helpers used for early smoke tests.
