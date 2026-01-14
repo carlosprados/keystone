@@ -3,10 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
-	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,7 +23,7 @@ import (
 	"github.com/carlosprados/keystone/internal/state"
 	"github.com/carlosprados/keystone/internal/store"
 	"github.com/carlosprados/keystone/internal/supervisor"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/zerolog/log"
 )
 
 // Options defines basic runtime configuration for the agent.
@@ -92,7 +89,7 @@ func New(opts Options) *Agent {
 			a.trustPool = pool
 			a.trustPath = tb
 		} else {
-			log.Printf("failed to load trust bundle: %v", err)
+			log.Warn().Err(err).Msg("failed to load trust bundle")
 		}
 	}
 	// Periodic snapshots
@@ -109,258 +106,12 @@ func New(opts Options) *Agent {
 	return a
 }
 
-// Router returns the HTTP handler for the local API.
-func (a *Agent) Router() http.Handler {
-	mux := http.NewServeMux()
-
-	// Liveness probe
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"status":   "ok",
-			"uptime":   time.Since(a.start).String(),
-			"closed":   a.closed.Load(),
-			"time_utc": time.Now().UTC().Format(time.RFC3339),
-		})
-	})
-
-	// Very small info endpoint (component listing)
-	mux.HandleFunc("/v1/components", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		list := a.comps.List()
-		_ = json.NewEncoder(w).Encode(list)
-	})
-
-	// Per-component control:
-	// - POST /v1/components/{name}:stop
-	// - POST /v1/components/{name}:restart
-	mux.HandleFunc("/v1/components/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		path := strings.TrimPrefix(r.URL.Path, "/v1/components/")
-		var action string
-		switch {
-		case strings.HasSuffix(path, ":stop"):
-			action = "stop"
-		case strings.HasSuffix(path, ":restart"):
-			action = "restart"
-		default:
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		name := strings.TrimSuffix(path, ":"+action)
-		name = strings.Trim(name, "/")
-		if name == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		switch action {
-		case "stop":
-			a.mu.Lock()
-			if cancel := a.cancels[name]; cancel != nil {
-				cancel()
-				delete(a.cancels, name)
-			}
-			if h := a.procs[name]; h != nil {
-				_ = (&runner.ProcessRunner{}).Stop(context.Background(), h, 5*time.Second)
-				delete(a.procs, name)
-			}
-			ci, ok := a.comps.Get(name)
-			if ok {
-				ci.State = "stopped"
-				a.comps.Upsert(ci)
-			}
-			a.mu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
-		case "restart":
-			// stop dependents, then target; start target, then dependents (topo order)
-			depsOrder := a.planDependentsTopological(name)
-			// dry-run path: return orders only
-			if r.URL.Query().Get("dry") == "true" {
-				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"stopOrder":  depsOrder,
-					"startOrder": append([]string{name}, depsOrder...),
-				})
-				return
-			}
-			// Determine wait mode and timeout with precedence: Query > Default (pid, 60s)
-			mode := strings.ToLower(r.URL.Query().Get("wait"))
-			if mode == "" {
-				mode = "pid"
-			}
-			if mode != "health" {
-				mode = "pid"
-			}
-			var to time.Duration
-			if qto := r.URL.Query().Get("timeout"); qto != "" {
-				to = parseDurationDefault(qto, 60*time.Second)
-			} else {
-				to = 60 * time.Second
-			}
-
-			// stop dependents first
-			log.Printf("api: restart %s stop dependents: %v", name, depsOrder)
-			for _, dn := range depsOrder {
-				log.Printf("api: stopping dependent %s", dn)
-				a.stopComponent(dn)
-			}
-			// stop target
-			log.Printf("api: stopping target %s", name)
-			a.stopComponent(name)
-			// start target
-			log.Printf("api: starting target %s", name)
-			if err := a.restartFromPlan(name); err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
-				_, _ = w.Write([]byte(err.Error()))
-				log.Printf("api: restart %s failed to start: %v", name, err)
-				return
-			}
-			// wait target
-			log.Printf("api: waiting %s for %s (timeout=%s)", mode, name, to)
-			if err := a.waitReady(name, mode, to); err != nil {
-				w.WriteHeader(http.StatusGatewayTimeout)
-				_, _ = w.Write([]byte(err.Error()))
-				log.Printf("api: restart %s wait failed: %v", name, err)
-				return
-			}
-			log.Printf("api: target %s ready pid=%d", name, a.currentPID(name))
-			// start dependents in order and wait for each (best-effort)
-			depPIDs := map[string]int{}
-			for _, dn := range depsOrder {
-				log.Printf("api: starting dependent %s", dn)
-				_ = a.restartFromPlan(dn)
-				if err := a.waitReady(dn, mode, to); err != nil {
-					log.Printf("api: dependent %s not ready: %v", dn, err)
-				}
-				if pid := a.currentPID(dn); pid > 0 {
-					depPIDs[dn] = pid
-				}
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"component":  name,
-				"pid":        a.currentPID(name),
-				"dependents": depPIDs,
-				"wait":       mode,
-				"timeout":    to.String(),
-			})
-		}
-	})
-
-	// Prometheus metrics
-	mux.Handle("/metrics", promhttp.Handler())
-
-	// Plan status
-	mux.HandleFunc("/v1/plan/status", func(w http.ResponseWriter, r *http.Request) {
-		a.mu.RLock()
-		resp := map[string]any{
-			"planPath":   a.planPath,
-			"status":     a.planStatus,
-			"error":      a.planErr,
-			"components": a.comps.List(),
-		}
-		a.mu.RUnlock()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
-	})
-
-	// Plan graph (nodes, edges, topo order)
-	mux.HandleFunc("/v1/plan/graph", func(w http.ResponseWriter, r *http.Request) {
-		a.mu.RLock()
-		nodes := make([]string, 0, len(a.planComps))
-		for _, pc := range a.planComps {
-			nodes = append(nodes, pc.Name)
-		}
-		edges := map[string][]string{}
-		indeg := map[string]int{}
-		for _, pc := range a.planComps {
-			for _, d := range pc.Deps {
-				edges[d] = append(edges[d], pc.Name)
-				indeg[pc.Name]++
-			}
-			if _, ok := indeg[pc.Name]; !ok {
-				indeg[pc.Name] = 0
-			}
-		}
-		order := topoOrder(edges, indeg)
-		a.mu.RUnlock()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"nodes": nodes, "edges": edges, "order": order})
-	})
-
-	// Plan apply: POST {"planPath":"...", "dry":bool}
-	mux.HandleFunc("/v1/plan/apply", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		var req struct {
-			PlanPath string `json:"planPath"`
-			Dry      bool   `json:"dry"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(err.Error()))
-			return
-		}
-		if req.PlanPath == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte("missing planPath"))
-			return
-		}
-		if err := a.ApplyPlanAPI(req.PlanPath, req.Dry); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			_, _ = w.Write([]byte(err.Error()))
-			return
-		}
-		w.WriteHeader(http.StatusAccepted)
-	})
-
-	// Plan stop (POST)
-	mux.HandleFunc("/v1/plan/stop", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		a.mu.Lock()
-		for name, cancel := range a.cancels {
-			if cancel != nil {
-				cancel()
-			}
-			delete(a.cancels, name)
-		}
-		for name, h := range a.procs {
-			_ = (&runner.ProcessRunner{}).Stop(context.Background(), h, 5*time.Second)
-			delete(a.procs, name)
-			ci, ok := a.comps.Get(name)
-			if ok {
-				ci.State = "stopped"
-				a.comps.Upsert(ci)
-			}
-		}
-		a.planStatus = "stopped"
-		a.mu.Unlock()
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	// Root handler with tiny landing
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("Keystone agent is running. See /healthz, /metrics and /v1/components\n"))
-	})
-
-	return mux
-}
-
 // Close releases agent resources.
 func (a *Agent) Close() error {
 	if a.closed.Swap(true) {
 		return nil
 	}
-	log.Printf("agent closed")
+	log.Info().Msg("agent closed")
 	a.persistSnapshot()
 	return nil
 }
@@ -370,7 +121,7 @@ func (a *Agent) StartDemo() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	log.Printf("starting demo stack (db -> cache -> api)")
+	log.Info().Msg("starting demo stack (db -> cache -> api)")
 	db := supervisor.NewComponent(
 		"db", nil,
 		supervisor.MockInstall("db", 200*time.Millisecond),
@@ -611,7 +362,7 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				WorkingDir: workDir,
 				NoFile:     r.Resources.OpenFiles,
 			}
-			log.Printf("starting component %s: cwd=%s cmd=%s args=%v", it.Name, workDir, opts.Command, opts.Args)
+			log.Info().Str("component", it.Name).Str("cwd", workDir).Str("cmd", opts.Command).Strs("args", opts.Args).Msg("starting component")
 			// Run managed in background and capture first start handle for metrics/stop
 			go func() {
 				// component-specific context for stop
@@ -711,7 +462,7 @@ func (a *Agent) ApplyPlan(planPath string) error {
 			}
 		}
 		order := topoOrder(edges, indeg)
-		log.Printf("dry-run plan order: %v", order)
+		log.Info().Strs("order", order).Msg("dry-run plan order")
 		return nil
 	}
 
@@ -1114,7 +865,7 @@ func (a *Agent) waitReady(name, mode string, timeout time.Duration) error {
 			// periodic progress log
 			pid := a.currentPID(name)
 			ci, _ := a.comps.Get(name)
-			log.Printf("waitReady: name=%s mode=%s pid=%d last_health=%s remaining=%s", name, mode, pid, ci.LastHealth, time.Until(deadline).Truncate(time.Second))
+			log.Info().Str("name", name).Str("mode", mode).Int("pid", pid).Str("last_health", ci.LastHealth).Dur("remaining", time.Until(deadline).Truncate(time.Second)).Msg("waitReady")
 			lastLog = time.Now()
 		}
 		if time.Now().After(deadline) {
@@ -1122,16 +873,6 @@ func (a *Agent) waitReady(name, mode string, timeout time.Duration) error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-}
-
-func parseDurationDefault(s string, d time.Duration) time.Duration {
-	if s == "" {
-		return d
-	}
-	if dd, err := time.ParseDuration(s); err == nil && dd > 0 {
-		return dd
-	}
-	return d
 }
 
 // runShellWithOutput runs a shell script in the given working directory and returns trimmed combined output.
