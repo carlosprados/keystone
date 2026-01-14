@@ -14,7 +14,7 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 - Solid: atomic deployments, checkpoints, rollback
 - Secure: least privilege, mTLS-ready, checksums/signatures
 - Portable: Linux x86/ARM, no mandatory Docker/CRI
-- Operable: structured logs, Prometheus metrics, health endpoints
+- Operable: structured logs, Prometheus metrics, health endpoints, persistence
 
 ## Project Status
 
@@ -24,13 +24,13 @@ MVP in progress. This repo contains the initial agent skeleton, a simple health 
 
 Build and run the local agent:
 
-```
+```bash
 go run ./cmd/keystone --http :8080
 ```
 
 Probe the health endpoint:
 
-```
+```bash
 curl -s localhost:8080/healthz | jq
 ```
 
@@ -38,13 +38,13 @@ You should see a JSON response with status and uptime.
 
 Run the built-in demo stack (db -> cache -> api):
 
-```
+```bash
 go run ./cmd/keystone --demo
 ```
 
 Scrape metrics (Prometheus format):
 
-```
+```bash
 curl -s localhost:8080/metrics | head
 ```
 
@@ -63,8 +63,10 @@ Implemented preview pieces in this repo:
 
 - Basic supervisor and DAG execution model
 - In-memory component store and `/v1/components`
-- `/metrics` (Prometheus) with simple component state gauge
-- Recipe loader (TOML) and artifact manager (download, verify, unpack)
+- `/metrics` (Prometheus) with state, health, and process metrics
+- Recipe loader (TOML) and artifact manager (download, verify, unpack, GC)
+- Persistent state snapshotting in `runtime/state`
+- Environment variable support (including `.env` loading)
 
 ## Apply a Deployment Plan (End-to-End Preview)
 
@@ -72,7 +74,7 @@ Use a minimal TOML plan to run real processes via the ProcessRunner.
 
 Example plan (see `configs/examples/plan.toml`):
 
-```
+```toml
 [[components]]
 name = "hello"
 recipe = "configs/examples/com.example.hello.recipe.toml"
@@ -80,7 +82,7 @@ recipe = "configs/examples/com.example.hello.recipe.toml"
 
 Apply it:
 
-```
+```bash
 go run ./cmd/keystone --apply configs/examples/plan.toml --http :8080
 ```
 
@@ -120,7 +122,7 @@ Notes:
 
 Example snippet inside a recipe:
 
-```
+```toml
 [[artifacts]]
 uri = "https://api.github.com/repos/org/repo/actions/artifacts/123/zip"
 sha256 = "sha256:<...>"
@@ -134,7 +136,7 @@ Accept = "application/vnd.github+json"   # para endpoint de Actions /artifacts/{
 
 Build and use the local CLI for convenience:
 
-```
+```bash
 go build -o keystonectl ./cmd/keystonectl
 ./keystonectl status
 ./keystonectl components
@@ -146,20 +148,44 @@ go build -o keystonectl ./cmd/keystonectl
 ./keystonectl apply-dry configs/examples/plan.toml
 ```
 
+### keystoneserver
+
+A simple HTTP server to serve local artifacts for testing:
+
+```bash
+go run ./cmd/keystoneserver --root ./artifacts --addr :9000
+```
+
+- Accessible at `http://localhost:9000/<path>`
+- Includes a `/healthz` endpoint.
+
 Graph and dry-run from API directly:
 
-```
+```bash
 curl -s localhost:8080/v1/plan/graph | jq
 curl -s -X POST localhost:8080/v1/components/hello:restart?dry=true | jq
 curl -s -X POST localhost:8080/v1/plan/apply -H 'Content-Type: application/json' \
   -d '{"planPath":"configs/examples/plan.toml","dry":true}'
 ```
 
+## Configuration
+
+### Environment Variables
+
+Keystone supports loading environment variables from a `.env` file in the current working directory.
+
+| Variable                              | Description                                                            |
+| ------------------------------------- | ---------------------------------------------------------------------- |
+| `KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES` | Max size of `runtime/artifacts` (default: 2GiB).                       |
+| `KEYSTONE_TRUST_BUNDLE`               | Path to CA trust bundle (PEM) for signature verification.              |
+| `KEYSTONE_LEAF_CERT`                  | Default certificate (PEM) for signature verification if not in recipe. |
+| `KEYSTONE_GITHUB_TOKEN`               | Default token for GitHub artifact downloads (if not in recipe).        |
+
 ## Git hooks
 
 Run once after cloning to enable the repo’s versioned hooks:
 
-```
+```bash
 make hooks   # or: ./scripts/setup-git-hooks.sh
 ```
 
