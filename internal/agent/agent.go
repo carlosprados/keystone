@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,7 +24,6 @@ import (
 	"github.com/carlosprados/keystone/internal/state"
 	"github.com/carlosprados/keystone/internal/store"
 	"github.com/carlosprados/keystone/internal/supervisor"
-	"github.com/rs/zerolog/log"
 )
 
 // Options defines basic runtime configuration for the agent.
@@ -89,7 +89,7 @@ func New(opts Options) *Agent {
 			a.trustPool = pool
 			a.trustPath = tb
 		} else {
-			log.Warn().Err(err).Msg("failed to load trust bundle")
+			log.Printf("[agent] failed to load trust bundle: %v", err)
 		}
 	}
 	// Periodic snapshots
@@ -111,7 +111,7 @@ func (a *Agent) Close() error {
 	if a.closed.Swap(true) {
 		return nil
 	}
-	log.Info().Msg("agent closed")
+	log.Println("[agent] agent closed")
 	a.persistSnapshot()
 	return nil
 }
@@ -121,7 +121,7 @@ func (a *Agent) StartDemo() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	log.Info().Msg("starting demo stack (db -> cache -> api)")
+	log.Println("[agent] starting demo stack (db -> cache -> api)")
 	db := supervisor.NewComponent(
 		"db", nil,
 		supervisor.MockInstall("db", 200*time.Millisecond),
@@ -362,7 +362,7 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				WorkingDir: workDir,
 				NoFile:     r.Resources.OpenFiles,
 			}
-			log.Info().Str("component", it.Name).Str("cwd", workDir).Str("cmd", opts.Command).Strs("args", opts.Args).Msg("starting component")
+			log.Printf("[agent] component=%s cwd=%s cmd=%s args=%v msg=starting component", it.Name, workDir, opts.Command, opts.Args)
 			// Run managed in background and capture first start handle for metrics/stop
 			go func() {
 				// component-specific context for stop
@@ -462,7 +462,7 @@ func (a *Agent) ApplyPlan(planPath string) error {
 			}
 		}
 		order := topoOrder(edges, indeg)
-		log.Info().Strs("order", order).Msg("dry-run plan order")
+		log.Printf("[agent] order=%v msg=dry-run plan order", order)
 		return nil
 	}
 
@@ -865,7 +865,7 @@ func (a *Agent) waitReady(name, mode string, timeout time.Duration) error {
 			// periodic progress log
 			pid := a.currentPID(name)
 			ci, _ := a.comps.Get(name)
-			log.Info().Str("name", name).Str("mode", mode).Int("pid", pid).Str("last_health", ci.LastHealth).Dur("remaining", time.Until(deadline).Truncate(time.Second)).Msg("waitReady")
+			log.Printf("waitReady name=%s mode=%s pid=%d last_health=%s remaining=%s", name, mode, pid, ci.LastHealth, time.Until(deadline).Truncate(time.Second))
 			lastLog = time.Now()
 		}
 		if time.Now().After(deadline) {

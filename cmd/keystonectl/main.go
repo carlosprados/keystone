@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/carlosprados/keystone/internal/version"
 )
 
 func main() {
@@ -19,6 +21,8 @@ func main() {
 	}
 	cmd := flag.Arg(0)
 	switch cmd {
+	case "version":
+		fmt.Printf("keystonectl version %s (commit %s)\n", version.Version, version.Commit)
 	case "status":
 		doGET(*addr + "/v1/plan/status")
 	case "components":
@@ -64,6 +68,7 @@ func main() {
 func usage() {
 	fmt.Println("keystonectl [--addr URL] <command> [args]")
 	fmt.Println("commands:")
+	fmt.Println("  version                  Show version")
 	fmt.Println("  status                   Show plan status")
 	fmt.Println("  components               List components")
 	fmt.Println("  stop-plan                Stop all components")

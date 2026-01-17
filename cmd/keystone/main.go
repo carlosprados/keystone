@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,8 +13,6 @@ import (
 
 	"github.com/carlosprados/keystone/internal/agent"
 	"github.com/carlosprados/keystone/internal/version"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 func main() {
@@ -30,13 +29,6 @@ func main() {
 		return
 	}
 
-	// Logger setup (zerolog)
-	if isatty() {
-		// Human-friendly console output
-		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339})
-	}
-	zerolog.TimeFieldFormat = time.RFC3339
-
 	// Root context with graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -48,9 +40,9 @@ func main() {
 	srv := &http.Server{Addr: *httpAddr, Handler: a.Router()}
 
 	go func() {
-		log.Info().Str("addr", *httpAddr).Str("version", version.Version).Msg("keystone starting")
+		log.Printf("[main] keystone starting addr=%s version=%s", *httpAddr, version.Version)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal().Err(err).Msg("http server error")
+			log.Fatalf("[main] http server error: %v", err)
 		}
 	}()
 
@@ -66,37 +58,28 @@ func main() {
 	if *applyPlan != "" {
 		go func() {
 			if err := a.ApplyPlan(*applyPlan); err != nil {
-				log.Error().Err(err).Str("plan", *applyPlan).Msg("apply failed")
+				log.Printf("[main] apply failed plan=%s error=%v", *applyPlan, err)
 			} else {
-				log.Info().Str("plan", *applyPlan).Msg("apply completed")
+				log.Printf("[main] apply completed plan=%s", *applyPlan)
 			}
 		}()
 	}
 
 	// Block until shutdown signal
 	<-ctx.Done()
-	log.Info().Msg("shutdown signal received, draining...")
+	log.Println("[main] shutdown signal received, draining...")
 
 	// Graceful HTTP shutdown with timeout
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutCtx); err != nil {
-		log.Error().Err(err).Msg("http shutdown error")
+		log.Printf("[main] http shutdown error: %v", err)
 	}
 
 	if err := a.Close(); err != nil {
-		log.Error().Err(err).Msg("agent close error")
+		log.Printf("[main] agent close error: %v", err)
 	}
 
-	log.Info().Msg("bye")
+	log.Println("[main] bye")
 	_ = os.Stdout.Sync()
-}
-
-// isatty returns true if stdout is a TTY; best-effort without extra deps.
-func isatty() bool {
-	fi, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
 }

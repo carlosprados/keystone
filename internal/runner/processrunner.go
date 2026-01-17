@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	sysrt "github.com/carlosprados/keystone/internal/runtime"
-	"github.com/rs/zerolog/log"
 )
 
 // ProcessHandle holds the running process information.
@@ -142,9 +142,9 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 			err := h.Cmd.Wait()
 			// log process exit for diagnostics
 			if err != nil {
-				log.Error().Str("component", name).Int("pid", h.PID).Err(err).Msg("process exited with error")
+				log.Printf("[runner] component=%s pid=%d error=%v msg=process exited with error", name, h.PID, err)
 			} else {
-				log.Info().Str("component", name).Int("pid", h.PID).Msg("process exited cleanly")
+				log.Printf("[runner] component=%s pid=%d msg=process exited cleanly", name, h.PID)
 			}
 			exitCh <- err
 			// notify handle.Done for external waiters
@@ -261,7 +261,7 @@ func streamLogs(ctx context.Context, name, stream string, r io.Reader) {
 		case <-ctx.Done():
 			return
 		default:
-			log.Info().Str("component", name).Str("stream", stream).Msg(scanner.Text())
+			log.Printf("[runner] component=%s stream=%s %s", name, stream, scanner.Text())
 		}
 	}
 }

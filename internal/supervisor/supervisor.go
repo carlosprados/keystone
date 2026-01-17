@@ -7,11 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"time"
-
-	"github.com/rs/zerolog/log"
 )
 
 // State represents the current state of a component.
@@ -59,7 +58,7 @@ func (c *Component) State() State {
 // setState changes state with logging.
 func (c *Component) setState(s State) {
 	c.state = s
-	log.Info().Str("component", c.Name).Str("state", string(s)).Msg("state change")
+	log.Printf("[supervisor] component=%s state=%s", c.Name, s)
 }
 
 // Install runs the install hook when appropriate.
@@ -221,7 +220,7 @@ func StartStack(parent context.Context, comps []*Component) error {
 	started := make(map[string]*Component)
 
 	for i, layer := range layers {
-		log.Info().Int("layer", i).Strs("components", layer).Msg("starting layer")
+		log.Printf("[supervisor] layer=%d components=%v msg=starting layer", i, layer)
 		var wg sync.WaitGroup
 		errCh := make(chan error, len(layer))
 
@@ -248,7 +247,7 @@ func StartStack(parent context.Context, comps []*Component) error {
 		wg.Wait()
 		close(errCh)
 		if first := <-errCh; first != nil {
-			log.Error().Int("layer", i).Err(first).Msg("layer failed")
+			log.Printf("[supervisor] layer=%d error=%v msg=layer failed", i, first)
 			cancel()
 			// Stop what started so far (best-effort)
 			for j := i; j >= 0; j-- {
@@ -261,7 +260,7 @@ func StartStack(parent context.Context, comps []*Component) error {
 			return first
 		}
 	}
-	log.Info().Msg("all components running")
+	log.Println("[supervisor] all components running")
 	return nil
 }
 

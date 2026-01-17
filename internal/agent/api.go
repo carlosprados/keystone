@@ -3,13 +3,13 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/carlosprados/keystone/internal/runner"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/rs/zerolog/log"
 )
 
 // Router returns the HTTP handler for the local API.
@@ -105,38 +105,38 @@ func (a *Agent) Router() http.Handler {
 			}
 
 			// stop dependents first
-			log.Info().Str("component", name).Strs("dependents", depsOrder).Msg("restart: stopping dependents")
+			log.Printf("[api] component=%s dependents=%v msg=restart: stopping dependents", name, depsOrder)
 			for _, dn := range depsOrder {
-				log.Info().Str("dependent", dn).Msg("stopping dependent")
+				log.Printf("[api] dependent=%s msg=stopping dependent", dn)
 				a.stopComponent(dn)
 			}
 			// stop target
-			log.Info().Str("target", name).Msg("stopping target")
+			log.Printf("[api] target=%s msg=stopping target", name)
 			a.stopComponent(name)
 			// start target
-			log.Info().Str("target", name).Msg("starting target")
+			log.Printf("[api] target=%s msg=starting target", name)
 			if err := a.restartFromPlan(name); err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(err.Error()))
-				log.Error().Str("target", name).Err(err).Msg("restart failed to start")
+				log.Printf("[api] target=%s error=%v msg=restart failed to start", name, err)
 				return
 			}
 			// wait target
-			log.Info().Str("target", name).Str("mode", mode).Dur("timeout", to).Msg("waiting for target")
+			log.Printf("[api] target=%s mode=%s timeout=%v msg=waiting for target", name, mode, to)
 			if err := a.waitReady(name, mode, to); err != nil {
 				w.WriteHeader(http.StatusGatewayTimeout)
 				_, _ = w.Write([]byte(err.Error()))
-				log.Error().Str("target", name).Err(err).Msg("restart wait failed")
+				log.Printf("[api] target=%s error=%v msg=restart wait failed", name, err)
 				return
 			}
-			log.Info().Str("target", name).Int("pid", a.currentPID(name)).Msg("target ready")
+			log.Printf("[api] target=%s pid=%d msg=target ready", name, a.currentPID(name))
 			// start dependents in order and wait for each (best-effort)
 			depPIDs := map[string]int{}
 			for _, dn := range depsOrder {
-				log.Info().Str("dependent", dn).Msg("starting dependent")
+				log.Printf("[api] dependent=%s msg=starting dependent", dn)
 				_ = a.restartFromPlan(dn)
 				if err := a.waitReady(dn, mode, to); err != nil {
-					log.Warn().Str("dependent", dn).Err(err).Msg("dependent not ready")
+					log.Printf("[api] dependent=%s error=%v msg=dependent not ready", dn, err)
 				}
 				if pid := a.currentPID(dn); pid > 0 {
 					depPIDs[dn] = pid
