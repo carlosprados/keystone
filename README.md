@@ -16,6 +16,62 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 - Portable: Linux x86/ARM, no mandatory Docker/CRI
 - Operable: structured logs, Prometheus metrics, health endpoints, persistence
 
+### Keystone vs. AWS Greengrass
+
+| Feature          | AWS Greengrass        | **Keystone**            |
+| :--------------- | :-------------------- | :---------------------- |
+| **Runtime**      | Java (JVM) / C (Lite) | **Go (Native)**         |
+| **RAM Baseline** | ~100MB+               | **< 40MB**              |
+| **Complexity**   | High (Cloud-first)    | **Low (Lean & Simple)** |
+| **Setup**        | Heavy Bootstrap       | **Single Binary**       |
+
+## Quick Look: How it Works
+
+Keystone uses simple **TOML recipes** to define components and **deployment plans** to keep your devices in sync.
+
+### 1. Define a Recipe
+
+Describe how to install and run your process in `com.example.hello.recipe.toml`:
+
+```toml
+[metadata]
+name = "com.example.hello"
+version = "1.0.0"
+
+[[artifacts]]
+uri = "https://example.com/artifacts/hello.tar.gz"
+sha256 = "..."
+unpack = true
+
+[lifecycle.run.exec]
+command = "./hello"
+args = ["--interval", "30s"]
+```
+
+### 2. Apply a Plan
+
+List the components you want to run in `plan.toml`:
+
+```toml
+[[components]]
+name = "hello"
+recipe = "com.example.hello.recipe.toml"
+```
+
+Deploy it with a single command:
+
+```bash
+./keystonectl apply plan.toml
+```
+
+### 3. Check Status
+
+See everything running at a glance:
+
+```bash
+./keystonectl status
+```
+
 ## Project Status
 
 MVP in progress. This repo contains the initial agent skeleton, a simple health endpoint, a minimal supervisor core, and example recipe files. Expect rapid iteration as we build the ProcessRunner, artifact manager, and deployment engine.
@@ -50,23 +106,24 @@ curl -s localhost:8080/metrics | head
 
 ## Roadmap (MVP → v1.0)
 
-- Phase 0: Agent skeleton, config base, /healthz, disk layout
-- Phase 1: Supervisor + ProcessRunner, lifecycle hooks, health checks
-- Phase 2: Deployments + rollback, checkpoints, Prometheus metrics
-- Phase 3: Security and offline operation (mTLS, signatures)
-- Phase 4: Optional ContainerRunner (containerd/nerdctl)
-- Phase 5: Self-update and canary rings
+- [x] **Phase 0**: Agent skeleton, config base, /healthz, persistent state snapshotting
+- [x] **Phase 1**: Supervisor + ProcessRunner, lifecycle hooks, health checks (HTTP/TCP/Shell)
+- [x] **Phase 2**: DAG-based deployments, layer-wise rollback, Prometheus metrics
+- [ ] **Phase 3**: Security hardening (mTLS, artifact signatures) — *Signatures implemented*
+- [ ] **Phase 4**: Optional ContainerRunner (containerd/nerdctl)
+- [ ] **Phase 5**: Self-update and canary rings
 
-See KeyStone.md for the architecture proposal and delivery plan.
+See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 
-Implemented preview pieces in this repo:
+### Implemented Features (Current Status)
 
-- Basic supervisor and DAG execution model
-- In-memory component store and `/v1/components`
-- `/metrics` (Prometheus) with state, health, and process metrics
-- Recipe loader (TOML) and artifact manager (download, verify, unpack, GC)
-- Persistent state snapshotting in `runtime/state`
-- Environment variable support (including `.env` loading)
+- **Supervisor**: DAG execution model with parallel layer startup and FSM lifecycle.
+- **ProcessRunner**: Full management of native processes with log streaming and health probes.
+- **Deployment Engine**: TOML-based plans and recipes with environment variable substitution.
+- **Artifact Manager**: Secure download, SHA-256 verification, detatched signatures, and GC.
+- **Security**: Trust bundle loading and ECDSA/RSA signature verification for artifacts.
+- **Observability**: Prometheus endpoint with state, readiness, and per-process metrics.
+- **Persistence**: Automatic state snapshotting and recovery in `runtime/state`.
 
 ## Apply a Deployment Plan (End-to-End Preview)
 
