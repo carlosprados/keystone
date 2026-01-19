@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -32,6 +33,47 @@ func (a *Agent) Router() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		list := a.comps.List()
 		_ = json.NewEncoder(w).Encode(list)
+	})
+
+	// Recipe management:
+	// - POST /v1/recipes: upload a new recipe (raw TOML body)
+	// - GET /v1/recipes: list stored recipes
+	mux.HandleFunc("/v1/recipes", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			list, err := a.ListRecipes()
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(err.Error()))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(list)
+		case http.MethodPost:
+			force := r.URL.Query().Get("force") == "true"
+			// read body as raw content
+			content, err := io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(err.Error()))
+				return
+			}
+			name, version, err := a.AddRecipe(string(content), force)
+			if err != nil {
+				w.WriteHeader(http.StatusConflict) // exists or invalid
+				_, _ = w.Write([]byte(err.Error()))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status":  "created",
+				"name":    name,
+				"version": version,
+			})
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
 	})
 
 	// Per-component control:
@@ -194,27 +236,39 @@ func (a *Agent) Router() http.Handler {
 		_ = json.NewEncoder(w).Encode(map[string]any{"nodes": nodes, "edges": edges, "order": order})
 	})
 
-	// Plan apply: POST {"planPath":"...", "dry":bool}
+	// Plan apply: POST {"planPath":"...", "dry":bool} OR raw TOML
 	mux.HandleFunc("/v1/plan/apply", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+
+		// Read body
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		dry := r.URL.Query().Get("dry") == "true"
+
+		// Try to parse as JSON first
 		var req struct {
 			PlanPath string `json:"planPath"`
 			Dry      bool   `json:"dry"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(err.Error()))
+		if json.Unmarshal(body, &req) == nil && req.PlanPath != "" {
+			if err := a.ApplyPlanAPI(req.PlanPath, req.Dry || dry); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(err.Error()))
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
 			return
 		}
-		if req.PlanPath == "" {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte("missing planPath"))
-			return
-		}
-		if err := a.ApplyPlanAPI(req.PlanPath, req.Dry); err != nil {
+
+		// Fallback to raw TOML
+		if err := a.ApplyPlanContent(string(body), dry); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(err.Error()))
 			return

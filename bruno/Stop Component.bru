@@ -1,0 +1,19 @@
+meta {
+  name: Stop Component
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{base_url}}/v1/components/:name:stop
+  body: none
+  auth: none
+}
+
+query {
+  ~dry: true
+}
+
+params:path {
+  name: keystone-server
+}

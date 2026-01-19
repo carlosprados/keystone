@@ -115,7 +115,7 @@ const (
 
 // RunManaged starts a process and keeps it healthy according to health config and restart policy.
 // Returns when context is canceled or a terminal error occurs.
-func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Options, hc HealthConfig, policy RestartPolicy, onStart func(*ProcessHandle), onHealth func(bool)) error {
+func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Options, hc HealthConfig, policy RestartPolicy, maxRetries int, onStart func(*ProcessHandle), onHealth func(bool), onExit func(error)) error {
 	if hc.Interval == 0 {
 		hc.Interval = 10 * time.Second
 	}
@@ -126,11 +126,26 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 		hc.FailureThreshold = 3
 	}
 
+	retries := 0
 	for {
 		// Start
 		handle, err := r.Start(ctx, opts)
 		if err != nil {
-			return err
+			retries++
+			if maxRetries > 0 && retries > maxRetries {
+				errLimit := fmt.Errorf("start failed after %d retries: %w", maxRetries, err)
+				if onExit != nil {
+					onExit(errLimit)
+				}
+				return errLimit
+			}
+			// Wait before retry
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2 * time.Second):
+				continue
+			}
 		}
 		if onStart != nil {
 			onStart(handle)
@@ -167,19 +182,32 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 		for run {
 			select {
 			case <-ctx.Done():
+				ticker.Stop()
 				// External caller is responsible for stopping the process.
 				// Avoid double-stop races with agent.stopComponent.
 				return nil
 			case err := <-exitCh:
+				ticker.Stop()
 				// Process exited
-				if err != nil && policy != RestartNever {
-					if policy == RestartAlways || policy == RestartOnFailure {
+				if policy != RestartNever {
+					if policy == RestartAlways || (policy == RestartOnFailure && err != nil) {
+						retries++
+						if maxRetries > 0 && retries > maxRetries {
+							errLimit := fmt.Errorf("exited and reached restart limit of %d", maxRetries)
+							if onExit != nil {
+								onExit(errLimit)
+							}
+							return errLimit
+						}
 						// restart
 						run = false
 						break
 					}
 				}
 				// no restart
+				if onExit != nil {
+					onExit(err)
+				}
 				return err
 			case <-ticker.C:
 				if hc.Check == "" {
@@ -194,7 +222,7 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 						// unhealthy -> restart only for Always, else keep waiting for process exit
 						if policy == RestartAlways {
 							_ = r.Stop(context.Background(), handle, 5*time.Second)
-							run = false
+							// run = false will be set when exitCh receives the exit signal
 						}
 					}
 				}
@@ -207,8 +235,12 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 				}
 			}
 		}
-		ticker.Stop()
-		// loop and restart
+		// Wait before loop and restart
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(1 * time.Second):
+		}
 	}
 }
 

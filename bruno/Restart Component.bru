@@ -1,0 +1,21 @@
+meta {
+  name: Restart Component
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{base_url}}/v1/components/:name:restart?wait=health&timeout=60s
+  body: none
+  auth: none
+}
+
+query {
+  wait: health
+  timeout: 60s
+  ~dry: true
+}
+
+params:path {
+  name: keystone-server
+}

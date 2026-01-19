@@ -1,0 +1,21 @@
+meta {
+  name: Apply Plan
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{base_url}}/v1/plan/apply?dry=false
+  body: text
+  auth: none
+}
+
+query {
+  dry: false
+}
+
+body:text {
+  [[components]]
+  name = "keystone-server"
+  recipe = "com.keystone.server:1.0.0"
+}

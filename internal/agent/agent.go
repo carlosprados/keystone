@@ -29,7 +29,6 @@ import (
 // Options defines basic runtime configuration for the agent.
 type Options struct {
 	HTTPAddr string
-	DryRun   bool
 }
 
 // Agent is the top-level runtime handle for Keystone.
@@ -56,6 +55,8 @@ type Agent struct {
 	// trust
 	trustPool *x509.CertPool
 	trustPath string
+	// recipes
+	recipes *store.RecipeStore
 }
 
 // New creates an Agent with the provided options.
@@ -64,7 +65,15 @@ func New(opts Options) *Agent {
 	// can use variables (e.g., tokens for artifact downloads).
 	config.LoadDotEnvDefault()
 
-	a := &Agent{opts: opts, start: time.Now(), comps: store.NewMemoryStore(), procs: make(map[string]*runner.ProcessHandle), cancels: make(map[string]context.CancelFunc), stateDir: filepath.Join("runtime", "state"), dryRun: opts.DryRun}
+	a := &Agent{
+		opts:     opts,
+		start:    time.Now(),
+		comps:    store.NewMemoryStore(),
+		recipes:  store.NewRecipeStore(filepath.Join("runtime", "recipes")),
+		procs:    make(map[string]*runner.ProcessHandle),
+		cancels:  make(map[string]context.CancelFunc),
+		stateDir: filepath.Join("runtime", "state"),
+	}
 	// Set artifact cache limit from env (bytes). Default: 2 GiB.
 	a.artifactCacheLimit = 2 * 1024 * 1024 * 1024
 	if v := os.Getenv("KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES"); v != "" {
@@ -81,6 +90,16 @@ func New(opts Options) *Agent {
 			a.comps.Upsert(ci)
 		}
 		a.planComps = snap.PlanComponents
+
+		// Resume plan if it was running or failed
+		if a.planPath != "" && (a.planStatus == "running" || a.planStatus == "failed") {
+			go func() {
+				log.Printf("[agent] resuming last plan: %s", a.planPath)
+				if err := a.ApplyPlan(a.planPath); err != nil {
+					log.Printf("[agent] resume failed: %v", err)
+				}
+			}()
+		}
 	}
 	// Load trust bundle if provided via env KEYSTONE_TRUST_BUNDLE
 	if tb := os.Getenv("KEYSTONE_TRUST_BUNDLE"); tb != "" {
@@ -207,9 +226,29 @@ func (a *Agent) ApplyPlan(planPath string) error {
 	var loadedList []loaded
 	metaToComp := map[string]string{}
 	for _, it := range p.Components {
+		// Try to load from path first, then from store
 		r, err := recipe.Load(it.RecipePath)
 		if err != nil {
-			return fmt.Errorf("%s: %w", it.Name, err)
+			// Try to resolve from store if it looks like name:version or if load failed
+			// For now, if load fails, try to find it in store by assuming RecipePath is name-version
+			// but better: if it contains ":", split it.
+			name, version := it.Name, "" // default
+			if parts := strings.Split(it.RecipePath, ":"); len(parts) == 2 {
+				name, version = parts[0], parts[1]
+			} else {
+				// fallback: use the path as name if it doesn't look like a real path
+				if !strings.Contains(it.RecipePath, "/") && !strings.Contains(it.RecipePath, ".") {
+					name = it.RecipePath
+				}
+			}
+
+			if path, serr := a.recipes.GetPath(name, version); serr == nil {
+				r, err = recipe.Load(path)
+			}
+		}
+
+		if err != nil {
+			return fmt.Errorf("failed to load recipe for %s (path: %s): %w", it.Name, it.RecipePath, err)
 		}
 		loadedList = append(loadedList, loaded{item: it, rec: r})
 		metaToComp[r.Metadata.Name] = it.Name
@@ -363,6 +402,12 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				NoFile:     r.Resources.OpenFiles,
 			}
 			log.Printf("[agent] component=%s cwd=%s cmd=%s args=%v msg=starting component", it.Name, workDir, opts.Command, opts.Args)
+			// Max retries (default 5 if Always, 0 otherwise for safety but Always is default)
+			maxRetries := r.Lifecycle.Run.MaxRetries
+			if maxRetries <= 0 && (rp == runner.RestartAlways || rp == runner.RestartOnFailure) {
+				maxRetries = 5
+			}
+
 			// Run managed in background and capture first start handle for metrics/stop
 			go func() {
 				// component-specific context for stop
@@ -370,7 +415,7 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				a.mu.Lock()
 				a.cancels[it.Name] = cancel
 				a.mu.Unlock()
-				_ = pr.RunManaged(ctx2, it.Name, opts, hc, rp,
+				_ = pr.RunManaged(ctx2, it.Name, opts, hc, rp, maxRetries,
 					func(h *runner.ProcessHandle) {
 						a.mu.Lock()
 						// If already present, count as restart; else first start
@@ -419,6 +464,19 @@ func (a *Agent) ApplyPlan(planPath string) error {
 									close(ch)
 								}
 							})
+						}
+					},
+					func(err error) {
+						if err != nil {
+							log.Printf("[agent] component=%s terminal failure: %v", it.Name, err)
+							a.mu.Lock()
+							ci, ok := a.comps.Get(it.Name)
+							if ok {
+								ci.State = "failed"
+								a.comps.Upsert(ci)
+							}
+							delete(a.procs, it.Name)
+							a.mu.Unlock()
 						}
 					},
 				)
@@ -483,13 +541,18 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				a.mu.RLock()
 				_, running := a.procs[c.Name]
 				a.mu.RUnlock()
-				st := "stopped"
-				if running {
-					st = "running"
-				}
-				a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: st})
-				// read health for label
 				ci, _ := a.comps.Get(c.Name)
+
+				// Keep "failed" state if it was set by terminal error
+				st := ci.State
+				if st != "failed" {
+					st = "stopped"
+					if running {
+						st = "running"
+					}
+					a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: st})
+				}
+
 				metrics.ObserveComponentState(c.Name, st)
 				metrics.ObserveComponentStateWithHealth(c.Name, st, ci.LastHealth)
 			}
@@ -641,12 +704,17 @@ func (a *Agent) restartFromPlan(name string) error {
 	}
 	opts := runner.Options{Name: name, Command: r.Lifecycle.Run.Exec.Command, Args: r.Lifecycle.Run.Exec.Args, Env: env, WorkingDir: workDir, NoFile: r.Resources.OpenFiles}
 	log.Printf("restarting component %s: cwd=%s cmd=%s args=%v", name, workDir, opts.Command, opts.Args)
+	maxRetries := r.Lifecycle.Run.MaxRetries
+	if maxRetries <= 0 && (rp == runner.RestartAlways || rp == runner.RestartOnFailure) {
+		maxRetries = 5
+	}
+
 	go func() {
 		ctx2, cancel := context.WithCancel(context.Background())
 		a.mu.Lock()
 		a.cancels[name] = cancel
 		a.mu.Unlock()
-		_ = pr.RunManaged(ctx2, name, opts, hc, rp,
+		_ = pr.RunManaged(ctx2, name, opts, hc, rp, maxRetries,
 			func(h *runner.ProcessHandle) {
 				a.mu.Lock()
 				// On restart (existing), increment counters
@@ -679,6 +747,19 @@ func (a *Agent) restartFromPlan(name string) error {
 				}
 				a.mu.Unlock()
 				metrics.SetHealthy(name, ok)
+			},
+			func(err error) {
+				if err != nil {
+					log.Printf("[agent] component=%s terminal failure on restart: %v", name, err)
+					a.mu.Lock()
+					ci, ok := a.comps.Get(name)
+					if ok {
+						ci.State = "failed"
+						a.comps.Upsert(ci)
+					}
+					delete(a.procs, name)
+					a.mu.Unlock()
+				}
 			},
 		)
 		// Enforce artifact cache budget after (re)start
@@ -722,6 +803,26 @@ func (a *Agent) stopComponent(name string) {
 		a.comps.Upsert(ci)
 	}
 	log.Printf("agent: stopComponent done name=%s", name)
+}
+
+// AddRecipe saves a recipe to the local store.
+func (a *Agent) AddRecipe(content string, force bool) (string, string, error) {
+	// Parse basic metadata to get name and version
+	r, err := recipe.Unmarshal([]byte(content))
+	if err != nil {
+		return "", "", fmt.Errorf("invalid recipe format: %w", err)
+	}
+	if r.Metadata.Name == "" || r.Metadata.Version == "" {
+		return "", "", fmt.Errorf("recipe metadata must include name and version")
+	}
+
+	err = a.recipes.Save(r.Metadata.Name, r.Metadata.Version, content, force)
+	return r.Metadata.Name, r.Metadata.Version, err
+}
+
+// ListRecipes returns the names of all recipes in the store.
+func (a *Agent) ListRecipes() ([]string, error) {
+	return a.recipes.List()
 }
 
 // planDependentsTopological returns dependents of 'name' in topological order (closest first -> farthest last).
@@ -834,6 +935,19 @@ func (a *Agent) ApplyPlanAPI(planPath string, dry bool) error {
 		defer func() { a.dryRun = saved }()
 	}
 	return a.ApplyPlan(planPath)
+}
+
+// ApplyPlanContent saves the raw plan TOML to a local file and applies it.
+func (a *Agent) ApplyPlanContent(content string, dry bool) error {
+	dir := filepath.Join("runtime", "plans")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "applied.toml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return err
+	}
+	return a.ApplyPlanAPI(path, dry)
 }
 
 // Helpers for synchronous restart

@@ -1,0 +1,12 @@
+[metadata]
+name = "test.remote"
+version = "0.0.1"
+description = "Remote upload test"
+
+[[artifacts]]
+uri = "file://Makefile"
+sha256 = "6812bc49d00c1c5cc0c06adc00f1331b6df6f74bf2bf4f219c56f8da7910ff77"
+
+[lifecycle.run.exec]
+command = "ls"
+args = ["-l"]

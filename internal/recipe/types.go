@@ -43,6 +43,7 @@ type LifecycleRunExec struct {
 type LifecycleRun struct {
 	Exec          LifecycleRunExec `toml:"exec"`
 	RestartPolicy string           `toml:"restart_policy"`
+	MaxRetries    int              `toml:"max_retries"`
 	Health        Health           `toml:"health"`
 }
 

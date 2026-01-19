@@ -1,0 +1,26 @@
+meta {
+  name: Upload Recipe
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{base_url}}/v1/recipes
+  body: text
+  auth: none
+}
+
+query {
+  ~force: true
+}
+
+body:text {
+  [metadata]
+  name = "com.example.hello"
+  version = "1.0.0"
+  description = "Hello world recipe"
+  
+  [lifecycle.run.exec]
+  command = "echo"
+  args = ["hello from remote"]
+}

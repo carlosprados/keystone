@@ -133,26 +133,33 @@ Example plan (see `configs/examples/plan.toml`):
 
 ```toml
 [[components]]
-name = "hello"
-recipe = "configs/examples/com.example.hello.recipe.toml"
+name = "keystone-server"
+recipe = "configs/examples/com.keystone.server.recipe.toml"
 ```
 
 Apply it:
 
 ```bash
-go run ./cmd/keystone --apply configs/examples/plan.toml --http :8080
+# 1. Start the agent (now remote-first)
+make build
+./keystone --http :8080
+
+# 2. Apply the plan remotely using the CLI
+./keystonectl apply configs/examples/plan.toml
 ```
 
 Notes:
 
-- The example recipe points to a placeholder artifact URL; replace with a real binary and SHA256 for a working flow.
-- Install script runs in the component work dir and can mark binaries executable.
+- The example recipe uses the built-in `keystoneserver` binary.
+- Artifact management and detached signatures are supported but optional for this simple example.
 - ProcessRunner applies basic `RLIMIT_NOFILE`; cgroups integration is a safe no-op placeholder for now.
 
 ## Quick Usage
 
-- Start agent with plan:
-  - `go run ./cmd/keystone --apply configs/examples/plan.toml --http :8080`
+- Start agent:
+  - `./keystone --http :8080`
+- Apply plan:
+  - `./keystonectl apply configs/examples/plan.toml`
 - Health and discovery:
   - `curl -s localhost:8080/healthz | jq`
   - `curl -s localhost:8080/v1/components | jq`
@@ -216,6 +223,15 @@ go run ./cmd/keystoneserver --root ./artifacts --addr :9000
 - Accessible at `http://localhost:9000/<path>`
 - Includes a `/healthz` endpoint.
 
+### API Testing with Bruno
+
+We provide a [Bruno](https://usebruno.com/) collection for testing the agent API.
+
+1. Install Bruno.
+2. Open the app and select **Open Collection**.
+3. Select the `bruno/` folder in this repository.
+4. Use the **local** environment to set the `base_url`.
+
 Graph and dry-run from API directly:
 
 ```bash
@@ -224,6 +240,15 @@ curl -s -X POST localhost:8080/v1/components/hello:restart?dry=true | jq
 curl -s -X POST localhost:8080/v1/plan/apply -H 'Content-Type: application/json' \
   -d '{"planPath":"configs/examples/plan.toml","dry":true}'
 ```
+
+## Releases
+
+Keystone uses [GoReleaser](https://goreleaser.com/) for automated builds and releases. To trigger a new release:
+
+1. Tag the commit: `git tag -a v0.1.0 -m "Release v0.1.0"`
+2. Push the tag: `git push origin v0.1.0`
+
+The GitHub Action will automatically build the binaries for multiple architectures (`amd64`, `arm64`, `armv7`) and create a GitHub Release with the artifacts.
 
 ## Configuration
 

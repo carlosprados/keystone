@@ -1,0 +1,22 @@
+meta {
+  name: Apply Plan JSON
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{base_url}}/v1/plan/apply
+  body: json
+  auth: none
+}
+
+query {
+  ~dry: true
+}
+
+body:json {
+  {
+    "planPath": "configs/examples/plan.toml",
+    "dry": false
+  }
+}

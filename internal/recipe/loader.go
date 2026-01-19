@@ -28,3 +28,12 @@ func Load(path string) (*Recipe, error) {
 	}
 	return &r, nil
 }
+
+// Unmarshal parses a TOML recipe from bytes.
+func Unmarshal(b []byte) (*Recipe, error) {
+	var r Recipe
+	if err := toml.Unmarshal(b, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}

@@ -1,6 +1,3 @@
-# Minimal Keystone deployment plan (TOML)
-
 [[components]]
-name = "hello"
-recipe = "configs/examples/com.example.hello.recipe.toml"
-
+name = "keystone-server"
+recipe = "configs/examples/com.keystone.server.recipe.toml"

@@ -19,8 +19,6 @@ func main() {
 	// Flags kept minimal for the MVP to avoid extra deps
 	httpAddr := flag.String("http", ":8080", "HTTP listen address for local API and health endpoints")
 	demo := flag.Bool("demo", false, "Run a built-in demo: start a mock 3-component stack")
-	applyPlan := flag.String("apply", "", "Apply a deployment plan file (TOML) and run components")
-	dryRun := flag.Bool("dry-run", false, "When used with --apply, compute order and do not start components")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -34,7 +32,7 @@ func main() {
 	defer stop()
 
 	// Start agent with HTTP health endpoint
-	a := agent.New(agent.Options{HTTPAddr: *httpAddr, DryRun: *dryRun})
+	a := agent.New(agent.Options{HTTPAddr: *httpAddr})
 
 	// HTTP server lifecycle
 	srv := &http.Server{Addr: *httpAddr, Handler: a.Router()}
@@ -51,16 +49,6 @@ func main() {
 		go func() {
 			if err := a.StartDemo(); err != nil {
 				log.Printf("demo start error: %v", err)
-			}
-		}()
-	}
-
-	if *applyPlan != "" {
-		go func() {
-			if err := a.ApplyPlan(*applyPlan); err != nil {
-				log.Printf("[main] apply failed plan=%s error=%v", *applyPlan, err)
-			} else {
-				log.Printf("[main] apply completed plan=%s", *applyPlan)
 			}
 		}()
 	}

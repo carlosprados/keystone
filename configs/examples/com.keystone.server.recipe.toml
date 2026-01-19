@@ -1,0 +1,17 @@
+[metadata]
+name = "com.keystone.server"
+version = "1.0.0"
+description = "Keystone Internal Test Server"
+
+[lifecycle.install]
+script = "cp ../../../../keystoneserver ."
+
+[lifecycle.run.exec]
+command = "./keystoneserver"
+args = ["--addr", ":9000", "--root", "."]
+
+[lifecycle.run.health]
+check = "http://localhost:9000/healthz"
+interval = "5s"
+timeout = "2s"
+failure_threshold = 3
