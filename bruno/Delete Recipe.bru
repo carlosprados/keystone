@@ -1,0 +1,16 @@
+meta {
+  name: Delete Recipe
+  type: http
+  seq: 14
+}
+
+delete {
+  url: {{base_url}}/v1/recipes/:name/:version
+  body: none
+  auth: none
+}
+
+params:path {
+  name: com.example.hello
+  version: 1.0.0
+}

@@ -75,6 +75,26 @@ func (a *Agent) Router() http.Handler {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/v1/recipes/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		path := strings.TrimPrefix(r.URL.Path, "/v1/recipes/")
+		parts := strings.Split(path, "/")
+		if len(parts) != 2 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte("invalid path, expected /v1/recipes/{name}/{version}"))
+			return
+		}
+		name, version := parts[0], parts[1]
+		if err := a.DeleteRecipe(name, version); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(err.Error()))
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	// Per-component control:
 	// - POST /v1/components/{name}:stop

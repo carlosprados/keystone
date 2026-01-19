@@ -52,6 +52,19 @@ func (s *RecipeStore) GetPath(name, version string) (string, error) {
 	return path, nil
 }
 
+// Delete removes a recipe file from the store.
+func (s *RecipeStore) Delete(name, version string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := s.path(name, version)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return fmt.Errorf("recipe %s version %s not found", name, version)
+	}
+
+	return os.Remove(path)
+}
+
 // List returns a list of stored recipe files (basenames).
 func (s *RecipeStore) List() ([]string, error) {
 	s.mu.RLock()

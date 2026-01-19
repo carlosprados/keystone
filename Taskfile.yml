@@ -1,0 +1,77 @@
+version: "3"
+
+vars:
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+  COMMIT:
+    sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
+  LDFLAGS: -ldflags "-X github.com/carlosprados/keystone/internal/version.Version={{.VERSION}} -X github.com/carlosprados/keystone/internal/version.Commit={{.COMMIT}}"
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  clean:
+    desc: Remove built binaries
+    cmds:
+      - rm -f keystone keystonectl keystoneserver
+
+  build:
+    desc: Build all project binaries
+    cmds:
+      - go build {{.LDFLAGS}} ./cmd/keystone
+      - go build {{.LDFLAGS}} ./cmd/keystonectl
+      - go build {{.LDFLAGS}} ./cmd/keystoneserver
+
+  run:
+    desc: Run the Keystone agent
+    cmds:
+      - go run {{.LDFLAGS}} ./cmd/keystone --http :8080
+
+  dev:
+    desc: Run the Keystone agent with live reload (requires air)
+    cmds:
+      - air
+
+  ctl:
+    desc: Build the keystonectl binary
+    cmds:
+      - go build {{.LDFLAGS}} -o keystonectl ./cmd/keystonectl
+
+  fmt:
+    desc: Run go fmt on all files
+    cmds:
+      - go fmt ./...
+
+  vet:
+    desc: Run go vet on all files
+    cmds:
+      - go vet ./...
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test -v ./...
+
+  tidy:
+    desc: Run go mod tidy
+    cmds:
+      - go mod tidy
+
+  plan-dry:
+    desc: "Dry-run a plan application (usage: task plan-dry PLAN=path/to/plan.toml)"
+    cmds:
+      - |
+        if [ -z "{{.PLAN}}" ]; then
+          echo "Usage: task plan-dry PLAN=path/to/plan.toml"
+          exit 1
+        fi
+        go run ./cmd/keystone --apply {{.PLAN}} --dry-run --http :0
+
+  hooks:
+    desc: Setup git hooks
+    cmds:
+      - chmod +x .githooks/pre-commit scripts/setup-git-hooks.sh || true
+      - ./scripts/setup-git-hooks.sh

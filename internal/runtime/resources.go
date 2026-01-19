@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"fmt"
+
 	"golang.org/x/sys/unix"
 )
 
@@ -30,4 +31,23 @@ func WithCgroup(pid int, cpuQuotaPct int64, memoryLimitBytes int64) (func() erro
 	_ = cpuQuotaPct
 	_ = memoryLimitBytes
 	return func() error { return nil }, nil
+}
+
+// IsProcessRunning checks if a PID is alive using signal 0.
+func IsProcessRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := unix.Kill(pid, 0)
+	if err == nil {
+		return true
+	}
+	if err == unix.ESRCH {
+		return false
+	}
+	// Permision error usually means it's running but we can't signal it
+	if err == unix.EPERM {
+		return true
+	}
+	return false
 }

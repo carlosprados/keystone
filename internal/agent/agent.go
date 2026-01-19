@@ -20,6 +20,7 @@ import (
 	"github.com/carlosprados/keystone/internal/metrics"
 	"github.com/carlosprados/keystone/internal/recipe"
 	"github.com/carlosprados/keystone/internal/runner"
+	sysrt "github.com/carlosprados/keystone/internal/runtime"
 	"github.com/carlosprados/keystone/internal/security"
 	"github.com/carlosprados/keystone/internal/state"
 	"github.com/carlosprados/keystone/internal/store"
@@ -402,6 +403,15 @@ func (a *Agent) ApplyPlan(planPath string) error {
 				NoFile:     r.Resources.OpenFiles,
 			}
 			log.Printf("[agent] component=%s cwd=%s cmd=%s args=%v msg=starting component", it.Name, workDir, opts.Command, opts.Args)
+
+			// Cleanup orphaned process if any
+			if ci, ok := a.comps.Get(it.Name); ok && ci.PID > 0 {
+				if sysrt.IsProcessRunning(ci.PID) {
+					log.Printf("[agent] component=%s pid=%d msg=found orphaned process, stopping it", it.Name, ci.PID)
+					_ = pr.StopPIDs([]int{ci.PID}, 5*time.Second)
+				}
+			}
+
 			// Max retries (default 5 if Always, 0 otherwise for safety but Always is default)
 			maxRetries := r.Lifecycle.Run.MaxRetries
 			if maxRetries <= 0 && (rp == runner.RestartAlways || rp == runner.RestartOnFailure) {
@@ -427,11 +437,11 @@ func (a *Agent) ApplyPlan(planPath string) error {
 							metrics.IncRestarts(it.Name)
 						}
 						a.procs[it.Name] = h
-						// set PID on store
 						ci, ok2 := a.comps.Get(it.Name)
 						if ok2 {
 							ci.PID = h.PID
 							a.comps.Upsert(ci)
+							log.Printf("[agent] component=%s pid=%d restarts=%d msg=process started", it.Name, h.PID, ci.Restarts)
 						}
 						a.mu.Unlock()
 						// signal readiness once on first successful start (if no health check)
@@ -818,6 +828,24 @@ func (a *Agent) AddRecipe(content string, force bool) (string, string, error) {
 
 	err = a.recipes.Save(r.Metadata.Name, r.Metadata.Version, content, force)
 	return r.Metadata.Name, r.Metadata.Version, err
+}
+
+// DeleteRecipe removes a recipe from the store if it's not in use.
+func (a *Agent) DeleteRecipe(name, version string) error {
+	a.mu.RLock()
+	// Check if any component in the current plan uses this recipe.
+	// RecipePath in PlanComponent can be name:version or a real path.
+	// We check against both for safety.
+	recipeID := fmt.Sprintf("%s:%s", name, version)
+	for _, pc := range a.planComps {
+		if pc.RecipePath == recipeID || strings.HasPrefix(pc.RecipePath, name+"-"+version) {
+			a.mu.RUnlock()
+			return fmt.Errorf("recipe %s is currently in use by component %s", recipeID, pc.Name)
+		}
+	}
+	a.mu.RUnlock()
+
+	return a.recipes.Delete(name, version)
 }
 
 // ListRecipes returns the names of all recipes in the store.

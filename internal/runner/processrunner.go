@@ -97,6 +97,46 @@ func (r *ProcessRunner) Stop(ctx context.Context, h *ProcessHandle, timeout time
 	}
 }
 
+// StopPIDs sends SIGTERM to a list of PIDs and waits, then SIGKILL on timeout.
+func (r *ProcessRunner) StopPIDs(pids []int, timeout time.Duration) error {
+	if len(pids) == 0 {
+		return nil
+	}
+	for _, pid := range pids {
+		if pid <= 0 {
+			continue
+		}
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+	}
+
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		allGone := true
+		for _, pid := range pids {
+			if sysrt.IsProcessRunning(pid) {
+				allGone = false
+				break
+			}
+		}
+		if allGone {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	// Force kill survivors
+	for _, pid := range pids {
+		if sysrt.IsProcessRunning(pid) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	}
+	return nil
+}
+
 // HealthConfig defines how to probe a process.
 type HealthConfig struct {
 	Check            string        // http://..., tcp://..., cmd:...
@@ -200,6 +240,7 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 							return errLimit
 						}
 						// restart
+						log.Printf("[runner] component=%s restarts=%d msg=restarting process", name, retries)
 						run = false
 						break
 					}

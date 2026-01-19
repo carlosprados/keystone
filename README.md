@@ -78,10 +78,14 @@ MVP in progress. This repo contains the initial agent skeleton, a simple health 
 
 ## Quick Start
 
-Build and run the local agent:
-
 ```bash
 go run ./cmd/keystone --http :8080
+```
+
+For development with live reload (requires [air](https://github.com/air-verse/air)):
+
+```bash
+task dev
 ```
 
 Probe the health endpoint:
@@ -141,7 +145,7 @@ Apply it:
 
 ```bash
 # 1. Start the agent (now remote-first)
-make build
+task build
 ./keystone --http :8080
 
 # 2. Apply the plan remotely using the CLI
@@ -268,7 +272,7 @@ Keystone supports loading environment variables from a `.env` file in the curren
 Run once after cloning to enable the repo’s versioned hooks:
 
 ```bash
-make hooks   # or: ./scripts/setup-git-hooks.sh
+task hooks   # or: ./scripts/setup-git-hooks.sh
 ```
 
 This sets `core.hooksPath` to `.githooks`, where the `pre-commit` hook runs `go fmt ./...` and stages formatting changes automatically.
