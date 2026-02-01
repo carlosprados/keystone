@@ -56,8 +56,14 @@ func (r *ProcessRunner) Start(ctx context.Context, opts Options) (*ProcessHandle
 	// Put in its own process group to manage signals for children
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// Log capture pipes
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Printf("[runner] warning: failed to capture stdout for %s: %v", opts.Name, err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		log.Printf("[runner] warning: failed to capture stderr for %s: %v", opts.Name, err)
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -75,9 +81,11 @@ func (r *ProcessRunner) Stop(ctx context.Context, h *ProcessHandle, timeout time
 	if h == nil || h.Cmd == nil || h.Cmd.Process == nil {
 		return nil
 	}
-	// Send SIGTERM to the group
+	// Send SIGTERM to the process group
 	pgid := -h.Cmd.Process.Pid
-	_ = syscall.Kill(pgid, syscall.SIGTERM)
+	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
+		log.Printf("[runner] warning: SIGTERM to pgid %d failed: %v", pgid, err)
+	}
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
@@ -87,7 +95,10 @@ func (r *ProcessRunner) Stop(ctx context.Context, h *ProcessHandle, timeout time
 	case err := <-h.Done:
 		return err
 	case <-time.After(timeout):
-		_ = syscall.Kill(pgid, syscall.SIGKILL)
+		log.Printf("[runner] timeout waiting for process group %d, sending SIGKILL", -pgid)
+		if err := syscall.Kill(pgid, syscall.SIGKILL); err != nil {
+			log.Printf("[runner] warning: SIGKILL to pgid %d failed: %v", pgid, err)
+		}
 		select {
 		case err := <-h.Done:
 			return err
@@ -106,7 +117,9 @@ func (r *ProcessRunner) StopPIDs(pids []int, timeout time.Duration) error {
 		if pid <= 0 {
 			continue
 		}
-		_ = syscall.Kill(pid, syscall.SIGTERM)
+		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+			log.Printf("[runner] warning: SIGTERM to pid %d failed: %v", pid, err)
+		}
 	}
 
 	if timeout <= 0 {
@@ -131,7 +144,10 @@ func (r *ProcessRunner) StopPIDs(pids []int, timeout time.Duration) error {
 	// Force kill survivors
 	for _, pid := range pids {
 		if sysrt.IsProcessRunning(pid) {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
+			log.Printf("[runner] forcing SIGKILL on pid %d after timeout", pid)
+			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+				log.Printf("[runner] warning: SIGKILL to pid %d failed: %v", pid, err)
+			}
 		}
 	}
 	return nil

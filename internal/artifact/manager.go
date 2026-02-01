@@ -10,14 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-
-	retryablehttp "github.com/hashicorp/go-retryablehttp"
 )
 
 // HTTPOptions allows callers to attach headers and optional GitHub token.
@@ -27,58 +25,31 @@ type HTTPOptions struct {
 }
 
 // Download downloads the given URI to destDir, with retries and resume support.
+// This is the main entry point for artifact downloads. It uses robust retry logic
+// with exponential backoff, resume capability via HTTP Range headers, and proper
+// timeout handling for unreliable network conditions.
 func Download(destDir, uri string, timeout time.Duration, httpOpts HTTPOptions) (string, error) {
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return "", err
-	}
-	u, err := url.Parse(uri)
-	if err != nil {
-		return "", err
-	}
-	base := filepath.Base(u.Path)
-	if base == "." || base == "/" || base == "" {
-		base = "artifact.bin"
-	}
-	destPath := filepath.Join(destDir, base)
+	cfg := DefaultDownloadConfig()
+	cfg.HTTPOptions = httpOpts
 
-	client := retryablehttp.NewClient()
-	client.RetryMax = 4
-	client.RetryWaitMin = 250 * time.Millisecond
-	client.RetryWaitMax = 2 * time.Second
-	client.Logger = nil
-
-	req, err := retryablehttp.NewRequest("GET", uri, nil)
-	if err != nil {
-		return "", err
-	}
-	// Attach headers from environment (e.g., Authorization)
-	attachRequestHeaders(req.Request, httpOpts)
-	ctx := context.Background()
-	var cancel func()
+	// Override timeout if specified
 	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
+		cfg.OverallTimeout = timeout
 	}
-	resp, err := client.Do(req.WithContext(ctx))
+
+	ctx := context.Background()
+	result, err := DownloadWithResume(ctx, destDir, uri, cfg)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("http error: %s", resp.Status)
-	}
-	out, err := os.OpenFile(destPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(out, resp.Body); err != nil {
-		out.Close()
-		return "", err
-	}
-	if err := out.Close(); err != nil {
-		return "", err
-	}
-	return destPath, nil
+
+	return result.Path, nil
+}
+
+// DownloadWithConfig downloads with a custom configuration.
+// Use this for fine-grained control over timeouts, retries, and resume behavior.
+func DownloadWithConfig(ctx context.Context, destDir, uri string, cfg DownloadConfig) (*DownloadResult, error) {
+	return DownloadWithResume(ctx, destDir, uri, cfg)
 }
 
 // attachRequestHeaders adds headers from HTTPOptions only.
@@ -115,20 +86,73 @@ func Ensure(destRoot, uri, sha string, timeout time.Duration, httpOpts HTTPOptio
 		if _, err := os.Stat(e.Path); err == nil {
 			// If SHA provided, verify before reuse
 			if sha == "" || VerifySHA256(e.Path, sha) == nil {
+				log.Printf("[artifact] using cached artifact: %s", filepath.Base(e.Path))
+				return e.Path, true, nil
+			}
+			log.Printf("[artifact] cached artifact SHA mismatch, re-downloading")
+		}
+	}
+
+	// Download fresh with robust retry and resume
+	cfg := DefaultDownloadConfig()
+	cfg.HTTPOptions = httpOpts
+	if timeout > 0 {
+		cfg.OverallTimeout = timeout
+	}
+
+	ctx := context.Background()
+	result, err := DownloadWithResume(ctx, destRoot, uri, cfg)
+	if err != nil {
+		return "", false, fmt.Errorf("download %s: %w", uri, err)
+	}
+
+	// Verify SHA if provided
+	if sha != "" {
+		if err := VerifySHA256(result.Path, sha); err != nil {
+			// Remove corrupted file
+			_ = os.Remove(result.Path)
+			return "", false, fmt.Errorf("SHA256 verification failed for %s: %w", uri, err)
+		}
+		log.Printf("[artifact] SHA256 verified: %s", filepath.Base(result.Path))
+	}
+
+	// Update index
+	idx.Put(IndexEntry{URI: uri, SHA256: sha, Path: result.Path, Size: result.Size})
+	if err := idx.Save(); err != nil {
+		log.Printf("[artifact] warning: failed to save index: %v", err)
+	}
+
+	return result.Path, false, nil
+}
+
+// EnsureWithConfig is like Ensure but with custom download configuration.
+func EnsureWithConfig(ctx context.Context, destRoot, uri, sha string, cfg DownloadConfig) (string, bool, error) {
+	idx, _ := LoadIndex(destRoot)
+	if e, ok := idx.Get(uri); ok {
+		if _, err := os.Stat(e.Path); err == nil {
+			if sha == "" || VerifySHA256(e.Path, sha) == nil {
+				log.Printf("[artifact] using cached artifact: %s", filepath.Base(e.Path))
 				return e.Path, true, nil
 			}
 		}
 	}
-	// Download fresh
-	path, err := Download(destRoot, uri, timeout, httpOpts)
+
+	result, err := DownloadWithResume(ctx, destRoot, uri, cfg)
 	if err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf("download %s: %w", uri, err)
 	}
-	// Update index with size and sha
-	st, _ := os.Stat(path)
-	idx.Put(IndexEntry{URI: uri, SHA256: sha, Path: path, Size: st.Size()})
+
+	if sha != "" {
+		if err := VerifySHA256(result.Path, sha); err != nil {
+			_ = os.Remove(result.Path)
+			return "", false, fmt.Errorf("SHA256 verification failed: %w", err)
+		}
+	}
+
+	idx.Put(IndexEntry{URI: uri, SHA256: sha, Path: result.Path, Size: result.Size})
 	_ = idx.Save()
-	return path, false, nil
+
+	return result.Path, false, nil
 }
 
 // VerifySHA256 checks that the file's sha256 matches expected (hex lowercase).

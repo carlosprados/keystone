@@ -51,7 +51,8 @@ type Agent struct {
 	// plan mapping
 	planComps []state.PlanComponent
 	// cache budget
-	artifactCacheLimit int64
+	artifactCacheLimit   int64
+	artifactDownloadTimeout time.Duration
 	dryRun             bool
 	// trust
 	trustPool *x509.CertPool
@@ -82,6 +83,14 @@ func New(opts Options) *Agent {
 			a.artifactCacheLimit = n
 		}
 	}
+	// Set artifact download timeout from env. Default: 30 minutes.
+	// Supports duration strings like "5m", "30m", "1h".
+	a.artifactDownloadTimeout = 30 * time.Minute
+	if v := os.Getenv("KEYSTONE_ARTIFACT_DOWNLOAD_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			a.artifactDownloadTimeout = d
+		}
+	}
 	// Best-effort load snapshot
 	if snap, err := state.Load(a.stateDir); err == nil {
 		a.planPath = snap.Plan.Path
@@ -96,7 +105,7 @@ func New(opts Options) *Agent {
 		if a.planPath != "" && (a.planStatus == "running" || a.planStatus == "failed") {
 			go func() {
 				log.Printf("[agent] resuming last plan: %s", a.planPath)
-				if err := a.ApplyPlan(a.planPath); err != nil {
+				if err := a.ApplyPlan(a.planPath, false); err != nil {
 					log.Printf("[agent] resume failed: %v", err)
 				}
 			}()
@@ -205,8 +214,8 @@ func rctx() (ctx context.Context) {
 	return context.Background()
 }
 
-// ApplyPlan loads a deployment plan and runs its components using ProcessRunner.
-func (a *Agent) ApplyPlan(planPath string) error {
+// applyPlan loads a deployment plan and runs its components using ProcessRunner.
+func (a *Agent) applyPlan(planPath string) error {
 	p, err := deploy.Load(planPath)
 	if err != nil {
 		return err
@@ -294,20 +303,20 @@ func (a *Agent) ApplyPlan(planPath string) error {
 			// Download and verify artifacts
 			for _, adef := range r.Artifacts {
 				httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
-				path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0, httpOpts)
+				path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
 				if err != nil {
 					return err
 				}
 				// Signature verification if configured
 				if adef.SigURI != "" && a.trustPool != nil {
-					sigPath, _, err := artifact.Ensure(artDir, adef.SigURI, "", 0, httpOpts)
+					sigPath, _, err := artifact.Ensure(artDir, adef.SigURI, "", a.artifactDownloadTimeout, httpOpts)
 					if err != nil {
 						return fmt.Errorf("sig download: %w", err)
 					}
 					// Cert can come from recipe or env KEYSTONE_LEAF_CERT
 					certPath := os.Getenv("KEYSTONE_LEAF_CERT")
 					if adef.CertURI != "" {
-						cp, _, err := artifact.Ensure(artDir, adef.CertURI, "", 0, httpOpts)
+						cp, _, err := artifact.Ensure(artDir, adef.CertURI, "", a.artifactDownloadTimeout, httpOpts)
 						if err != nil {
 							return fmt.Errorf("cert download: %w", err)
 						}
@@ -620,7 +629,9 @@ func (a *Agent) persistSnapshot() {
 		Components:     a.comps.List(),
 		PlanComponents: a.planComps,
 	}
-	_ = state.Save(a.stateDir, snap)
+	if err := state.Save(a.stateDir, snap); err != nil {
+		log.Printf("[agent] warning: failed to persist state: %v", err)
+	}
 }
 
 // restartFromPlan restarts a single component using the current plan's recipe.
@@ -652,7 +663,7 @@ func (a *Agent) restartFromPlan(name string) error {
 	// Ensure artifacts and (optional) unpack
 	for _, adef := range r.Artifacts {
 		httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
-		path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, 0, httpOpts)
+		path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
 		if err != nil {
 			return err
 		}
@@ -955,14 +966,15 @@ func topoOrder(edges map[string][]string, indeg map[string]int) []string {
 	return order
 }
 
-// ApplyPlanAPI runs ApplyPlan with optional dry-run override.
-func (a *Agent) ApplyPlanAPI(planPath string, dry bool) error {
+// ApplyPlan runs the deployment plan with optional dry-run mode.
+// This is the main entry point for plan application from any adapter.
+func (a *Agent) ApplyPlan(planPath string, dry bool) error {
 	if dry {
 		saved := a.dryRun
 		a.dryRun = true
 		defer func() { a.dryRun = saved }()
 	}
-	return a.ApplyPlan(planPath)
+	return a.applyPlan(planPath)
 }
 
 // ApplyPlanContent saves the raw plan TOML to a local file and applies it.
@@ -975,7 +987,7 @@ func (a *Agent) ApplyPlanContent(content string, dry bool) error {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return err
 	}
-	return a.ApplyPlanAPI(path, dry)
+	return a.ApplyPlan(path, dry)
 }
 
 // Helpers for synchronous restart

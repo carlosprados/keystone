@@ -263,9 +263,106 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | Variable                              | Description                                                            |
 | ------------------------------------- | ---------------------------------------------------------------------- |
 | `KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES` | Max size of `runtime/artifacts` (default: 2GiB).                       |
+| `KEYSTONE_ARTIFACT_DOWNLOAD_TIMEOUT`  | Artifact download timeout (default: 30m). Supports "5m", "1h", etc.    |
 | `KEYSTONE_TRUST_BUNDLE`               | Path to CA trust bundle (PEM) for signature verification.              |
 | `KEYSTONE_LEAF_CERT`                  | Default certificate (PEM) for signature verification if not in recipe. |
 | `KEYSTONE_GITHUB_TOKEN`               | Default token for GitHub artifact downloads (if not in recipe).        |
+| `KEYSTONE_DEVICE_ID`                  | Device ID for NATS subjects (default: hostname).                       |
+| `KEYSTONE_INSTALL_TIMEOUT`            | Install phase timeout (default: 2m). Supports duration strings.        |
+
+### Robust Artifact Downloads
+
+Keystone features a robust artifact download system designed for unreliable edge networks:
+
+| Feature | Description |
+|---------|-------------|
+| **Resume Support** | Automatic resume via HTTP Range headers if download is interrupted |
+| **Exponential Backoff** | Retries with jitter to avoid thundering herd (1s-30s, 10 attempts) |
+| **Progress Tracking** | Real-time download progress with speed and ETA |
+| **Timeout Control** | Configurable connect, read, and overall timeouts |
+| **Atomic Operations** | Downloads to `.partial` file, renamed on completion |
+| **SHA-256 Verification** | Post-download integrity check |
+| **Error Classification** | Distinguishes fatal (4xx) from retryable (5xx, network) errors |
+| **Rate Limit Handling** | Respects `Retry-After` headers for 429 responses |
+
+### NATS Control Plane (Optional)
+
+Keystone supports an optional NATS adapter for asynchronous control plane communication. This enables remote management of edge devices through a NATS messaging infrastructure.
+
+```bash
+# Start with NATS enabled
+./keystone --http :8080 --nats-url nats://control-plane:4222 --nats-device-id edge-001
+
+# With mTLS (mutual TLS)
+./keystone --http :8080 \
+  --nats-url nats://control-plane:4222 \
+  --nats-device-id edge-001 \
+  --nats-tls-cert /etc/keystone/certs/client.crt \
+  --nats-tls-key /etc/keystone/certs/client.key \
+  --nats-tls-ca /etc/keystone/certs/ca.crt
+
+# With NKey authentication (recommended for production)
+./keystone --http :8080 \
+  --nats-url nats://control-plane:4222 \
+  --nats-device-id edge-001 \
+  --nats-nkey /etc/keystone/nats/device.nkey
+
+# With credentials file (JWT + NKey)
+./keystone --http :8080 \
+  --nats-url nats://control-plane:4222 \
+  --nats-device-id edge-001 \
+  --nats-creds /etc/keystone/nats/device.creds
+
+# With token authentication
+./keystone --nats-url nats://control-plane:4222 --nats-token mytoken
+
+# With username/password
+./keystone --nats-url nats://control-plane:4222 --nats-user agent --nats-pass secret
+```
+
+**Authentication priority**: NKey > Credentials > Token > Username/Password
+
+#### Security Features
+
+| Feature | Description |
+|---------|-------------|
+| **mTLS** | Client certificate + CA verification for mutual authentication |
+| **NKey** | Ed25519 key-based authentication (recommended for production) |
+| **Credentials** | JWT + NKey combined file for NATS account-based auth |
+| **Token** | Simple token authentication |
+| **User/Pass** | Basic username/password authentication |
+| **TLS Verify** | Server certificate verification (default: enabled) |
+| **Min TLS 1.2** | Enforced minimum TLS version |
+
+NATS subjects follow the pattern `keystone.{deviceId}.cmd.*` for commands and `keystone.{deviceId}.events.*` for events. See `internal/adapter/nats/` for details.
+
+#### JetStream Persistent Job Queue
+
+Enable JetStream for durable job processing that survives device disconnections:
+
+```bash
+# Enable JetStream with defaults
+./keystone --http :8080 \
+  --nats-url nats://control-plane:4222 \
+  --nats-device-id edge-001 \
+  --nats-jetstream
+
+# With custom stream and workers
+./keystone --http :8080 \
+  --nats-url nats://control-plane:4222 \
+  --nats-device-id edge-001 \
+  --nats-jetstream \
+  --nats-js-stream MYFLEET_JOBS \
+  --nats-js-workers 2
+```
+
+JetStream provides:
+- **Persistence**: Jobs survive network outages and agent restarts
+- **At-least-once delivery**: Failed jobs are automatically retried (default: 5 attempts)
+- **Acknowledgment**: Jobs are removed from queue only after successful processing
+- **Results stream**: Job results published to `keystone.{deviceId}.jobs.results`
+
+Job types: `apply`, `stop`, `restart`, `stop-comp`, `add-recipe`, `delete-recipe`
 
 ## Git hooks
 
