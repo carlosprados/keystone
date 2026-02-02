@@ -364,6 +364,73 @@ JetStream provides:
 
 Job types: `apply`, `stop`, `restart`, `stop-comp`, `add-recipe`, `delete-recipe`
 
+### MQTT Control Plane (Optional)
+
+Keystone also supports an MQTT adapter for IoT-friendly communication. This is ideal for environments already using MQTT brokers (Mosquitto, EMQX, AWS IoT Core, etc.).
+
+```bash
+# Start with MQTT enabled
+./keystone --http :8080 --mqtt-broker tcp://broker:1883 --mqtt-device-id edge-001
+
+# With TLS (encrypted connection)
+./keystone --http :8080 \
+  --mqtt-broker ssl://broker:8883 \
+  --mqtt-device-id edge-001 \
+  --mqtt-tls-ca /etc/keystone/certs/ca.crt
+
+# With mTLS (mutual TLS)
+./keystone --http :8080 \
+  --mqtt-broker ssl://broker:8883 \
+  --mqtt-device-id edge-001 \
+  --mqtt-tls-cert /etc/keystone/certs/client.crt \
+  --mqtt-tls-key /etc/keystone/certs/client.key \
+  --mqtt-tls-ca /etc/keystone/certs/ca.crt
+
+# With username/password authentication
+./keystone --http :8080 \
+  --mqtt-broker tcp://broker:1883 \
+  --mqtt-device-id edge-001 \
+  --mqtt-user agent \
+  --mqtt-pass secret
+
+# With custom QoS level
+./keystone --http :8080 \
+  --mqtt-broker tcp://broker:1883 \
+  --mqtt-device-id edge-001 \
+  --mqtt-qos 2
+```
+
+#### MQTT Features
+
+| Feature | Description |
+|---------|-------------|
+| **mTLS** | Client certificate + CA verification for mutual authentication |
+| **User/Pass** | Username/password authentication |
+| **QoS Levels** | Configurable QoS (0, 1, or 2) for commands and responses |
+| **LWT** | Last Will and Testament for online/offline status detection |
+| **Auto-Reconnect** | Automatic reconnection with exponential backoff |
+| **Clean Session** | Configurable session persistence |
+| **TLS 1.2+** | Enforced minimum TLS version |
+
+#### MQTT Topics
+
+Commands and responses follow the pattern:
+- Commands: `keystone/{deviceId}/cmd/{command}` (agent subscribes)
+- Responses: `keystone/{deviceId}/resp/{command}` (agent publishes)
+- Events: `keystone/{deviceId}/events/{type}` (agent publishes)
+- Status: `keystone/{deviceId}/status` (LWT: "online"/"offline")
+
+Commands use a correlation ID for request/response matching:
+```json
+// Request to keystone/{deviceId}/cmd/status
+{"correlationId": "req-123"}
+
+// Response on keystone/{deviceId}/resp/status
+{"correlationId": "req-123", "success": true, "data": {...}}
+```
+
+See `internal/adapter/mqtt/` for implementation details.
+
 ## Git hooks
 
 Run once after cloning to enable the repo’s versioned hooks:

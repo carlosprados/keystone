@@ -12,6 +12,7 @@ import (
 
 	"github.com/carlosprados/keystone/internal/adapter"
 	httpadapter "github.com/carlosprados/keystone/internal/adapter/http"
+	mqttadapter "github.com/carlosprados/keystone/internal/adapter/mqtt"
 	natsadapter "github.com/carlosprados/keystone/internal/adapter/nats"
 	"github.com/carlosprados/keystone/internal/agent"
 	"github.com/carlosprados/keystone/internal/version"
@@ -42,6 +43,20 @@ func main() {
 	jsEnabled := flag.Bool("nats-jetstream", false, "Enable JetStream for persistent job queue")
 	jsStreamName := flag.String("nats-js-stream", "KEYSTONE_JOBS", "JetStream stream name for jobs")
 	jsWorkers := flag.Int("nats-js-workers", 1, "Number of concurrent job processor workers")
+
+	// MQTT adapter flags
+	mqttBroker := flag.String("mqtt-broker", "", "MQTT broker URL (empty to disable MQTT adapter)")
+	mqttDeviceID := flag.String("mqtt-device-id", "", "Device ID for MQTT topics (required if MQTT enabled)")
+	mqttClientID := flag.String("mqtt-client-id", "", "MQTT client ID (defaults to keystone-{device-id})")
+	mqttTLSCert := flag.String("mqtt-tls-cert", "", "Path to MQTT client TLS certificate")
+	mqttTLSKey := flag.String("mqtt-tls-key", "", "Path to MQTT client TLS key")
+	mqttTLSCA := flag.String("mqtt-tls-ca", "", "Path to MQTT CA certificate")
+	mqttTLSVerify := flag.Bool("mqtt-tls-verify", true, "Verify MQTT server TLS certificate")
+	mqttUser := flag.String("mqtt-user", "", "MQTT username")
+	mqttPass := flag.String("mqtt-pass", "", "MQTT password")
+	mqttStateInterval := flag.Duration("mqtt-state-interval", 10*time.Second, "Interval for publishing state events (0 to disable)")
+	mqttHealthInterval := flag.Duration("mqtt-health-interval", 30*time.Second, "Interval for publishing health events (0 to disable)")
+	mqttQoS := flag.Int("mqtt-qos", 1, "Default QoS level for commands and responses (0, 1, or 2)")
 
 	// General flags
 	demo := flag.Bool("demo", false, "Run a built-in demo: start a mock 3-component stack")
@@ -119,6 +134,43 @@ func main() {
 			jsStatus = fmt.Sprintf("enabled (stream=%s, workers=%d)", natsCfg.JetStream.StreamName, natsCfg.JetStream.WorkerCount)
 		}
 		log.Printf("[main] NATS adapter configured for %s (device: %s, jetstream: %s)", *natsURL, *natsDeviceID, jsStatus)
+	}
+
+	// Register MQTT adapter (if configured)
+	if *mqttBroker != "" {
+		if *mqttDeviceID == "" {
+			// Try to get device ID from environment or generate one
+			*mqttDeviceID = os.Getenv("KEYSTONE_DEVICE_ID")
+			if *mqttDeviceID == "" {
+				hostname, _ := os.Hostname()
+				if hostname != "" {
+					*mqttDeviceID = hostname
+				} else {
+					*mqttDeviceID = "keystone-agent"
+				}
+			}
+		}
+
+		mqttCfg := mqttadapter.DefaultConfig()
+		mqttCfg.Broker = *mqttBroker
+		mqttCfg.DeviceID = *mqttDeviceID
+		mqttCfg.ClientID = *mqttClientID
+		mqttCfg.TLSCert = *mqttTLSCert
+		mqttCfg.TLSKey = *mqttTLSKey
+		mqttCfg.TLSCA = *mqttTLSCA
+		mqttCfg.TLSVerify = *mqttTLSVerify
+		mqttCfg.Username = *mqttUser
+		mqttCfg.Password = *mqttPass
+		mqttCfg.PublishStateInterval = *mqttStateInterval
+		mqttCfg.PublishHealthInterval = *mqttHealthInterval
+		if *mqttQoS >= 0 && *mqttQoS <= 2 {
+			mqttCfg.CommandQoS = byte(*mqttQoS)
+			mqttCfg.ResponseQoS = byte(*mqttQoS)
+		}
+
+		mqtt := mqttadapter.New(mqttCfg, a)
+		registry.Register(mqtt)
+		log.Printf("[main] MQTT adapter configured for %s (device: %s)", *mqttBroker, *mqttDeviceID)
 	}
 
 	// Start all adapters
