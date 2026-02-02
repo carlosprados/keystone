@@ -4,9 +4,9 @@
 
 # Keystone — Lightweight Edge Orchestration in Go
 
-Keystone is a minimal, robust, and secure edge orchestration agent written in Go. It manages local components (native processes by default; containers optional later), executes deployments atomically with rollback, and keeps devices converging to a desired state — even with flaky networks.
+Keystone is a minimal, robust, and secure edge orchestration agent written in Go. It manages local components (native processes and containers), executes deployments atomically with rollback, and keeps devices converging to a desired state — even with flaky networks.
 
-Why Keystone? Because edge fleets need something that is lightweight, predictable, and operable without dragging a full container stack everywhere. Keystone embraces “processes first, containers when needed,” with a clean, pluggable design inspired by Greengrass.
+Why Keystone? Because edge fleets need something that is lightweight, predictable, and operable without dragging a full container stack everywhere. Keystone embraces "processes first, containers when needed," with a clean, pluggable design inspired by Greengrass. When you need containers, Keystone supports containerd natively or falls back to Docker/nerdctl/podman CLI.
 
 ## Highlights
 
@@ -49,6 +49,32 @@ unpack = true
 [lifecycle.run.exec]
 command = "./hello"
 args = ["--interval", "30s"]
+```
+
+### 1b. Or Define a Container Recipe
+
+Run containerized workloads when needed:
+
+```toml
+[metadata]
+name = "com.example.nginx"
+version = "1.0.0"
+
+[lifecycle.run]
+type = "container"
+restart_policy = "always"
+
+[lifecycle.run.container]
+image = "docker.io/library/nginx:alpine"
+pull_policy = "if-not-present"
+network_mode = "host"
+
+[[lifecycle.run.container.ports]]
+host_port = 8080
+container_port = 80
+
+[lifecycle.run.container.resources]
+memory_mb = 256
 ```
 
 ### 2. Apply a Plan
@@ -119,7 +145,7 @@ curl -s localhost:8080/metrics | head
 - [x] **Phase 3**: Security hardening — mTLS adapters, artifact signatures (ECDSA/RSA)
 - [x] **Phase 4**: Control plane adapters — HTTP REST, NATS (+ JetStream), MQTT
 - [x] **Phase 5**: Robustness — download resume, exponential backoff, graceful shutdown
-- [ ] **Phase 6**: Optional ContainerRunner (containerd/nerdctl)
+- [x] **Phase 6**: ContainerRunner — containerd client, CLI fallback (docker/nerdctl/podman)
 - [ ] **Phase 7**: Self-update and canary rings
 
 See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
@@ -130,6 +156,7 @@ See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 |----------|----------|
 | **Supervisor** | DAG execution, parallel layer startup, FSM lifecycle, dependency ordering |
 | **ProcessRunner** | Process management, log streaming, health probes (HTTP/TCP/cmd), restart policies, exponential backoff |
+| **ContainerRunner** | containerd client, CLI fallback (docker/nerdctl/podman), image pull, mounts, ports, resource limits |
 | **Deployment Engine** | TOML plans and recipes, environment variable substitution, dry-run mode |
 | **Artifact Manager** | Secure download with resume, SHA-256 verification, detached signatures, GC, cache limits |
 | **Security** | Trust bundles (PEM), ECDSA/RSA signature verification, mTLS support |
@@ -278,6 +305,10 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_GITHUB_TOKEN`               | Default token for GitHub artifact downloads (if not in recipe).        |
 | `KEYSTONE_DEVICE_ID`                  | Device ID for NATS/MQTT topics (default: hostname).                    |
 | `KEYSTONE_INSTALL_TIMEOUT`            | Install phase timeout (default: 2m). Supports duration strings.        |
+| `KEYSTONE_CONTAINERD_SOCKET`          | containerd socket path (default: `/run/containerd/containerd.sock`).   |
+| `KEYSTONE_CONTAINERD_NAMESPACE`       | containerd namespace for containers (default: `keystone`).             |
+| `KEYSTONE_CONTAINER_SNAPSHOTTER`      | Snapshotter for container images (default: `overlayfs`).               |
+| `KEYSTONE_CONTAINER_REGISTRY`         | Default container registry (default: `docker.io`).                     |
 
 ### Robust Artifact Downloads
 

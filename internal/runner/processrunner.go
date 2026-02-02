@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -19,11 +20,14 @@ import (
 
 // Backoff configuration for process restarts
 const (
-	backoffMin        = 1 * time.Second   // Minimum wait between restarts
-	backoffMax        = 60 * time.Second  // Maximum wait between restarts
-	backoffMultiplier = 2.0               // Exponential multiplier
-	backoffJitter     = 0.25              // Random jitter (25%)
+	backoffMin        = 1 * time.Second  // Minimum wait between restarts
+	backoffMax        = 60 * time.Second // Maximum wait between restarts
+	backoffMultiplier = 2.0              // Exponential multiplier
+	backoffJitter     = 0.25             // Random jitter (25%)
 )
+
+// Ensure ProcessRunner implements Runner at compile time.
+var _ Runner = (*ProcessRunner)(nil)
 
 // calculateBackoff returns the backoff duration with exponential increase and jitter.
 // The backoff doubles with each attempt up to backoffMax.
@@ -58,31 +62,51 @@ func calculateBackoff(attempt int) time.Duration {
 }
 
 // ProcessHandle holds the running process information.
+// It implements the Handle interface.
 type ProcessHandle struct {
-	PID       int
-	Cmd       *exec.Cmd
-	Name      string
-	StartedAt time.Time
-	Done      chan error // signaled when process exits
+	pid       int
+	cmd       *exec.Cmd
+	name      string
+	startedAt time.Time
+	done      chan error
 }
 
-// Options specifies how to start the process.
-type Options struct {
-	Name       string
-	Command    string
-	Args       []string
-	Env        []string
-	WorkingDir string
-	NoFile     uint64 // RLIMIT_NOFILE
-}
+// ID returns the process ID as a string.
+func (h *ProcessHandle) ID() string { return strconv.Itoa(h.pid) }
+
+// Name returns the component name.
+func (h *ProcessHandle) Name() string { return h.name }
+
+// StartedAt returns when the process started.
+func (h *ProcessHandle) StartedAt() time.Time { return h.startedAt }
+
+// Done returns a channel that receives an error when the process exits.
+func (h *ProcessHandle) Done() <-chan error { return h.done }
+
+// Type returns "process".
+func (h *ProcessHandle) Type() string { return "process" }
+
+// PID returns the process ID (process-specific accessor).
+func (h *ProcessHandle) PID() int { return h.pid }
+
+// Cmd returns the exec.Cmd (process-specific accessor).
+func (h *ProcessHandle) Cmd() *exec.Cmd { return h.cmd }
+
+// DoneChan returns the done channel for writing (internal use).
+func (h *ProcessHandle) DoneChan() chan error { return h.done }
 
 // ProcessRunner starts and stops native processes.
+// It implements the Runner interface.
 type ProcessRunner struct{}
 
+// New creates a new ProcessRunner.
 func New() *ProcessRunner { return &ProcessRunner{} }
 
+// NewProcessRunner creates a new ProcessRunner (alias for New).
+func NewProcessRunner() *ProcessRunner { return &ProcessRunner{} }
+
 // Start launches the process and returns a handle.
-func (r *ProcessRunner) Start(ctx context.Context, opts Options) (*ProcessHandle, error) {
+func (r *ProcessRunner) Start(ctx context.Context, opts Options) (Handle, error) {
 	if opts.Command == "" {
 		return nil, fmt.Errorf("empty command")
 	}
@@ -114,16 +138,26 @@ func (r *ProcessRunner) Start(ctx context.Context, opts Options) (*ProcessHandle
 	if stderr != nil {
 		go streamLogs(ctx, opts.Name, "stderr", stderr)
 	}
-	return &ProcessHandle{PID: cmd.Process.Pid, Cmd: cmd, Name: opts.Command, StartedAt: time.Now(), Done: make(chan error, 1)}, nil
+	return &ProcessHandle{
+		pid:       cmd.Process.Pid,
+		cmd:       cmd,
+		name:      opts.Name,
+		startedAt: time.Now(),
+		done:      make(chan error, 1),
+	}, nil
 }
 
 // Stop sends SIGTERM to the process group and waits, then SIGKILL on timeout.
-func (r *ProcessRunner) Stop(ctx context.Context, h *ProcessHandle, timeout time.Duration) error {
-	if h == nil || h.Cmd == nil || h.Cmd.Process == nil {
+func (r *ProcessRunner) Stop(ctx context.Context, h Handle, timeout time.Duration) error {
+	ph, ok := h.(*ProcessHandle)
+	if !ok {
+		return fmt.Errorf("invalid handle type for ProcessRunner: expected *ProcessHandle, got %T", h)
+	}
+	if ph == nil || ph.cmd == nil || ph.cmd.Process == nil {
 		return nil
 	}
 	// Send SIGTERM to the process group
-	pgid := -h.Cmd.Process.Pid
+	pgid := -ph.cmd.Process.Pid
 	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
 		log.Printf("[runner] warning: SIGTERM to pgid %d failed: %v", pgid, err)
 	}
@@ -133,7 +167,7 @@ func (r *ProcessRunner) Stop(ctx context.Context, h *ProcessHandle, timeout time
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case err := <-h.Done:
+	case err := <-ph.done:
 		return err
 	case <-time.After(timeout):
 		log.Printf("[runner] timeout waiting for process group %d, sending SIGKILL", -pgid)
@@ -141,7 +175,7 @@ func (r *ProcessRunner) Stop(ctx context.Context, h *ProcessHandle, timeout time
 			log.Printf("[runner] warning: SIGKILL to pgid %d failed: %v", pgid, err)
 		}
 		select {
-		case err := <-h.Done:
+		case err := <-ph.done:
 			return err
 		case <-time.After(3 * time.Second):
 			return fmt.Errorf("process did not exit after SIGKILL")
@@ -194,25 +228,9 @@ func (r *ProcessRunner) StopPIDs(pids []int, timeout time.Duration) error {
 	return nil
 }
 
-// HealthConfig defines how to probe a process.
-type HealthConfig struct {
-	Check            string        // http://..., tcp://..., cmd:...
-	Interval         time.Duration // default 10s
-	Timeout          time.Duration // default 3s
-	FailureThreshold int           // default 3
-}
-
-type RestartPolicy string
-
-const (
-	RestartNever     RestartPolicy = "never"
-	RestartOnFailure RestartPolicy = "on-failure"
-	RestartAlways    RestartPolicy = "always"
-)
-
 // RunManaged starts a process and keeps it healthy according to health config and restart policy.
 // Returns when context is canceled or a terminal error occurs.
-func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Options, hc HealthConfig, policy RestartPolicy, maxRetries int, onStart func(*ProcessHandle), onHealth func(bool), onExit func(error)) error {
+func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Options, hc HealthConfig, policy RestartPolicy, maxRetries int, onStart func(Handle), onHealth func(bool), onExit func(error)) error {
 	if hc.Interval == 0 {
 		hc.Interval = 10 * time.Second
 	}
@@ -246,6 +264,8 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 				continue
 			}
 		}
+
+		ph := handle.(*ProcessHandle)
 		if onStart != nil {
 			onStart(handle)
 		}
@@ -253,20 +273,20 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 		// Watch process exit
 		exitCh := make(chan error, 1)
 		go func(h *ProcessHandle) {
-			err := h.Cmd.Wait()
+			err := h.cmd.Wait()
 			// log process exit for diagnostics
 			if err != nil {
-				log.Printf("[runner] component=%s pid=%d error=%v msg=process exited with error", name, h.PID, err)
+				log.Printf("[runner] component=%s pid=%d error=%v msg=process exited with error", name, h.pid, err)
 			} else {
-				log.Printf("[runner] component=%s pid=%d msg=process exited cleanly", name, h.PID)
+				log.Printf("[runner] component=%s pid=%d msg=process exited cleanly", name, h.pid)
 			}
 			exitCh <- err
 			// notify handle.Done for external waiters
 			select {
-			case h.Done <- err:
+			case h.done <- err:
 			default:
 			}
-		}(handle)
+		}(ph)
 
 		// Health loop ticker
 		failures := 0
@@ -313,7 +333,7 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 				if hc.Check == "" {
 					continue
 				}
-				ok := probeOnce(hc, opts)
+				ok := ProbeHealth(hc, opts, nil)
 				if ok {
 					failures = 0
 				} else {
@@ -349,43 +369,54 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 	}
 }
 
-func probeOnce(hc HealthConfig, opts Options) bool {
-	// Support http://, https://
-	if len(opts.Env) > 0 {
-		_ = opts.Env
-	} // placeholder for future env substitution
-	if u := hc.Check; u != "" {
-		if hasPrefix(u, "http://") || hasPrefix(u, "https://") {
-			client := &http.Client{Timeout: hc.Timeout}
-			req, _ := http.NewRequest("GET", u, nil)
-			resp, err := client.Do(req)
-			if err != nil {
-				return false
-			}
-			defer resp.Body.Close()
-			return resp.StatusCode >= 200 && resp.StatusCode < 300
-		}
-		if hasPrefix(u, "tcp://") {
-			addr := u[len("tcp://"):]
-			d := net.Dialer{Timeout: hc.Timeout}
-			conn, err := d.Dial("tcp", addr)
-			if err != nil {
-				return false
-			}
-			_ = conn.Close()
-			return true
-		}
-		if hasPrefix(u, "cmd:") {
-			cmdStr := u[len("cmd:"):]
-			ctx, cancel := context.WithTimeout(context.Background(), hc.Timeout)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, "/bin/sh", "-c", cmdStr)
-			if opts.WorkingDir != "" {
-				cmd.Dir = opts.WorkingDir
-			}
-			return cmd.Run() == nil
-		}
+// ProbeHealth performs a single health check probe.
+// It supports http://, https://, tcp://, and cmd: probes.
+// The containerID parameter is used for container exec probes (nil for processes).
+func ProbeHealth(hc HealthConfig, opts Options, containerID *string) bool {
+	u := hc.Check
+	if u == "" {
+		return true
 	}
+
+	// HTTP/HTTPS probe
+	if hasPrefix(u, "http://") || hasPrefix(u, "https://") {
+		client := &http.Client{Timeout: hc.Timeout}
+		req, _ := http.NewRequest("GET", u, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode >= 200 && resp.StatusCode < 300
+	}
+
+	// TCP probe
+	if hasPrefix(u, "tcp://") {
+		addr := u[len("tcp://"):]
+		d := net.Dialer{Timeout: hc.Timeout}
+		conn, err := d.Dial("tcp", addr)
+		if err != nil {
+			return false
+		}
+		_ = conn.Close()
+		return true
+	}
+
+	// Command probe
+	if hasPrefix(u, "cmd:") {
+		cmdStr := u[len("cmd:"):]
+		ctx, cancel := context.WithTimeout(context.Background(), hc.Timeout)
+		defer cancel()
+
+		// For containers, we would exec into the container
+		// This is handled by ContainerRunner which overrides health checking
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", cmdStr)
+		if opts.WorkingDir != "" {
+			cmd.Dir = opts.WorkingDir
+		}
+		return cmd.Run() == nil
+	}
+
 	return true
 }
 

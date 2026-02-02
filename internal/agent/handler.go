@@ -72,16 +72,30 @@ func (a *Agent) StopPlan() error {
 		delete(a.cancels, name)
 	}
 
-	pr := &runner.ProcessRunner{}
-	for name, h := range a.procs {
+	pr := runner.NewProcessRunner()
+	for name, h := range a.handles {
 		stopCtx, stopCancel := context.WithTimeout(a.Context(), 10*time.Second)
-		_ = pr.Stop(stopCtx, h, 5*time.Second)
+		// Use stored runner if available, otherwise use appropriate runner based on type
+		if compRunner, ok := a.runners[name]; ok {
+			_ = compRunner.Stop(stopCtx, h, 5*time.Second)
+		} else if _, ok := h.(*runner.ProcessHandle); ok {
+			_ = pr.Stop(stopCtx, h, 5*time.Second)
+		} else {
+			// Container without stored runner - try CLI runner
+			if clir, err := runner.NewCLIRunner(); err == nil {
+				_ = clir.Stop(stopCtx, h, 5*time.Second)
+			}
+		}
 		stopCancel()
-		delete(a.procs, name)
+		delete(a.handles, name)
 		if ci, ok := a.comps.Get(name); ok {
 			ci.State = "stopped"
 			a.comps.Upsert(ci)
 		}
+	}
+	// Clean up runners
+	for name := range a.runners {
+		delete(a.runners, name)
 	}
 
 	a.planStatus = "stopped"

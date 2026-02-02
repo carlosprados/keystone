@@ -40,8 +40,51 @@ type LifecycleRunExec struct {
 	Env        map[string]string `toml:"env"`
 }
 
+// ContainerConfig holds container-specific configuration.
+type ContainerConfig struct {
+	Image       string              `toml:"image"`        // Container image (e.g., "docker.io/library/nginx:latest")
+	PullPolicy  string              `toml:"pull_policy"`  // "always", "never", "if-not-present"
+	NetworkMode string              `toml:"network_mode"` // "host", "bridge", "none"
+	User        string              `toml:"user"`         // User to run as (e.g., "1000:1000")
+	Privileged  bool                `toml:"privileged"`   // Run in privileged mode
+	Hostname    string              `toml:"hostname"`     // Container hostname
+	Mounts      []ContainerMount    `toml:"mounts"`       // Volume mounts
+	Ports       []ContainerPort     `toml:"ports"`        // Port mappings
+	Resources   ContainerResources  `toml:"resources"`    // Container resource limits
+	Env         map[string]string   `toml:"env"`          // Environment variables
+	Labels      map[string]string   `toml:"labels"`       // Container labels
+}
+
+// ContainerMount represents a volume mount for containers.
+type ContainerMount struct {
+	Source   string `toml:"source"`    // Host path or volume name
+	Target   string `toml:"target"`    // Container path
+	Type     string `toml:"type"`      // "bind", "volume", "tmpfs" (default: "bind")
+	ReadOnly bool   `toml:"read_only"` // Mount as read-only
+}
+
+// ContainerPort represents a port mapping for containers.
+type ContainerPort struct {
+	HostIP        string `toml:"host_ip"`        // Host IP to bind (default: "0.0.0.0")
+	HostPort      int    `toml:"host_port"`      // Host port
+	ContainerPort int    `toml:"container_port"` // Container port
+	Protocol      string `toml:"protocol"`       // "tcp", "udp" (default: "tcp")
+}
+
+// ContainerResources specifies resource limits for containers.
+type ContainerResources struct {
+	MemoryMB   int64 `toml:"memory_mb"`   // Memory limit in MB
+	CPUShares  int64 `toml:"cpu_shares"`  // CPU shares (relative weight)
+	CPUQuota   int64 `toml:"cpu_quota"`   // CPU quota in microseconds
+	CPUPeriod  int64 `toml:"cpu_period"`  // CPU period in microseconds
+	MemorySwap int64 `toml:"memory_swap"` // Memory+Swap limit in MB (-1 for unlimited)
+	PidsLimit  int64 `toml:"pids_limit"`  // Max number of PIDs
+}
+
 type LifecycleRun struct {
+	Type          string           `toml:"type"` // "process" (default) or "container"
 	Exec          LifecycleRunExec `toml:"exec"`
+	Container     ContainerConfig  `toml:"container"`
 	RestartPolicy string           `toml:"restart_policy"`
 	MaxRetries    int              `toml:"max_retries"`
 	Health        Health           `toml:"health"`

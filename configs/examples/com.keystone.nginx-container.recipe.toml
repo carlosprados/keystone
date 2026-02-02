@@ -1,0 +1,90 @@
+# Example container-based recipe for Keystone
+# This recipe runs nginx as a container instead of a native process
+
+[metadata]
+name = "com.keystone.nginx"
+version = "1.0.0"
+description = "Nginx web server running as a container"
+publisher = "keystone"
+type = "container"
+
+# No artifacts needed - the container image contains everything
+# But you can still download config files to mount
+[[artifacts]]
+uri = "file:///configs/nginx.conf"
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+[lifecycle.install]
+# Install script runs on the host before starting the container
+# Can be used to prepare mount directories, etc.
+require_privilege = false
+script = """
+mkdir -p /data/nginx/html
+mkdir -p /data/nginx/logs
+echo '<h1>Hello from Keystone Container</h1>' > /data/nginx/html/index.html
+"""
+
+[lifecycle.run]
+# Set type to "container" to use ContainerRunner
+type = "container"
+restart_policy = "always"
+max_retries = 5
+
+[lifecycle.run.container]
+image = "docker.io/library/nginx:alpine"
+pull_policy = "if-not-present"
+network_mode = "bridge"
+hostname = "keystone-nginx"
+
+# Environment variables
+[lifecycle.run.container.env]
+NGINX_HOST = "localhost"
+NGINX_PORT = "80"
+
+# Volume mounts
+[[lifecycle.run.container.mounts]]
+source = "/data/nginx/html"
+target = "/usr/share/nginx/html"
+type = "bind"
+read_only = true
+
+[[lifecycle.run.container.mounts]]
+source = "/data/nginx/logs"
+target = "/var/log/nginx"
+type = "bind"
+read_only = false
+
+# Port mappings
+[[lifecycle.run.container.ports]]
+host_ip = "0.0.0.0"
+host_port = 8080
+container_port = 80
+protocol = "tcp"
+
+# Resource limits
+[lifecycle.run.container.resources]
+memory_mb = 256
+cpu_shares = 512
+pids_limit = 100
+
+# Container labels
+[lifecycle.run.container.labels]
+"com.keystone.managed" = "true"
+"app.name" = "nginx"
+
+# Health check - HTTP probe
+[lifecycle.run.health]
+check = "http://localhost:8080/"
+interval = "10s"
+timeout = "3s"
+failure_threshold = 3
+
+[lifecycle.shutdown]
+script = """
+echo "Nginx container shutdown complete"
+"""
+
+# Resource limits are defined at the container level
+# These fields are ignored for containers
+[resources]
+open_files = 0

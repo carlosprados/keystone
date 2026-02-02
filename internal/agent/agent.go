@@ -40,7 +40,8 @@ type Agent struct {
 	start   time.Time
 	mu      sync.RWMutex
 	comps   *store.MemoryStore
-	procs   map[string]*runner.ProcessHandle
+	handles map[string]runner.Handle     // Process or container handles
+	runners map[string]runner.Runner     // Runner instances (for containers that need cleanup)
 	cancels map[string]context.CancelFunc
 	// shutdown context - set via SetContext, used for graceful shutdown
 	ctx       context.Context
@@ -78,7 +79,8 @@ func New(opts Options) *Agent {
 		start:    time.Now(),
 		comps:    store.NewMemoryStore(),
 		recipes:  store.NewRecipeStore(filepath.Join("runtime", "recipes")),
-		procs:    make(map[string]*runner.ProcessHandle),
+		handles:  make(map[string]runner.Handle),
+		runners:  make(map[string]runner.Runner),
 		cancels:  make(map[string]context.CancelFunc),
 		stateDir: filepath.Join("runtime", "state"),
 		ctx:      ctx,
@@ -294,8 +296,7 @@ func (a *Agent) applyPlan(planPath string) error {
 		})
 	}
 	// Build supervisor components now using computed deps
-	pr := runner.New()
-	// readiness channels per component (closed when process actually starts)
+	// readiness channels per component (closed when process/container actually starts)
 	compReady := make(map[string]chan struct{})
 	for _, l := range loadedList {
 		// find deps for this comp
@@ -378,60 +379,67 @@ func (a *Agent) applyPlan(planPath string) error {
 			return nil
 		}
 		startFn := func(ctx context.Context) error {
-			// Build env
-			var env []string
-			for k, v := range r.Lifecycle.Run.Exec.Env {
-				env = append(env, fmt.Sprintf("%s=%s", k, v))
+			// Create the appropriate runner
+			compRunner, runnerCleanup, err := a.createRunner(r)
+			if err != nil {
+				return fmt.Errorf("failed to create runner: %w", err)
 			}
+
+			// Store runner for cleanup if needed
+			if runnerCleanup != nil {
+				a.mu.Lock()
+				a.runners[it.Name] = compRunner
+				a.mu.Unlock()
+			}
+
 			// Health config
-			hc := runner.HealthConfig{}
-			if r.Lifecycle.Run.Health.Check != "" {
-				hc.Check = r.Lifecycle.Run.Health.Check
+			hc := buildHealthConfig(r)
+			if hc.Check != "" {
 				healthBasedReady = true
 			}
-			if d, err := time.ParseDuration(defaultString(r.Lifecycle.Run.Health.Interval, "10s")); err == nil {
-				hc.Interval = d
-			}
-			if d, err := time.ParseDuration(defaultString(r.Lifecycle.Run.Health.Timeout, "3s")); err == nil {
-				hc.Timeout = d
-			}
-			if r.Lifecycle.Run.Health.FailureThreshold > 0 {
-				hc.FailureThreshold = r.Lifecycle.Run.Health.FailureThreshold
-			}
+
 			// Restart policy
 			rp := runner.RestartPolicy(r.Lifecycle.Run.RestartPolicy)
 			if rp == "" {
 				rp = runner.RestartAlways
 			}
 
-			// Validate command availability early to surface clear errors
-			cmdPath := r.Lifecycle.Run.Exec.Command
-			if cmdPath == "" {
-				return fmt.Errorf("empty run.exec.command")
-			}
-			// If relative like ./bin, ensure it exists under workDir
-			if strings.HasPrefix(cmdPath, "./") {
-				abs := filepath.Join(workDir, strings.TrimPrefix(cmdPath, "./"))
-				if st, err := os.Stat(abs); err != nil || st.IsDir() {
-					return fmt.Errorf("run command not found: %s", abs)
+			// Determine run type and validate
+			runType := r.Lifecycle.Run.Type
+			if runType == "" || runType == "process" {
+				// Validate command availability for processes
+				cmdPath := r.Lifecycle.Run.Exec.Command
+				if cmdPath == "" {
+					return fmt.Errorf("empty run.exec.command")
+				}
+				if strings.HasPrefix(cmdPath, "./") {
+					abs := filepath.Join(workDir, strings.TrimPrefix(cmdPath, "./"))
+					if st, err := os.Stat(abs); err != nil || st.IsDir() {
+						return fmt.Errorf("run command not found: %s", abs)
+					}
+				}
+			} else if runType == "container" {
+				// Validate image for containers
+				if r.Lifecycle.Run.Container.Image == "" {
+					return fmt.Errorf("empty container.image")
 				}
 			}
 
-			opts := runner.Options{
-				Name:       it.Name,
-				Command:    r.Lifecycle.Run.Exec.Command,
-				Args:       r.Lifecycle.Run.Exec.Args,
-				Env:        env,
-				WorkingDir: workDir,
-				NoFile:     r.Resources.OpenFiles,
+			// Build options
+			opts := buildRunnerOptions(it.Name, r, workDir)
+			if runType == "" || runType == "process" {
+				log.Printf("[agent] component=%s type=process cwd=%s cmd=%s args=%v msg=starting component", it.Name, workDir, opts.Command, opts.Args)
+			} else {
+				log.Printf("[agent] component=%s type=container image=%s msg=starting component", it.Name, opts.Image)
 			}
-			log.Printf("[agent] component=%s cwd=%s cmd=%s args=%v msg=starting component", it.Name, workDir, opts.Command, opts.Args)
 
-			// Cleanup orphaned process if any
-			if ci, ok := a.comps.Get(it.Name); ok && ci.PID > 0 {
-				if sysrt.IsProcessRunning(ci.PID) {
-					log.Printf("[agent] component=%s pid=%d msg=found orphaned process, stopping it", it.Name, ci.PID)
-					_ = pr.StopPIDs([]int{ci.PID}, 5*time.Second)
+			// Cleanup orphaned process if any (only for process type)
+			if (runType == "" || runType == "process") {
+				if ci, ok := a.comps.Get(it.Name); ok && ci.PID > 0 {
+					if sysrt.IsProcessRunning(ci.PID) {
+						log.Printf("[agent] component=%s pid=%d msg=found orphaned process, stopping it", it.Name, ci.PID)
+						_ = runner.NewProcessRunner().StopPIDs([]int{ci.PID}, 5*time.Second)
+					}
 				}
 			}
 
@@ -448,23 +456,35 @@ func (a *Agent) applyPlan(planPath string) error {
 				a.mu.Lock()
 				a.cancels[it.Name] = cancel
 				a.mu.Unlock()
-				_ = pr.RunManaged(ctx2, it.Name, opts, hc, rp, maxRetries,
-					func(h *runner.ProcessHandle) {
+
+				defer func() {
+					if runnerCleanup != nil {
+						runnerCleanup()
+					}
+				}()
+
+				_ = compRunner.RunManaged(ctx2, it.Name, opts, hc, rp, maxRetries,
+					func(h runner.Handle) {
 						a.mu.Lock()
 						// If already present, count as restart; else first start
-						if _, ok := a.procs[it.Name]; ok {
+						if _, ok := a.handles[it.Name]; ok {
 							if ci, ok2 := a.comps.Get(it.Name); ok2 {
 								ci.Restarts++
 								a.comps.Upsert(ci)
 							}
 							metrics.IncRestarts(it.Name)
 						}
-						a.procs[it.Name] = h
+						a.handles[it.Name] = h
 						ci, ok2 := a.comps.Get(it.Name)
 						if ok2 {
-							ci.PID = h.PID
+							// Extract PID for process handles
+							if ph, ok := h.(*runner.ProcessHandle); ok {
+								ci.PID = ph.PID()
+								log.Printf("[agent] component=%s pid=%d restarts=%d msg=process started", it.Name, ci.PID, ci.Restarts)
+							} else {
+								log.Printf("[agent] component=%s container_id=%s restarts=%d msg=container started", it.Name, h.ID(), ci.Restarts)
+							}
 							a.comps.Upsert(ci)
-							log.Printf("[agent] component=%s pid=%d restarts=%d msg=process started", it.Name, h.PID, ci.Restarts)
 						}
 						a.mu.Unlock()
 						// signal readiness once on first successful start (if no health check)
@@ -475,7 +495,10 @@ func (a *Agent) applyPlan(planPath string) error {
 								}
 							})
 						}
-						go metrics.SampleProcessMetrics(ctx2, it.Name, h.PID)
+						// Sample metrics for processes
+						if ph, ok := h.(*runner.ProcessHandle); ok {
+							go metrics.SampleProcessMetrics(ctx2, it.Name, ph.PID())
+						}
 					},
 					func(ok bool) {
 						// last health status update
@@ -508,7 +531,7 @@ func (a *Agent) applyPlan(planPath string) error {
 								ci.State = "failed"
 								a.comps.Upsert(ci)
 							}
-							delete(a.procs, it.Name)
+							delete(a.handles, it.Name)
 							a.mu.Unlock()
 						}
 					},
@@ -518,12 +541,26 @@ func (a *Agent) applyPlan(planPath string) error {
 		}
 		stopFn := func(ctx context.Context) error {
 			a.mu.RLock()
-			h := a.procs[it.Name]
+			h := a.handles[it.Name]
+			compRunner := a.runners[it.Name]
 			a.mu.RUnlock()
 			if h == nil {
 				return nil
 			}
-			return pr.Stop(ctx, h, 10*time.Second)
+			// Use the stored runner if available, otherwise create appropriate one
+			if compRunner != nil {
+				return compRunner.Stop(ctx, h, 10*time.Second)
+			}
+			// Fallback: create a new runner based on handle type
+			if _, ok := h.(*runner.ProcessHandle); ok {
+				return runner.NewProcessRunner().Stop(ctx, h, 10*time.Second)
+			}
+			// For containers without stored runner, try CLI runner
+			clir, err := runner.NewCLIRunner()
+			if err != nil {
+				return fmt.Errorf("no runner available for container: %w", err)
+			}
+			return clir.Stop(ctx, h, 10*time.Second)
 		}
 		// Create component with readiness channel and register it
 		readyCh := make(chan struct{})
@@ -570,9 +607,9 @@ func (a *Agent) applyPlan(planPath string) error {
 				return
 			}
 			for _, c := range comps {
-				// Derive running/stopped from presence of a managed process handle.
+				// Derive running/stopped from presence of a managed handle.
 				a.mu.RLock()
-				_, running := a.procs[c.Name]
+				_, running := a.handles[c.Name]
 				a.mu.RUnlock()
 				ci, _ := a.comps.Get(c.Name)
 
@@ -630,6 +667,125 @@ func defaultString(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// createRunner creates the appropriate runner based on the recipe's run type.
+// It returns the runner and a cleanup function (for containers).
+func (a *Agent) createRunner(r *recipe.Recipe) (runner.Runner, func(), error) {
+	runType := r.Lifecycle.Run.Type
+	if runType == "" || runType == "process" {
+		return runner.NewProcessRunner(), nil, nil
+	}
+
+	if runType == "container" {
+		// Try containerd client first
+		cfg := runner.ContainerRunnerConfigFromEnv()
+		cr, err := runner.NewContainerRunner(cfg)
+		if err == nil {
+			cleanup := func() {
+				_ = cr.Close()
+			}
+			return cr, cleanup, nil
+		}
+		log.Printf("[agent] containerd not available (%v), trying CLI runner", err)
+
+		// Fall back to CLI runner
+		clir, err := runner.NewCLIRunner()
+		if err != nil {
+			return nil, nil, fmt.Errorf("no container runtime available: %w", err)
+		}
+		return clir, nil, nil
+	}
+
+	return nil, nil, fmt.Errorf("unknown run type: %s", runType)
+}
+
+// buildRunnerOptions builds runner.Options from a recipe.
+func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Options {
+	runType := r.Lifecycle.Run.Type
+	if runType == "" || runType == "process" {
+		// Process options
+		var env []string
+		for k, v := range r.Lifecycle.Run.Exec.Env {
+			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		}
+		return runner.Options{
+			Name:       name,
+			Command:    r.Lifecycle.Run.Exec.Command,
+			Args:       r.Lifecycle.Run.Exec.Args,
+			Env:        env,
+			WorkingDir: workDir,
+			NoFile:     r.Resources.OpenFiles,
+		}
+	}
+
+	// Container options
+	c := r.Lifecycle.Run.Container
+	var env []string
+	for k, v := range c.Env {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	var mounts []runner.Mount
+	for _, m := range c.Mounts {
+		mounts = append(mounts, runner.Mount{
+			Source:   m.Source,
+			Target:   m.Target,
+			Type:     m.Type,
+			ReadOnly: m.ReadOnly,
+		})
+	}
+
+	var ports []runner.PortMapping
+	for _, p := range c.Ports {
+		ports = append(ports, runner.PortMapping{
+			HostIP:        p.HostIP,
+			HostPort:      uint16(p.HostPort),
+			ContainerPort: uint16(p.ContainerPort),
+			Protocol:      p.Protocol,
+		})
+	}
+
+	return runner.Options{
+		Name:        name,
+		Image:       c.Image,
+		PullPolicy:  c.PullPolicy,
+		Env:         env,
+		WorkingDir:  workDir,
+		Mounts:      mounts,
+		Ports:       ports,
+		NetworkMode: c.NetworkMode,
+		User:        c.User,
+		Privileged:  c.Privileged,
+		Hostname:    c.Hostname,
+		Labels:      c.Labels,
+		Resources: runner.ResourceLimits{
+			MemoryMB:   c.Resources.MemoryMB,
+			CPUShares:  c.Resources.CPUShares,
+			CPUQuota:   c.Resources.CPUQuota,
+			CPUPeriod:  c.Resources.CPUPeriod,
+			MemorySwap: c.Resources.MemorySwap,
+			PidsLimit:  c.Resources.PidsLimit,
+		},
+	}
+}
+
+// buildHealthConfig builds runner.HealthConfig from a recipe.
+func buildHealthConfig(r *recipe.Recipe) runner.HealthConfig {
+	hc := runner.HealthConfig{}
+	if r.Lifecycle.Run.Health.Check != "" {
+		hc.Check = r.Lifecycle.Run.Health.Check
+	}
+	if d, err := time.ParseDuration(defaultString(r.Lifecycle.Run.Health.Interval, "10s")); err == nil {
+		hc.Interval = d
+	}
+	if d, err := time.ParseDuration(defaultString(r.Lifecycle.Run.Health.Timeout, "3s")); err == nil {
+		hc.Timeout = d
+	}
+	if r.Lifecycle.Run.Health.FailureThreshold > 0 {
+		hc.FailureThreshold = r.Lifecycle.Run.Health.FailureThreshold
+	}
+	return hc
 }
 
 func (a *Agent) persistSnapshot() {
@@ -707,38 +863,38 @@ func (a *Agent) restartFromPlan(name string) error {
 			_ = os.WriteFile(installedMarker, []byte(time.Now().Format(time.RFC3339)), 0o644)
 		}
 	}
-	// Start managed
-	pr := runner.New()
-	var env []string
-	for k, v := range r.Lifecycle.Run.Exec.Env {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	// Create the appropriate runner
+	compRunner, runnerCleanup, err := a.createRunner(r)
+	if err != nil {
+		return fmt.Errorf("failed to create runner: %w", err)
 	}
-	hc := runner.HealthConfig{}
-	if r.Lifecycle.Run.Health.Check != "" {
-		hc.Check = r.Lifecycle.Run.Health.Check
-	}
-	if d, err := time.ParseDuration(defaultString(r.Lifecycle.Run.Health.Interval, "10s")); err == nil {
-		hc.Interval = d
-	}
-	if d, err := time.ParseDuration(defaultString(r.Lifecycle.Run.Health.Timeout, "3s")); err == nil {
-		hc.Timeout = d
-	}
-	if r.Lifecycle.Run.Health.FailureThreshold > 0 {
-		hc.FailureThreshold = r.Lifecycle.Run.Health.FailureThreshold
-	}
+
+	// Health config and restart policy
+	hc := buildHealthConfig(r)
 	rp := runner.RestartPolicy(r.Lifecycle.Run.RestartPolicy)
 	if rp == "" {
 		rp = runner.RestartAlways
 	}
-	// Validate command presence if relative
-	if cmd := r.Lifecycle.Run.Exec.Command; strings.HasPrefix(cmd, "./") {
-		abs := filepath.Join(workDir, strings.TrimPrefix(cmd, "./"))
-		if st, err := os.Stat(abs); err != nil || st.IsDir() {
-			return fmt.Errorf("run command not found: %s", abs)
+
+	// Determine run type and validate
+	runType := r.Lifecycle.Run.Type
+	if runType == "" || runType == "process" {
+		if cmd := r.Lifecycle.Run.Exec.Command; strings.HasPrefix(cmd, "./") {
+			abs := filepath.Join(workDir, strings.TrimPrefix(cmd, "./"))
+			if st, err := os.Stat(abs); err != nil || st.IsDir() {
+				return fmt.Errorf("run command not found: %s", abs)
+			}
 		}
 	}
-	opts := runner.Options{Name: name, Command: r.Lifecycle.Run.Exec.Command, Args: r.Lifecycle.Run.Exec.Args, Env: env, WorkingDir: workDir, NoFile: r.Resources.OpenFiles}
-	log.Printf("restarting component %s: cwd=%s cmd=%s args=%v", name, workDir, opts.Command, opts.Args)
+
+	// Build options
+	opts := buildRunnerOptions(name, r, workDir)
+	if runType == "" || runType == "process" {
+		log.Printf("[agent] restarting component %s: type=process cwd=%s cmd=%s args=%v", name, workDir, opts.Command, opts.Args)
+	} else {
+		log.Printf("[agent] restarting component %s: type=container image=%s", name, opts.Image)
+	}
+
 	maxRetries := r.Lifecycle.Run.MaxRetries
 	if maxRetries <= 0 && (rp == runner.RestartAlways || rp == runner.RestartOnFailure) {
 		maxRetries = 5
@@ -749,26 +905,41 @@ func (a *Agent) restartFromPlan(name string) error {
 		ctx2, cancel := context.WithCancel(a.Context())
 		a.mu.Lock()
 		a.cancels[name] = cancel
+		if runnerCleanup != nil {
+			a.runners[name] = compRunner
+		}
 		a.mu.Unlock()
-		_ = pr.RunManaged(ctx2, name, opts, hc, rp, maxRetries,
-			func(h *runner.ProcessHandle) {
+
+		defer func() {
+			if runnerCleanup != nil {
+				runnerCleanup()
+			}
+		}()
+
+		_ = compRunner.RunManaged(ctx2, name, opts, hc, rp, maxRetries,
+			func(h runner.Handle) {
 				a.mu.Lock()
 				// On restart (existing), increment counters
-				if _, ok := a.procs[name]; ok {
+				if _, ok := a.handles[name]; ok {
 					if ci, ok2 := a.comps.Get(name); ok2 {
 						ci.Restarts++
 						a.comps.Upsert(ci)
 					}
 					metrics.IncRestarts(name)
 				}
-				a.procs[name] = h
+				a.handles[name] = h
 				ci, ok2 := a.comps.Get(name)
 				if ok2 {
-					ci.PID = h.PID
+					if ph, ok := h.(*runner.ProcessHandle); ok {
+						ci.PID = ph.PID()
+					}
 					a.comps.Upsert(ci)
 				}
 				a.mu.Unlock()
-				go metrics.SampleProcessMetrics(ctx2, name, h.PID)
+				// Sample metrics for processes
+				if ph, ok := h.(*runner.ProcessHandle); ok {
+					go metrics.SampleProcessMetrics(ctx2, name, ph.PID())
+				}
 			},
 			func(ok bool) {
 				a.mu.Lock()
@@ -793,7 +964,7 @@ func (a *Agent) restartFromPlan(name string) error {
 						ci.State = "failed"
 						a.comps.Upsert(ci)
 					}
-					delete(a.procs, name)
+					delete(a.handles, name)
 					a.mu.Unlock()
 				}
 			},
@@ -804,21 +975,24 @@ func (a *Agent) restartFromPlan(name string) error {
 	return nil
 }
 
-// stopComponent cancels managed loop and stops process, updating store.
+// stopComponent cancels managed loop and stops process/container, updating store.
 func (a *Agent) stopComponent(name string) {
 	log.Printf("agent: stopComponent start name=%s", name)
 	// Grab references under lock, but perform blocking ops outside the lock
 	a.mu.Lock()
 	cancel := a.cancels[name]
-	var pid int
-	var h *runner.ProcessHandle
+	var h runner.Handle
+	var compRunner runner.Runner
 	if cancel != nil {
 		delete(a.cancels, name)
 	}
-	if ph, ok := a.procs[name]; ok && ph != nil {
-		h = ph
-		pid = ph.PID
-		delete(a.procs, name)
+	if handle, ok := a.handles[name]; ok && handle != nil {
+		h = handle
+		delete(a.handles, name)
+	}
+	if r, ok := a.runners[name]; ok {
+		compRunner = r
+		delete(a.runners, name)
 	}
 	a.mu.Unlock()
 
@@ -827,12 +1001,33 @@ func (a *Agent) stopComponent(name string) {
 		cancel()
 	}
 	if h != nil {
-		log.Printf("agent: stopping process %s pid=%d", name, pid)
 		// Use a timeout context for stop operation
 		stopCtx, stopCancel := context.WithTimeout(a.Context(), 10*time.Second)
 		defer stopCancel()
-		if err := (&runner.ProcessRunner{}).Stop(stopCtx, h, 5*time.Second); err != nil {
-			log.Printf("agent: stopComponent Stop error name=%s pid=%d err=%v", name, pid, err)
+
+		// Log based on handle type
+		if ph, ok := h.(*runner.ProcessHandle); ok {
+			log.Printf("agent: stopping process %s pid=%d", name, ph.PID())
+		} else {
+			log.Printf("agent: stopping container %s id=%s", name, h.ID())
+		}
+
+		// Use stored runner if available
+		var stopErr error
+		if compRunner != nil {
+			stopErr = compRunner.Stop(stopCtx, h, 5*time.Second)
+		} else if _, ok := h.(*runner.ProcessHandle); ok {
+			stopErr = runner.NewProcessRunner().Stop(stopCtx, h, 5*time.Second)
+		} else {
+			// Try CLI runner for containers
+			if clir, err := runner.NewCLIRunner(); err == nil {
+				stopErr = clir.Stop(stopCtx, h, 5*time.Second)
+			} else {
+				log.Printf("agent: stopComponent no runner available for container %s", name)
+			}
+		}
+		if stopErr != nil {
+			log.Printf("agent: stopComponent Stop error name=%s err=%v", name, stopErr)
 		}
 	}
 	// Update store (no need to hold a.mu here)
@@ -1012,8 +1207,10 @@ func (a *Agent) ApplyPlanContent(content string, dry bool) error {
 func (a *Agent) currentPID(name string) int {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	if h := a.procs[name]; h != nil {
-		return h.PID
+	if h := a.handles[name]; h != nil {
+		if ph, ok := h.(*runner.ProcessHandle); ok {
+			return ph.PID()
+		}
 	}
 	return 0
 }
