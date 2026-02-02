@@ -10,20 +10,23 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 
 ## Highlights
 
-- Lightweight: idle CPU ~0%, small RAM baseline
-- Solid: atomic deployments, checkpoints, rollback
-- Secure: least privilege, mTLS-ready, checksums/signatures
-- Portable: Linux x86/ARM, no mandatory Docker/CRI
-- Operable: structured logs, Prometheus metrics, health endpoints, persistence
+- **Lightweight**: idle CPU ~0%, small RAM baseline (<40MB)
+- **Solid**: atomic deployments, checkpoints, rollback, exponential backoff
+- **Secure**: mTLS, artifact signatures (ECDSA/RSA), checksums
+- **Portable**: Linux x86/ARM, single binary, no mandatory Docker/CRI
+- **Connected**: HTTP REST, NATS (+ JetStream), MQTT adapters
+- **Operable**: structured logs, Prometheus metrics, health endpoints, persistence
 
 ### Keystone vs. AWS Greengrass
 
-| Feature          | AWS Greengrass        | **Keystone**            |
-| :--------------- | :-------------------- | :---------------------- |
-| **Runtime**      | Java (JVM) / C (Lite) | **Go (Native)**         |
-| **RAM Baseline** | ~100MB+               | **< 40MB**              |
-| **Complexity**   | High (Cloud-first)    | **Low (Lean & Simple)** |
-| **Setup**        | Heavy Bootstrap       | **Single Binary**       |
+| Feature          | AWS Greengrass        | **Keystone**              |
+| :--------------- | :-------------------- | :------------------------ |
+| **Runtime**      | Java (JVM) / C (Lite) | **Go (Native)**           |
+| **RAM Baseline** | ~100MB+               | **< 40MB**                |
+| **Complexity**   | High (Cloud-first)    | **Low (Lean & Simple)**   |
+| **Setup**        | Heavy Bootstrap       | **Single Binary**         |
+| **Control Plane**| AWS IoT Core only     | **HTTP, NATS, MQTT**      |
+| **Offline Mode** | Limited               | **Full (JetStream jobs)** |
 
 ## Quick Look: How it Works
 
@@ -74,7 +77,7 @@ See everything running at a glance:
 
 ## Project Status
 
-MVP in progress. This repo contains the initial agent skeleton, a simple health endpoint, a minimal supervisor core, and example recipe files. Expect rapid iteration as we build the ProcessRunner, artifact manager, and deployment engine.
+**MVP Complete.** Keystone is ready for production evaluation. The agent includes a complete supervisor, process runner, artifact manager, deployment engine, and multiple control plane adapters (HTTP, NATS, MQTT). See the roadmap below for upcoming features.
 
 ## Quick Start
 
@@ -113,21 +116,27 @@ curl -s localhost:8080/metrics | head
 - [x] **Phase 0**: Agent skeleton, config base, /healthz, persistent state snapshotting
 - [x] **Phase 1**: Supervisor + ProcessRunner, lifecycle hooks, health checks (HTTP/TCP/Shell)
 - [x] **Phase 2**: DAG-based deployments, layer-wise rollback, Prometheus metrics
-- [ ] **Phase 3**: Security hardening (mTLS, artifact signatures) — *Signatures implemented*
-- [ ] **Phase 4**: Optional ContainerRunner (containerd/nerdctl)
-- [ ] **Phase 5**: Self-update and canary rings
+- [x] **Phase 3**: Security hardening — mTLS adapters, artifact signatures (ECDSA/RSA)
+- [x] **Phase 4**: Control plane adapters — HTTP REST, NATS (+ JetStream), MQTT
+- [x] **Phase 5**: Robustness — download resume, exponential backoff, graceful shutdown
+- [ ] **Phase 6**: Optional ContainerRunner (containerd/nerdctl)
+- [ ] **Phase 7**: Self-update and canary rings
 
 See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 
-### Implemented Features (Current Status)
+### Implemented Features
 
-- **Supervisor**: DAG execution model with parallel layer startup and FSM lifecycle.
-- **ProcessRunner**: Full management of native processes with log streaming and health probes.
-- **Deployment Engine**: TOML-based plans and recipes with environment variable substitution.
-- **Artifact Manager**: Secure download, SHA-256 verification, detatched signatures, and GC.
-- **Security**: Trust bundle loading and ECDSA/RSA signature verification for artifacts.
-- **Observability**: Prometheus endpoint with state, readiness, and per-process metrics.
-- **Persistence**: Automatic state snapshotting and recovery in `runtime/state`.
+| Category | Features |
+|----------|----------|
+| **Supervisor** | DAG execution, parallel layer startup, FSM lifecycle, dependency ordering |
+| **ProcessRunner** | Process management, log streaming, health probes (HTTP/TCP/cmd), restart policies, exponential backoff |
+| **Deployment Engine** | TOML plans and recipes, environment variable substitution, dry-run mode |
+| **Artifact Manager** | Secure download with resume, SHA-256 verification, detached signatures, GC, cache limits |
+| **Security** | Trust bundles (PEM), ECDSA/RSA signature verification, mTLS support |
+| **Observability** | Prometheus metrics, structured logging, health endpoints, per-process metrics |
+| **Persistence** | Automatic state snapshotting, recovery on restart, atomic writes |
+| **Control Plane** | HTTP REST API, NATS adapter (+ JetStream jobs), MQTT adapter (QoS, LWT) |
+| **Robustness** | Download resume (HTTP Range), exponential backoff with jitter, context propagation, graceful shutdown |
 
 ## Apply a Deployment Plan (End-to-End Preview)
 
@@ -267,7 +276,7 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_TRUST_BUNDLE`               | Path to CA trust bundle (PEM) for signature verification.              |
 | `KEYSTONE_LEAF_CERT`                  | Default certificate (PEM) for signature verification if not in recipe. |
 | `KEYSTONE_GITHUB_TOKEN`               | Default token for GitHub artifact downloads (if not in recipe).        |
-| `KEYSTONE_DEVICE_ID`                  | Device ID for NATS subjects (default: hostname).                       |
+| `KEYSTONE_DEVICE_ID`                  | Device ID for NATS/MQTT topics (default: hostname).                    |
 | `KEYSTONE_INSTALL_TIMEOUT`            | Install phase timeout (default: 2m). Supports duration strings.        |
 
 ### Robust Artifact Downloads
@@ -443,12 +452,15 @@ task hooks   # or: ./scripts/setup-git-hooks.sh
 
 This sets `core.hooksPath` to `.githooks`, where the `pre-commit` hook runs `go fmt ./...` and stages formatting changes automatically.
 
-## Concepts (Preview)
+## Core Concepts
 
-- Recipe (TOML): describes a component (artifacts, lifecycle, security, resources)
-- Supervisor: enforces lifecycle and restart policy per component
-- Deployment plan: desired set (components+versions+overrides) resolved as a DAG
-- Artifact manager: downloads, verifies, caches, and garbage collects
+| Concept | Description |
+|---------|-------------|
+| **Recipe** | TOML file describing a component: artifacts, lifecycle hooks, health checks, resources |
+| **Deployment Plan** | TOML file listing components to run, resolved as a DAG with dependencies |
+| **Supervisor** | Enforces lifecycle (install → start → running → stop) and restart policies |
+| **Artifact Manager** | Downloads, verifies (SHA-256 + signatures), caches, and garbage collects artifacts |
+| **Adapter** | Pluggable control plane interface (HTTP, NATS, MQTT) for remote management |
 
 ## Systemd Unit (example)
 
