@@ -249,14 +249,16 @@ func StartStack(parent context.Context, comps []*Component) error {
 		if first := <-errCh; first != nil {
 			log.Printf("[supervisor] layer=%d error=%v msg=layer failed", i, first)
 			cancel()
-			// Stop what started so far (best-effort)
+			// Stop what started so far (best-effort) with timeout
+			stopCtx, stopCancel := context.WithTimeout(parent, 30*time.Second)
 			for j := i; j >= 0; j-- {
 				for _, n := range layers[j] {
 					if s, ok := started[n]; ok {
-						_ = s.Stop(context.Background())
+						_ = s.Stop(stopCtx)
 					}
 				}
 			}
+			stopCancel()
 			return first
 		}
 	}

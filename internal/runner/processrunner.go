@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +16,46 @@ import (
 
 	sysrt "github.com/carlosprados/keystone/internal/runtime"
 )
+
+// Backoff configuration for process restarts
+const (
+	backoffMin        = 1 * time.Second   // Minimum wait between restarts
+	backoffMax        = 60 * time.Second  // Maximum wait between restarts
+	backoffMultiplier = 2.0               // Exponential multiplier
+	backoffJitter     = 0.25              // Random jitter (25%)
+)
+
+// calculateBackoff returns the backoff duration with exponential increase and jitter.
+// The backoff doubles with each attempt up to backoffMax.
+func calculateBackoff(attempt int) time.Duration {
+	if attempt <= 0 {
+		attempt = 1
+	}
+
+	// Calculate exponential backoff
+	backoff := float64(backoffMin)
+	for i := 1; i < attempt; i++ {
+		backoff *= backoffMultiplier
+		if backoff > float64(backoffMax) {
+			backoff = float64(backoffMax)
+			break
+		}
+	}
+
+	// Add jitter to avoid thundering herd
+	jitter := backoff * backoffJitter * (rand.Float64()*2 - 1) // -25% to +25%
+	backoff += jitter
+
+	// Ensure within bounds
+	if backoff < float64(backoffMin) {
+		backoff = float64(backoffMin)
+	}
+	if backoff > float64(backoffMax) {
+		backoff = float64(backoffMax)
+	}
+
+	return time.Duration(backoff)
+}
 
 // ProcessHandle holds the running process information.
 type ProcessHandle struct {
@@ -195,11 +236,13 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 				}
 				return errLimit
 			}
-			// Wait before retry
+			// Wait before retry with exponential backoff
+			backoff := calculateBackoff(retries)
+			log.Printf("[runner] component=%s msg=waiting %v before retry attempt %d", name, backoff, retries)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(2 * time.Second):
+			case <-time.After(backoff):
 				continue
 			}
 		}
@@ -278,7 +321,10 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 					if failures >= hc.FailureThreshold {
 						// unhealthy -> restart only for Always, else keep waiting for process exit
 						if policy == RestartAlways {
-							_ = r.Stop(context.Background(), handle, 5*time.Second)
+							log.Printf("[runner] component=%s msg=health check failed %d times, stopping for restart", name, failures)
+							stopCtx, stopCancel := context.WithTimeout(ctx, 10*time.Second)
+							_ = r.Stop(stopCtx, handle, 5*time.Second)
+							stopCancel()
 							// run = false will be set when exitCh receives the exit signal
 						}
 					}
@@ -292,11 +338,13 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 				}
 			}
 		}
-		// Wait before loop and restart
+		// Wait before restart with exponential backoff
+		backoff := calculateBackoff(retries)
+		log.Printf("[runner] component=%s msg=waiting %v before restart attempt %d", name, backoff, retries)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(1 * time.Second):
+		case <-time.After(backoff):
 		}
 	}
 }

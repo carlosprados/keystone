@@ -42,6 +42,9 @@ type Agent struct {
 	comps   *store.MemoryStore
 	procs   map[string]*runner.ProcessHandle
 	cancels map[string]context.CancelFunc
+	// shutdown context - set via SetContext, used for graceful shutdown
+	ctx       context.Context
+	ctxCancel context.CancelFunc
 	// plan tracking
 	planPath   string
 	planStatus string // idle | applying | running | failed
@@ -67,14 +70,19 @@ func New(opts Options) *Agent {
 	// can use variables (e.g., tokens for artifact downloads).
 	config.LoadDotEnvDefault()
 
+	// Create default context - can be overridden via SetContext
+	ctx, cancel := context.WithCancel(context.Background())
+
 	a := &Agent{
-		opts:     opts,
+		opts:      opts,
 		start:    time.Now(),
 		comps:    store.NewMemoryStore(),
 		recipes:  store.NewRecipeStore(filepath.Join("runtime", "recipes")),
 		procs:    make(map[string]*runner.ProcessHandle),
 		cancels:  make(map[string]context.CancelFunc),
 		stateDir: filepath.Join("runtime", "state"),
+		ctx:      ctx,
+		ctxCancel: cancel,
 	}
 	// Set artifact cache limit from env (bytes). Default: 2 GiB.
 	a.artifactCacheLimit = 2 * 1024 * 1024 * 1024
@@ -135,14 +143,27 @@ func New(opts Options) *Agent {
 	return a
 }
 
-// Close releases agent resources.
+// Close releases agent resources and signals all operations to stop.
 func (a *Agent) Close() error {
 	if a.closed.Swap(true) {
 		return nil
 	}
+	// Cancel the agent context to signal all operations to stop
+	if a.ctxCancel != nil {
+		a.ctxCancel()
+	}
 	log.Println("[agent] agent closed")
 	a.persistSnapshot()
 	return nil
+}
+
+// Context returns the agent's context for use in long-running operations.
+// This context is cancelled when Close() is called.
+func (a *Agent) Context() context.Context {
+	if a.ctx == nil {
+		return context.Background()
+	}
+	return a.ctx
 }
 
 // StartDemo boots an internal 3-component demo using the supervisor.
@@ -201,17 +222,10 @@ func (a *Agent) StartDemo() error {
 		}
 	}()
 
-	ctx := rctx()
-	if err := supervisor.StartStack(ctx, []*supervisor.Component{db, cache, api}); err != nil {
+	if err := supervisor.StartStack(a.Context(), []*supervisor.Component{db, cache, api}); err != nil {
 		return fmt.Errorf("demo stack error: %w", err)
 	}
 	return nil
-}
-
-// rctx returns a background context bound to agent lifetime via closed flag.
-func rctx() (ctx context.Context) {
-	// Simple helper; in a richer agent we would wire this to a root context.
-	return context.Background()
 }
 
 // applyPlan loads a deployment plan and runs its components using ProcessRunner.
@@ -579,7 +593,7 @@ func (a *Agent) applyPlan(planPath string) error {
 		}
 	}()
 
-	err = supervisor.StartStack(context.Background(), comps)
+	err = supervisor.StartStack(a.Context(), comps)
 	a.mu.Lock()
 	if err != nil {
 		a.planStatus = "failed"
@@ -686,7 +700,7 @@ func (a *Agent) restartFromPlan(name string) error {
 	if r.Lifecycle.Install.Script != "" {
 		installedMarker := filepath.Join(workDir, ".installed")
 		if _, err := os.Stat(installedMarker); os.IsNotExist(err) {
-			out, err := runShellWithOutput(context.Background(), workDir, r.Lifecycle.Install.Script)
+			out, err := runShellWithOutput(a.Context(), workDir, r.Lifecycle.Install.Script)
 			if err != nil {
 				return fmt.Errorf("install script failed: %v\n--- output ---\n%s", err, out)
 			}
@@ -731,7 +745,8 @@ func (a *Agent) restartFromPlan(name string) error {
 	}
 
 	go func() {
-		ctx2, cancel := context.WithCancel(context.Background())
+		// Use agent context as parent so components stop when agent closes
+		ctx2, cancel := context.WithCancel(a.Context())
 		a.mu.Lock()
 		a.cancels[name] = cancel
 		a.mu.Unlock()
@@ -813,7 +828,10 @@ func (a *Agent) stopComponent(name string) {
 	}
 	if h != nil {
 		log.Printf("agent: stopping process %s pid=%d", name, pid)
-		if err := (&runner.ProcessRunner{}).Stop(context.Background(), h, 5*time.Second); err != nil {
+		// Use a timeout context for stop operation
+		stopCtx, stopCancel := context.WithTimeout(a.Context(), 10*time.Second)
+		defer stopCancel()
+		if err := (&runner.ProcessRunner{}).Stop(stopCtx, h, 5*time.Second); err != nil {
 			log.Printf("agent: stopComponent Stop error name=%s pid=%d err=%v", name, pid, err)
 		}
 	}

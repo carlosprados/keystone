@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -73,7 +74,9 @@ func (a *Agent) StopPlan() error {
 
 	pr := &runner.ProcessRunner{}
 	for name, h := range a.procs {
-		_ = pr.Stop(rctx(), h, 5*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(a.Context(), 10*time.Second)
+		_ = pr.Stop(stopCtx, h, 5*time.Second)
+		stopCancel()
 		delete(a.procs, name)
 		if ci, ok := a.comps.Get(name); ok {
 			ci.State = "stopped"
