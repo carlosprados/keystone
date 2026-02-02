@@ -1,5 +1,21 @@
 # Example container-based recipe for Keystone
 # This recipe runs nginx as a container instead of a native process
+#
+# Usage:
+#   1. Add to plan.toml:
+#      [[components]]
+#      name = "nginx"
+#      recipe = "configs/examples/com.keystone.nginx-container.recipe.toml"
+#
+#   2. Apply the plan:
+#      ./keystonectl apply plan.toml
+#
+#   3. Access nginx:
+#      curl http://localhost:8080/
+#
+# Requirements:
+#   - containerd running, or docker/nerdctl/podman available
+#   - Internet access to pull nginx:alpine image (first run only)
 
 [metadata]
 name = "com.keystone.nginx"
@@ -8,11 +24,11 @@ description = "Nginx web server running as a container"
 publisher = "keystone"
 type = "container"
 
-# No artifacts needed - the container image contains everything
-# But you can still download config files to mount
-[[artifacts]]
-uri = "file:///configs/nginx.conf"
-sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+# Artifacts are optional for containers - the image contains everything.
+# Uncomment to download additional config files to mount:
+# [[artifacts]]
+# uri = "https://example.com/nginx.conf"
+# sha256 = "..."
 
 [lifecycle.install]
 # Install script runs on the host before starting the container

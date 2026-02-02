@@ -1,5 +1,7 @@
 # ContainerRunner Design Document
 
+> **Status:** Implemented in Phase 6. See [docs/containers.md](containers.md) for user documentation.
+
 ## Overview
 
 This document describes the design for Phase 6: ContainerRunner implementation using containerd/nerdctl. The goal is to enable Keystone to manage containerized components alongside native processes.
@@ -1001,3 +1003,21 @@ require (
 | Image pull failures | Retry with backoff, offline mode support |
 | Resource isolation differences | Document behavior differences vs processes |
 | Network complexity (ports, DNS) | Start with host network, add bridge later |
+
+---
+
+## Implementation Files
+
+The following files implement this design:
+
+| File | Description |
+|------|-------------|
+| `internal/runner/runner.go` | Runner and Handle interfaces, common types |
+| `internal/runner/processrunner.go` | ProcessRunner implementation (refactored) |
+| `internal/runner/containerrunner.go` | ContainerRunner using containerd client |
+| `internal/runner/clirunner.go` | CLIRunner fallback (docker/nerdctl/podman) |
+| `internal/runner/containerrunner_test.go` | Unit tests |
+| `internal/recipe/types.go` | Recipe schema with container config |
+| `internal/agent/agent.go` | Agent integration (createRunner, buildRunnerOptions) |
+| `configs/examples/com.keystone.nginx-container.recipe.toml` | Example container recipe |
+| `docs/containers.md` | User documentation |

@@ -53,7 +53,7 @@ args = ["--interval", "30s"]
 
 ### 1b. Or Define a Container Recipe
 
-Run containerized workloads when needed:
+Run containerized workloads when needed (uses containerd or docker/nerdctl/podman):
 
 ```toml
 [metadata]
@@ -67,7 +67,12 @@ restart_policy = "always"
 [lifecycle.run.container]
 image = "docker.io/library/nginx:alpine"
 pull_policy = "if-not-present"
-network_mode = "host"
+network_mode = "bridge"
+
+[[lifecycle.run.container.mounts]]
+source = "/data/nginx/html"
+target = "/usr/share/nginx/html"
+read_only = true
 
 [[lifecycle.run.container.ports]]
 host_port = 8080
@@ -75,7 +80,14 @@ container_port = 80
 
 [lifecycle.run.container.resources]
 memory_mb = 256
+cpu_shares = 512
+
+[lifecycle.run.health]
+check = "http://localhost:8080/"
+interval = "10s"
 ```
+
+For complete container documentation, see **[docs/containers.md](docs/containers.md)**.
 
 ### 2. Apply a Plan
 
@@ -490,6 +502,7 @@ This sets `core.hooksPath` to `.githooks`, where the `pre-commit` hook runs `go 
 | **Recipe** | TOML file describing a component: artifacts, lifecycle hooks, health checks, resources |
 | **Deployment Plan** | TOML file listing components to run, resolved as a DAG with dependencies |
 | **Supervisor** | Enforces lifecycle (install → start → running → stop) and restart policies |
+| **Runner** | Executes components: ProcessRunner (native) or ContainerRunner (containerd/CLI) |
 | **Artifact Manager** | Downloads, verifies (SHA-256 + signatures), caches, and garbage collects artifacts |
 | **Adapter** | Pluggable control plane interface (HTTP, NATS, MQTT) for remote management |
 
