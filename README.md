@@ -285,151 +285,153 @@ Keystone features a robust artifact download system designed for unreliable edge
 | **Error Classification** | Distinguishes fatal (4xx) from retryable (5xx, network) errors |
 | **Rate Limit Handling** | Respects `Retry-After` headers for 429 responses |
 
-### NATS Control Plane (Optional)
+## Control Plane Adapters
 
-Keystone supports an optional NATS adapter for asynchronous control plane communication. This enables remote management of edge devices through a NATS messaging infrastructure.
+Keystone uses a pluggable adapter architecture for control plane communication. Multiple adapters can run simultaneously.
+
+| Adapter | Protocol | Use Case | Default |
+|---------|----------|----------|---------|
+| **HTTP** | REST API | Local management, debugging, Prometheus | Enabled (`:8080`) |
+| **NATS** | Pub/Sub | Cloud-scale fleet management | Disabled |
+| **MQTT** | IoT messaging | AWS IoT Core, edge gateways | Disabled |
+
+For complete adapter documentation, see **[docs/adapters.md](docs/adapters.md)**.
+
+### HTTP Adapter (Default)
+
+The HTTP adapter exposes a REST API for local management:
 
 ```bash
-# Start with NATS enabled
-./keystone --http :8080 --nats-url nats://control-plane:4222 --nats-device-id edge-001
+# Default: enabled on port 8080
+./keystone --http :8080
 
-# With mTLS (mutual TLS)
+# Disable HTTP (use only messaging adapters)
+./keystone --http "" --nats-url nats://server:4222 --nats-device-id edge-001
+```
+
+**Key Endpoints:**
+| Endpoint | Description |
+|----------|-------------|
+| `GET /healthz` | Health check |
+| `GET /metrics` | Prometheus metrics |
+| `GET /v1/components` | List components |
+| `POST /v1/plan/apply` | Apply deployment plan |
+| `POST /v1/components/{name}:restart` | Restart component |
+
+### NATS Adapter
+
+Enable NATS for asynchronous fleet management with optional JetStream persistence:
+
+```bash
+# Basic NATS
+./keystone --http :8080 \
+  --nats-url nats://control-plane:4222 \
+  --nats-device-id edge-001
+
+# With mTLS and JetStream
 ./keystone --http :8080 \
   --nats-url nats://control-plane:4222 \
   --nats-device-id edge-001 \
   --nats-tls-cert /etc/keystone/certs/client.crt \
   --nats-tls-key /etc/keystone/certs/client.key \
-  --nats-tls-ca /etc/keystone/certs/ca.crt
-
-# With NKey authentication (recommended for production)
-./keystone --http :8080 \
-  --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
-  --nats-nkey /etc/keystone/nats/device.nkey
-
-# With credentials file (JWT + NKey)
-./keystone --http :8080 \
-  --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
-  --nats-creds /etc/keystone/nats/device.creds
-
-# With token authentication
-./keystone --nats-url nats://control-plane:4222 --nats-token mytoken
-
-# With username/password
-./keystone --nats-url nats://control-plane:4222 --nats-user agent --nats-pass secret
-```
-
-**Authentication priority**: NKey > Credentials > Token > Username/Password
-
-#### Security Features
-
-| Feature | Description |
-|---------|-------------|
-| **mTLS** | Client certificate + CA verification for mutual authentication |
-| **NKey** | Ed25519 key-based authentication (recommended for production) |
-| **Credentials** | JWT + NKey combined file for NATS account-based auth |
-| **Token** | Simple token authentication |
-| **User/Pass** | Basic username/password authentication |
-| **TLS Verify** | Server certificate verification (default: enabled) |
-| **Min TLS 1.2** | Enforced minimum TLS version |
-
-NATS subjects follow the pattern `keystone.{deviceId}.cmd.*` for commands and `keystone.{deviceId}.events.*` for events. See `internal/adapter/nats/` for details.
-
-#### JetStream Persistent Job Queue
-
-Enable JetStream for durable job processing that survives device disconnections:
-
-```bash
-# Enable JetStream with defaults
-./keystone --http :8080 \
-  --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
+  --nats-tls-ca /etc/keystone/certs/ca.crt \
   --nats-jetstream
-
-# With custom stream and workers
-./keystone --http :8080 \
-  --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
-  --nats-jetstream \
-  --nats-js-stream MYFLEET_JOBS \
-  --nats-js-workers 2
 ```
 
-JetStream provides:
-- **Persistence**: Jobs survive network outages and agent restarts
-- **At-least-once delivery**: Failed jobs are automatically retried (default: 5 attempts)
-- **Acknowledgment**: Jobs are removed from queue only after successful processing
-- **Results stream**: Job results published to `keystone.{deviceId}.jobs.results`
+**Key Features:**
+- mTLS, NKey, Token, User/Pass authentication
+- JetStream for durable job queues (survives disconnections)
+- Subjects: `keystone.{deviceId}.cmd.*`, `keystone.{deviceId}.events.*`
 
-Job types: `apply`, `stop`, `restart`, `stop-comp`, `add-recipe`, `delete-recipe`
+**Authentication Priority:** NKey > Credentials > Token > User/Pass
 
-### MQTT Control Plane (Optional)
+### MQTT Adapter
 
-Keystone also supports an MQTT adapter for IoT-friendly communication. This is ideal for environments already using MQTT brokers (Mosquitto, EMQX, AWS IoT Core, etc.).
+Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or AWS IoT Core:
 
 ```bash
-# Start with MQTT enabled
-./keystone --http :8080 --mqtt-broker tcp://broker:1883 --mqtt-device-id edge-001
+# Basic MQTT
+./keystone --http :8080 \
+  --mqtt-broker tcp://broker:1883 \
+  --mqtt-device-id edge-001
 
-# With TLS (encrypted connection)
+# With TLS and auth
 ./keystone --http :8080 \
   --mqtt-broker ssl://broker:8883 \
   --mqtt-device-id edge-001 \
-  --mqtt-tls-ca /etc/keystone/certs/ca.crt
-
-# With mTLS (mutual TLS)
-./keystone --http :8080 \
-  --mqtt-broker ssl://broker:8883 \
-  --mqtt-device-id edge-001 \
-  --mqtt-tls-cert /etc/keystone/certs/client.crt \
-  --mqtt-tls-key /etc/keystone/certs/client.key \
-  --mqtt-tls-ca /etc/keystone/certs/ca.crt
-
-# With username/password authentication
-./keystone --http :8080 \
-  --mqtt-broker tcp://broker:1883 \
-  --mqtt-device-id edge-001 \
-  --mqtt-user agent \
-  --mqtt-pass secret
-
-# With custom QoS level
-./keystone --http :8080 \
-  --mqtt-broker tcp://broker:1883 \
-  --mqtt-device-id edge-001 \
-  --mqtt-qos 2
+  --mqtt-tls-ca /etc/keystone/certs/ca.crt \
+  --mqtt-user agent --mqtt-pass secret
 ```
 
-#### MQTT Features
+**Key Features:**
+- mTLS, User/Pass authentication
+- Configurable QoS (0, 1, 2)
+- Last Will and Testament for online/offline detection
+- Topics: `keystone/{deviceId}/cmd/*`, `keystone/{deviceId}/resp/*`, `keystone/{deviceId}/events/*`
 
-| Feature | Description |
-|---------|-------------|
-| **mTLS** | Client certificate + CA verification for mutual authentication |
-| **User/Pass** | Username/password authentication |
-| **QoS Levels** | Configurable QoS (0, 1, or 2) for commands and responses |
-| **LWT** | Last Will and Testament for online/offline status detection |
-| **Auto-Reconnect** | Automatic reconnection with exponential backoff |
-| **Clean Session** | Configurable session persistence |
-| **TLS 1.2+** | Enforced minimum TLS version |
+### Running Multiple Adapters
 
-#### MQTT Topics
-
-Commands and responses follow the pattern:
-- Commands: `keystone/{deviceId}/cmd/{command}` (agent subscribes)
-- Responses: `keystone/{deviceId}/resp/{command}` (agent publishes)
-- Events: `keystone/{deviceId}/events/{type}` (agent publishes)
-- Status: `keystone/{deviceId}/status` (LWT: "online"/"offline")
-
-Commands use a correlation ID for request/response matching:
-```json
-// Request to keystone/{deviceId}/cmd/status
-{"correlationId": "req-123"}
-
-// Response on keystone/{deviceId}/resp/status
-{"correlationId": "req-123", "success": true, "data": {...}}
+```bash
+# HTTP + NATS + MQTT simultaneously
+./keystone --http :8080 \
+  --nats-url nats://nats.internal:4222 --nats-device-id edge-001 \
+  --mqtt-broker tcp://mqtt.internal:1883 --mqtt-device-id edge-001
 ```
 
-See `internal/adapter/mqtt/` for implementation details.
+### All CLI Flags
+
+<details>
+<summary>HTTP Adapter Flags</summary>
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--http` | `:8080` | HTTP listen address (empty to disable) |
+
+</details>
+
+<details>
+<summary>NATS Adapter Flags</summary>
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--nats-url` | (empty) | NATS server URL (empty to disable) |
+| `--nats-device-id` | hostname | Device ID for subjects |
+| `--nats-tls-cert` | (empty) | Client TLS certificate path |
+| `--nats-tls-key` | (empty) | Client TLS key path |
+| `--nats-tls-ca` | (empty) | CA certificate path |
+| `--nats-tls-verify` | `true` | Verify server certificate |
+| `--nats-creds` | (empty) | Credentials file path (.creds) |
+| `--nats-nkey` | (empty) | NKey seed file path |
+| `--nats-token` | (empty) | Authentication token |
+| `--nats-user` | (empty) | Username |
+| `--nats-pass` | (empty) | Password |
+| `--nats-state-interval` | `10s` | State event interval (0 to disable) |
+| `--nats-health-interval` | `30s` | Health event interval (0 to disable) |
+| `--nats-jetstream` | `false` | Enable JetStream |
+| `--nats-js-stream` | `KEYSTONE_JOBS` | JetStream stream name |
+| `--nats-js-workers` | `1` | Job processor workers |
+
+</details>
+
+<details>
+<summary>MQTT Adapter Flags</summary>
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--mqtt-broker` | (empty) | MQTT broker URL (empty to disable) |
+| `--mqtt-device-id` | hostname | Device ID for topics |
+| `--mqtt-client-id` | `keystone-{device-id}` | MQTT client ID |
+| `--mqtt-tls-cert` | (empty) | Client TLS certificate path |
+| `--mqtt-tls-key` | (empty) | Client TLS key path |
+| `--mqtt-tls-ca` | (empty) | CA certificate path |
+| `--mqtt-tls-verify` | `true` | Verify server certificate |
+| `--mqtt-user` | (empty) | Username |
+| `--mqtt-pass` | (empty) | Password |
+| `--mqtt-qos` | `1` | QoS level (0, 1, 2) |
+| `--mqtt-state-interval` | `10s` | State event interval (0 to disable) |
+| `--mqtt-health-interval` | `30s` | Health event interval (0 to disable) |
+
+</details>
 
 ## Git hooks
 
