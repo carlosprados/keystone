@@ -9,6 +9,7 @@
 *.dylib
 keystone
 keystonectl
+keystoneserver
 
 # Test binary, built with `go test -c`
 *.test
