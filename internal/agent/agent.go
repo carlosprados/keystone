@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -40,8 +41,8 @@ type Agent struct {
 	start   time.Time
 	mu      sync.RWMutex
 	comps   *store.MemoryStore
-	handles map[string]runner.Handle     // Process or container handles
-	runners map[string]runner.Runner     // Runner instances (for containers that need cleanup)
+	handles map[string]runner.Handle // Process or container handles
+	runners map[string]runner.Runner // Runner instances (for containers that need cleanup)
 	cancels map[string]context.CancelFunc
 	// shutdown context - set via SetContext, used for graceful shutdown
 	ctx       context.Context
@@ -55,9 +56,9 @@ type Agent struct {
 	// plan mapping
 	planComps []state.PlanComponent
 	// cache budget
-	artifactCacheLimit   int64
+	artifactCacheLimit      int64
 	artifactDownloadTimeout time.Duration
-	dryRun             bool
+	dryRun                  bool
 	// trust
 	trustPool *x509.CertPool
 	trustPath string
@@ -76,14 +77,14 @@ func New(opts Options) *Agent {
 
 	a := &Agent{
 		opts:      opts,
-		start:    time.Now(),
-		comps:    store.NewMemoryStore(),
-		recipes:  store.NewRecipeStore(filepath.Join("runtime", "recipes")),
-		handles:  make(map[string]runner.Handle),
-		runners:  make(map[string]runner.Runner),
-		cancels:  make(map[string]context.CancelFunc),
-		stateDir: filepath.Join("runtime", "state"),
-		ctx:      ctx,
+		start:     time.Now(),
+		comps:     store.NewMemoryStore(),
+		recipes:   store.NewRecipeStore(filepath.Join("runtime", "recipes")),
+		handles:   make(map[string]runner.Handle),
+		runners:   make(map[string]runner.Runner),
+		cancels:   make(map[string]context.CancelFunc),
+		stateDir:  filepath.Join("runtime", "state"),
+		ctx:       ctx,
 		ctxCancel: cancel,
 	}
 	// Set artifact cache limit from env (bytes). Default: 2 GiB.
@@ -353,6 +354,11 @@ func (a *Agent) applyPlan(planPath string) error {
 						_ = os.MkdirAll(filepath.Dir(marker), 0o755)
 						_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
 					}
+				} else {
+					// Stage non-archive artifacts into workDir as files.
+					if err := stageArtifactToWorkDir(path, workDir); err != nil {
+						return err
+					}
 				}
 			}
 			// If not unpacked, ensure working dir exists
@@ -434,7 +440,7 @@ func (a *Agent) applyPlan(planPath string) error {
 			}
 
 			// Cleanup orphaned process if any (only for process type)
-			if (runType == "" || runType == "process") {
+			if runType == "" || runType == "process" {
 				if ci, ok := a.comps.Get(it.Name); ok && ci.PID > 0 {
 					if sysrt.IsProcessRunning(ci.PID) {
 						log.Printf("[agent] component=%s pid=%d msg=found orphaned process, stopping it", it.Name, ci.PID)
@@ -662,6 +668,42 @@ func (a *Agent) applyPlan(planPath string) error {
 	return err
 }
 
+// stageArtifactToWorkDir copies a downloaded artifact into the component workDir
+// using the artifact basename. Existing files are overwritten.
+func stageArtifactToWorkDir(srcPath, workDir string) error {
+	st, err := os.Stat(srcPath)
+	if err != nil {
+		return err
+	}
+	if st.IsDir() {
+		return fmt.Errorf("artifact path is a directory: %s", srcPath)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return err
+	}
+	dstPath := filepath.Join(workDir, filepath.Base(srcPath))
+
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	mode := st.Mode().Perm()
+	if mode == 0 {
+		mode = 0o644
+	}
+	out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
 func defaultString(s, def string) string {
 	if s == "" {
 		return def
@@ -845,6 +887,11 @@ func (a *Agent) restartFromPlan(name string) error {
 				}
 				_ = os.MkdirAll(filepath.Dir(marker), 0o755)
 				_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+			}
+		} else {
+			// Keep restart behavior aligned with apply: stage files to workDir.
+			if err := stageArtifactToWorkDir(path, workDir); err != nil {
+				return err
 			}
 		}
 	}

@@ -22,50 +22,50 @@ import (
 // DownloadConfig holds configuration for robust artifact downloads.
 type DownloadConfig struct {
 	// Timeouts
-	ConnectTimeout   time.Duration // Dial timeout (default: 30s)
-	ReadTimeout      time.Duration // Per-read timeout (default: 60s)
-	OverallTimeout   time.Duration // Total operation timeout (default: 30m)
-	IdleTimeout      time.Duration // Idle connection timeout (default: 90s)
-	TLSTimeout       time.Duration // TLS handshake timeout (default: 15s)
-	KeepAlive        time.Duration // TCP keepalive interval (default: 30s)
-	ExpectContinue   time.Duration // Expect 100-continue timeout (default: 1s)
+	ConnectTimeout time.Duration // Dial timeout (default: 30s)
+	ReadTimeout    time.Duration // Per-read timeout (default: 60s)
+	OverallTimeout time.Duration // Total operation timeout (default: 30m)
+	IdleTimeout    time.Duration // Idle connection timeout (default: 90s)
+	TLSTimeout     time.Duration // TLS handshake timeout (default: 15s)
+	KeepAlive      time.Duration // TCP keepalive interval (default: 30s)
+	ExpectContinue time.Duration // Expect 100-continue timeout (default: 1s)
 
 	// Retry configuration
-	MaxRetries       int           // Maximum retry attempts (default: 10)
-	RetryMinWait     time.Duration // Minimum wait between retries (default: 1s)
-	RetryMaxWait     time.Duration // Maximum wait between retries (default: 30s)
-	RetryMultiplier  float64       // Backoff multiplier (default: 2.0)
+	MaxRetries      int           // Maximum retry attempts (default: 10)
+	RetryMinWait    time.Duration // Minimum wait between retries (default: 1s)
+	RetryMaxWait    time.Duration // Maximum wait between retries (default: 30s)
+	RetryMultiplier float64       // Backoff multiplier (default: 2.0)
 
 	// Resume configuration
-	EnableResume     bool          // Enable resume via Range headers (default: true)
-	PartialSuffix    string        // Suffix for partial download files (default: ".partial")
+	EnableResume  bool   // Enable resume via Range headers (default: true)
+	PartialSuffix string // Suffix for partial download files (default: ".partial")
 
 	// Progress reporting
 	ProgressInterval time.Duration // Interval for progress logging (default: 5s)
 	EnableProgress   bool          // Enable progress logging (default: true)
 
 	// HTTP options
-	HTTPOptions      HTTPOptions   // Headers and tokens
+	HTTPOptions HTTPOptions // Headers and tokens
 }
 
 // DefaultDownloadConfig returns a configuration suitable for edge deployments.
 func DefaultDownloadConfig() DownloadConfig {
 	return DownloadConfig{
-		ConnectTimeout:   30 * time.Second,
-		ReadTimeout:      60 * time.Second,
-		OverallTimeout:   30 * time.Minute,
-		IdleTimeout:      90 * time.Second,
-		TLSTimeout:       15 * time.Second,
-		KeepAlive:        30 * time.Second,
-		ExpectContinue:   1 * time.Second,
+		ConnectTimeout: 30 * time.Second,
+		ReadTimeout:    60 * time.Second,
+		OverallTimeout: 30 * time.Minute,
+		IdleTimeout:    90 * time.Second,
+		TLSTimeout:     15 * time.Second,
+		KeepAlive:      30 * time.Second,
+		ExpectContinue: 1 * time.Second,
 
 		MaxRetries:      10,
 		RetryMinWait:    1 * time.Second,
 		RetryMaxWait:    30 * time.Second,
 		RetryMultiplier: 2.0,
 
-		EnableResume:     true,
-		PartialSuffix:    ".partial",
+		EnableResume:  true,
+		PartialSuffix: ".partial",
 
 		ProgressInterval: 5 * time.Second,
 		EnableProgress:   true,

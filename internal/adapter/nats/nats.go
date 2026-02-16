@@ -60,8 +60,8 @@ type Config struct {
 	Password        string // Password for user/pass auth
 
 	// Reconnect settings
-	MaxReconnects  int           // Max reconnection attempts (-1 for infinite)
-	ReconnectWait  time.Duration // Wait between reconnects
+	MaxReconnects   int           // Max reconnection attempts (-1 for infinite)
+	ReconnectWait   time.Duration // Wait between reconnects
 	ReconnectJitter time.Duration // Random jitter added to reconnect wait
 
 	// Timeouts

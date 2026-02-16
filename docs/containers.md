@@ -344,7 +344,9 @@ sha256 = "..."
 [lifecycle.install]
 script = """
 mkdir -p /data/api/config
-cp runtime/artifacts/com.example.api/2.1.0/api.yaml /data/api/config/
+# With unpack=false, Keystone stages single-file artifacts into the component
+# working directory, so api.yaml is available here directly.
+cp ./api.yaml /data/api/config/
 """
 
 [lifecycle.run]

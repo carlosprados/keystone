@@ -58,7 +58,7 @@ func Save(dir string, snap Snapshot) error {
 		return err
 	}
 	if info.Size() != int64(len(b)) {
-		_ = os.Remove(tmp) // Cleanup
+		_ = os.Remove(tmp)   // Cleanup
 		return os.ErrInvalid // Partial write detected
 	}
 

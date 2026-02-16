@@ -90,10 +90,10 @@ const (
 
 // JobResult represents the result of processing a job.
 type JobResult struct {
-	JobID     string    `json:"jobId"`
-	Success   bool      `json:"success"`
-	Error     string    `json:"error,omitempty"`
-	Data      any       `json:"data,omitempty"`
+	JobID       string    `json:"jobId"`
+	Success     bool      `json:"success"`
+	Error       string    `json:"error,omitempty"`
+	Data        any       `json:"data,omitempty"`
 	ProcessedAt time.Time `json:"processedAt"`
 }
 
@@ -132,7 +132,7 @@ func (a *Adapter) setupJetStream(ctx context.Context) error {
 		Subjects:    []string{"keystone.*.jobs"},
 		Retention:   jetstream.WorkQueuePolicy,
 		MaxMsgs:     10000,
-		MaxBytes:    100 * 1024 * 1024, // 100MB
+		MaxBytes:    100 * 1024 * 1024,  // 100MB
 		MaxAge:      7 * 24 * time.Hour, // 7 days
 		Storage:     jetstream.FileStorage,
 		Replicas:    1,

@@ -42,17 +42,17 @@ type LifecycleRunExec struct {
 
 // ContainerConfig holds container-specific configuration.
 type ContainerConfig struct {
-	Image       string              `toml:"image"`        // Container image (e.g., "docker.io/library/nginx:latest")
-	PullPolicy  string              `toml:"pull_policy"`  // "always", "never", "if-not-present"
-	NetworkMode string              `toml:"network_mode"` // "host", "bridge", "none"
-	User        string              `toml:"user"`         // User to run as (e.g., "1000:1000")
-	Privileged  bool                `toml:"privileged"`   // Run in privileged mode
-	Hostname    string              `toml:"hostname"`     // Container hostname
-	Mounts      []ContainerMount    `toml:"mounts"`       // Volume mounts
-	Ports       []ContainerPort     `toml:"ports"`        // Port mappings
-	Resources   ContainerResources  `toml:"resources"`    // Container resource limits
-	Env         map[string]string   `toml:"env"`          // Environment variables
-	Labels      map[string]string   `toml:"labels"`       // Container labels
+	Image       string             `toml:"image"`        // Container image (e.g., "docker.io/library/nginx:latest")
+	PullPolicy  string             `toml:"pull_policy"`  // "always", "never", "if-not-present"
+	NetworkMode string             `toml:"network_mode"` // "host", "bridge", "none"
+	User        string             `toml:"user"`         // User to run as (e.g., "1000:1000")
+	Privileged  bool               `toml:"privileged"`   // Run in privileged mode
+	Hostname    string             `toml:"hostname"`     // Container hostname
+	Mounts      []ContainerMount   `toml:"mounts"`       // Volume mounts
+	Ports       []ContainerPort    `toml:"ports"`        // Port mappings
+	Resources   ContainerResources `toml:"resources"`    // Container resource limits
+	Env         map[string]string  `toml:"env"`          // Environment variables
+	Labels      map[string]string  `toml:"labels"`       // Container labels
 }
 
 // ContainerMount represents a volume mount for containers.

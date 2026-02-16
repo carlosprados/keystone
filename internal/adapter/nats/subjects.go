@@ -6,14 +6,14 @@ import "fmt"
 // All subjects are prefixed with "keystone.{deviceId}." for multi-tenancy.
 const (
 	// Command subjects (Request/Reply pattern)
-	SubjectCmdApply     = "keystone.%s.cmd.apply"     // Apply a deployment plan
-	SubjectCmdStop      = "keystone.%s.cmd.stop"      // Stop all components
-	SubjectCmdStatus    = "keystone.%s.cmd.status"    // Get plan status
-	SubjectCmdGraph     = "keystone.%s.cmd.graph"     // Get dependency graph
-	SubjectCmdRestart   = "keystone.%s.cmd.restart"   // Restart a component
-	SubjectCmdStopComp  = "keystone.%s.cmd.stop-comp" // Stop a component
-	SubjectCmdHealth    = "keystone.%s.cmd.health"    // Get health status
-	SubjectCmdRecipes   = "keystone.%s.cmd.recipes"   // List recipes
+	SubjectCmdApply     = "keystone.%s.cmd.apply"      // Apply a deployment plan
+	SubjectCmdStop      = "keystone.%s.cmd.stop"       // Stop all components
+	SubjectCmdStatus    = "keystone.%s.cmd.status"     // Get plan status
+	SubjectCmdGraph     = "keystone.%s.cmd.graph"      // Get dependency graph
+	SubjectCmdRestart   = "keystone.%s.cmd.restart"    // Restart a component
+	SubjectCmdStopComp  = "keystone.%s.cmd.stop-comp"  // Stop a component
+	SubjectCmdHealth    = "keystone.%s.cmd.health"     // Get health status
+	SubjectCmdRecipes   = "keystone.%s.cmd.recipes"    // List recipes
 	SubjectCmdAddRecipe = "keystone.%s.cmd.add-recipe" // Add a recipe
 
 	// Event subjects (Publish pattern - agent publishes these)
