@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -175,6 +176,15 @@ func (r *ContainerRunner) Start(ctx context.Context, opts Options) (Handle, erro
 	if opts.Image == "" {
 		return nil, fmt.Errorf("empty image")
 	}
+	if err := r.cleanupStaleManagedContainers(ctx, opts.Name); err != nil {
+		log.Printf("[container] component=%s warning: stale cleanup failed: %v", opts.Name, err)
+	}
+	if h, ok, err := r.adoptManagedContainer(ctx, opts); err != nil {
+		log.Printf("[container] component=%s warning: adopt existing container failed: %v", opts.Name, err)
+	} else if ok {
+		log.Printf("[container] component=%s container_id=%s msg=adopted existing container", opts.Name, h.containerID)
+		return h, nil
+	}
 
 	// 1. Pull image if needed
 	image, err := r.ensureImage(ctx, opts.Image, opts.PullPolicy)
@@ -205,6 +215,10 @@ func (r *ContainerRunner) Start(ctx context.Context, opts Options) (Handle, erro
 	container, err := r.client.NewContainer(ctx, containerID,
 		client.WithImage(image),
 		client.WithNewSnapshot(containerID+"-snapshot", image),
+		client.WithContainerLabels(map[string]string{
+			"keystone.managed":   "true",
+			"keystone.component": opts.Name,
+		}),
 		client.WithNewSpec(specOpts...),
 	)
 	if err != nil {
@@ -287,6 +301,75 @@ func (r *ContainerRunner) Start(ctx context.Context, opts Options) (Handle, erro
 	return handle, nil
 }
 
+func (r *ContainerRunner) adoptManagedContainer(ctx context.Context, opts Options) (*ContainerHandle, bool, error) {
+	containers, err := r.client.Containers(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+
+	prefix := fmt.Sprintf("keystone-%s-", opts.Name)
+	var selected client.Container
+	var selectedTask client.Task
+	var selectedID string
+	var selectedSuffix int64 = -1
+	labelMatched := false
+
+	for _, c := range containers {
+		id := c.ID()
+		labels, err := c.Labels(ctx)
+		if err != nil {
+			continue
+		}
+		isLabelMatch := labels["keystone.managed"] == "true" && labels["keystone.component"] == opts.Name
+		isPrefixMatch := strings.HasPrefix(id, prefix)
+		if !isLabelMatch && !isPrefixMatch {
+			continue
+		}
+
+		task, err := c.Task(ctx, nil)
+		if err != nil {
+			continue
+		}
+		status, err := task.Status(ctx)
+		if err != nil || status.Status != client.Running {
+			continue
+		}
+
+		suffix := int64(0)
+		if isPrefixMatch {
+			if n, perr := strconv.ParseInt(strings.TrimPrefix(id, prefix), 10, 64); perr == nil {
+				suffix = n
+			}
+		}
+
+		// Prefer labeled containers. Within the same class, prefer latest suffix.
+		if selected == nil ||
+			(isLabelMatch && !labelMatched) ||
+			(isLabelMatch == labelMatched && suffix > selectedSuffix) {
+			selected = c
+			selectedTask = task
+			selectedID = id
+			selectedSuffix = suffix
+			labelMatched = isLabelMatch
+		}
+	}
+
+	if selected == nil {
+		return nil, false, nil
+	}
+
+	handle := &ContainerHandle{
+		containerID: selectedID,
+		name:        opts.Name,
+		startedAt:   time.Now(),
+		done:        make(chan error, 1),
+		container:   selected,
+		task:        selectedTask,
+	}
+	go r.monitorTask(ctx, handle)
+	return handle, true, nil
+}
+
 // Stop sends SIGTERM to the container and waits, then SIGKILL on timeout.
 func (r *ContainerRunner) Stop(ctx context.Context, h Handle, timeout time.Duration) error {
 	ch, ok := h.(*ContainerHandle)
@@ -307,9 +390,10 @@ func (r *ContainerRunner) Stop(ctx context.Context, h Handle, timeout time.Durat
 	}
 
 	// 2. Wait for exit or timeout
+	stopErr := error(nil)
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		stopErr = ctx.Err()
 	case <-ch.done:
 		// Exited gracefully
 	case <-time.After(timeout):
@@ -317,11 +401,15 @@ func (r *ContainerRunner) Stop(ctx context.Context, h Handle, timeout time.Durat
 		log.Printf("[container] timeout waiting for container %s, sending SIGKILL", ch.containerID)
 		if err := ch.task.Kill(ctx, syscall.SIGKILL); err != nil {
 			log.Printf("[container] warning: SIGKILL to container %s failed: %v", ch.containerID, err)
+			if isNotFoundLike(err) {
+				// Task is already gone; continue with cleanup.
+				break
+			}
 		}
 		select {
 		case <-ch.done:
 		case <-time.After(5 * time.Second):
-			return fmt.Errorf("container did not exit after SIGKILL")
+			stopErr = fmt.Errorf("container did not exit after SIGKILL")
 		}
 	}
 
@@ -329,7 +417,7 @@ func (r *ContainerRunner) Stop(ctx context.Context, h Handle, timeout time.Durat
 	r.cleanupContainerResources(ctx, ch)
 
 	log.Printf("[container] component=%s container_id=%s msg=container stopped", ch.name, ch.containerID)
-	return nil
+	return stopErr
 }
 
 // RunManaged starts a container with health monitoring and restart policies.
@@ -783,6 +871,50 @@ func (r *ContainerRunner) cleanupContainerResources(ctx context.Context, ch *Con
 		}
 		ch.netNS = nil
 	}
+}
+
+func isNotFoundLike(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not found")
+}
+
+func (r *ContainerRunner) cleanupStaleManagedContainers(ctx context.Context, component string) error {
+	containers, err := r.client.Containers(ctx)
+	if err != nil {
+		return err
+	}
+	prefix := fmt.Sprintf("keystone-%s-", component)
+	for _, c := range containers {
+		id := c.ID()
+		labels, err := c.Labels(ctx)
+		if err != nil {
+			continue
+		}
+		isManaged := labels["keystone.managed"] == "true" && labels["keystone.component"] == component
+		if !isManaged && !strings.HasPrefix(id, prefix) {
+			continue
+		}
+		task, err := c.Task(ctx, nil)
+		if err == nil {
+			status, serr := task.Status(ctx)
+			if serr == nil && status.Status == client.Running {
+				// Leave running container for adoption.
+				continue
+			}
+			if _, derr := task.Delete(ctx); derr != nil && !isNotFoundLike(derr) {
+				log.Printf("[container] warning: stale task delete failed id=%s err=%v", id, derr)
+			}
+		}
+		if derr := c.Delete(ctx, client.WithSnapshotCleanup); derr != nil && !isNotFoundLike(derr) {
+			log.Printf("[container] warning: stale container delete failed id=%s err=%v", id, derr)
+		} else {
+			log.Printf("[container] component=%s container_id=%s msg=deleted stale container", component, id)
+		}
+	}
+	return nil
 }
 
 func defaultString(v, def string) string {

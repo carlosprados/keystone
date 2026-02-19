@@ -151,6 +151,12 @@ func (a *Agent) Close() error {
 	if a.closed.Swap(true) {
 		return nil
 	}
+	// Stop managed components first (graceful) so lifecycle shutdown hooks run.
+	// Do not mark the plan as "stopped" here: on next boot we want to resume
+	// the last applied plan automatically.
+	if err := a.stopPlanInternal(false); err != nil {
+		log.Printf("[agent] warning: stop plan during close failed: %v", err)
+	}
 	// Cancel the agent context to signal all operations to stop
 	if a.ctxCancel != nil {
 		a.ctxCancel()
@@ -412,8 +418,8 @@ func (a *Agent) applyPlan(planPath string) error {
 				return fmt.Errorf("failed to create runner: %w", err)
 			}
 
-			// Store runner for cleanup if needed
-			if runnerCleanup != nil {
+			// Store runner so stop paths use the same runtime implementation.
+			if compRunner != nil {
 				a.mu.Lock()
 				a.runners[it.Name] = compRunner
 				a.mu.Unlock()
@@ -484,12 +490,6 @@ func (a *Agent) applyPlan(planPath string) error {
 				a.cancels[it.Name] = cancel
 				a.mu.Unlock()
 
-				defer func() {
-					if runnerCleanup != nil {
-						runnerCleanup()
-					}
-				}()
-
 				_ = compRunner.RunManaged(ctx2, it.Name, opts, hc, rp, maxRetries,
 					func(h runner.Handle) {
 						a.mu.Lock()
@@ -551,6 +551,11 @@ func (a *Agent) applyPlan(planPath string) error {
 								a.comps.Upsert(ci)
 							}
 							delete(a.handles, it.Name)
+							// Release runner resources for terminal components.
+							if runnerCleanup != nil {
+								runnerCleanup()
+								delete(a.runners, it.Name)
+							}
 							a.mu.Unlock()
 						}
 					},
@@ -1049,16 +1054,10 @@ func (a *Agent) restartFromPlan(name string) error {
 		ctx2, cancel := context.WithCancel(a.Context())
 		a.mu.Lock()
 		a.cancels[name] = cancel
-		if runnerCleanup != nil {
+		if compRunner != nil {
 			a.runners[name] = compRunner
 		}
 		a.mu.Unlock()
-
-		defer func() {
-			if runnerCleanup != nil {
-				runnerCleanup()
-			}
-		}()
 
 		_ = compRunner.RunManaged(ctx2, name, opts, hc, rp, maxRetries,
 			func(h runner.Handle) {
@@ -1109,6 +1108,10 @@ func (a *Agent) restartFromPlan(name string) error {
 						a.comps.Upsert(ci)
 					}
 					delete(a.handles, name)
+					if runnerCleanup != nil {
+						runnerCleanup()
+						delete(a.runners, name)
+					}
 					a.mu.Unlock()
 				}
 			},
@@ -1144,6 +1147,7 @@ func (a *Agent) stopComponent(name string) {
 		log.Printf("agent: cancel managed loop for %s", name)
 		cancel()
 	}
+
 	if h != nil {
 		// Use a timeout context for stop operation
 		stopCtx, stopCancel := context.WithTimeout(a.Context(), 10*time.Second)
@@ -1180,6 +1184,12 @@ func (a *Agent) stopComponent(name string) {
 		ci.State = "stopped"
 		a.comps.Upsert(ci)
 	}
+	// Best-effort lifecycle shutdown hook for this component.
+	shCtx, shCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := a.runComponentShutdownScript(shCtx, name); err != nil {
+		log.Printf("agent: stopComponent shutdown script error name=%s err=%v", name, err)
+	}
+	shCancel()
 	log.Printf("agent: stopComponent done name=%s", name)
 }
 
@@ -1399,4 +1409,48 @@ func runShellWithOutput(ctx context.Context, workDir, script string) (string, er
 		out = out[len(out)-limit:]
 	}
 	return string(out), err
+}
+
+func (a *Agent) runComponentShutdownScript(ctx context.Context, name string) error {
+	a.mu.RLock()
+	var recipeRef string
+	for _, pc := range a.planComps {
+		if pc.Name == name {
+			recipeRef = pc.RecipePath
+			break
+		}
+	}
+	a.mu.RUnlock()
+	if recipeRef == "" {
+		return nil
+	}
+
+	r, err := recipe.Load(recipeRef)
+	if err != nil {
+		recName, recVersion := name, ""
+		if parts := strings.Split(recipeRef, ":"); len(parts) == 2 {
+			recName, recVersion = parts[0], parts[1]
+		} else if !strings.Contains(recipeRef, "/") && !strings.Contains(recipeRef, ".") {
+			recName = recipeRef
+		}
+		if path, serr := a.recipes.GetPath(recName, recVersion); serr == nil {
+			r, err = recipe.Load(path)
+		}
+	}
+	if err != nil || r == nil {
+		return err
+	}
+	if strings.TrimSpace(r.Lifecycle.Shutdown.Script) == "" {
+		return nil
+	}
+
+	workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
+	out, err := runShellWithOutput(ctx, workDir, r.Lifecycle.Shutdown.Script)
+	if strings.TrimSpace(out) != "" {
+		log.Printf("[agent] component=%s msg=shutdown script output:\n%s", name, strings.TrimSpace(out))
+	}
+	if err != nil {
+		return fmt.Errorf("shutdown script failed for %s: %w", name, err)
+	}
+	return nil
 }
