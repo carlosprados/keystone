@@ -185,6 +185,7 @@ func (r *CLIRunner) RunManaged(ctx context.Context, name string, opts Options, h
 		// Start
 		handle, err := r.Start(ctx, opts)
 		if err != nil {
+			log.Printf("[clirunner] component=%s error=%v msg=start attempt failed", name, err)
 			retries++
 			if maxRetries > 0 && retries > maxRetries {
 				errLimit := fmt.Errorf("start failed after %d retries: %w", maxRetries, err)

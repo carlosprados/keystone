@@ -299,6 +299,7 @@ func (a *Agent) applyPlan(planPath string) error {
 	// Build supervisor components now using computed deps
 	// readiness channels per component (closed when process/container actually starts)
 	compReady := make(map[string]chan struct{})
+	compStartErr := make(map[string]chan error)
 	for _, l := range loadedList {
 		// find deps for this comp
 		var depNames []string
@@ -312,6 +313,26 @@ func (a *Agent) applyPlan(planPath string) error {
 		it := l.item
 		var startedOnce sync.Once
 		healthBasedReady := false
+		var readySignaled atomic.Bool
+		signalReady := func() {
+			startedOnce.Do(func() {
+				readySignaled.Store(true)
+				if ch, ok := compReady[it.Name]; ok && ch != nil {
+					close(ch)
+				}
+			})
+		}
+		signalStartErr := func(err error) {
+			if err == nil || readySignaled.Load() {
+				return
+			}
+			if ch, ok := compStartErr[it.Name]; ok && ch != nil {
+				select {
+				case ch <- err:
+				default:
+				}
+			}
+		}
 		// Prepare workspace per component version
 		workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
 		artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)
@@ -493,13 +514,8 @@ func (a *Agent) applyPlan(planPath string) error {
 							a.comps.Upsert(ci)
 						}
 						a.mu.Unlock()
-						// signal readiness once on first successful start (if no health check)
 						if !healthBasedReady {
-							startedOnce.Do(func() {
-								if ch, ok := compReady[it.Name]; ok && ch != nil {
-									close(ch)
-								}
-							})
+							signalReady()
 						}
 						// Sample metrics for processes
 						if ph, ok := h.(*runner.ProcessHandle); ok {
@@ -521,16 +537,13 @@ func (a *Agent) applyPlan(planPath string) error {
 						a.mu.Unlock()
 						metrics.SetHealthy(it.Name, ok)
 						if healthBasedReady && ok {
-							startedOnce.Do(func() {
-								if ch, ok := compReady[it.Name]; ok && ch != nil {
-									close(ch)
-								}
-							})
+							signalReady()
 						}
 					},
 					func(err error) {
 						if err != nil {
 							log.Printf("[agent] component=%s terminal failure: %v", it.Name, err)
+							signalStartErr(err)
 							a.mu.Lock()
 							ci, ok := a.comps.Get(it.Name)
 							if ok {
@@ -570,10 +583,14 @@ func (a *Agent) applyPlan(planPath string) error {
 		}
 		// Create component with readiness channel and register it
 		readyCh := make(chan struct{})
+		startErrCh := make(chan error, 1)
 		c := supervisor.NewComponent(it.Name, depNames, installFn, startFn, stopFn)
 		c.ReadyCh = readyCh
+		c.ReadyErrCh = startErrCh
+		c.ReadyTimeout = computeReadyTimeout(r)
 		comps = append(comps, c)
 		compReady[it.Name] = readyCh
+		compStartErr[it.Name] = startErrCh
 	}
 	// If dry-run, set status and return after printing order
 	if a.dryRun {
@@ -600,9 +617,14 @@ func (a *Agent) applyPlan(planPath string) error {
 		return nil
 	}
 
-	// Update store initially
-	for _, c := range comps {
-		a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: string(c.State())})
+	// Update store initially with recipe/version metadata for API visibility.
+	for _, l := range loadedList {
+		a.comps.Upsert(store.ComponentInfo{
+			Name:    l.item.Name,
+			State:   string(supervisor.StateNone),
+			Recipe:  l.item.RecipePath,
+			Version: l.rec.Metadata.Version,
+		})
 	}
 	// Poll states to store and component-state metric
 	go func() {
@@ -720,23 +742,45 @@ func (a *Agent) createRunner(r *recipe.Recipe) (runner.Runner, func(), error) {
 	}
 
 	if runType == "container" {
-		// Try containerd client first
-		cfg := runner.ContainerRunnerConfigFromEnv()
-		cr, err := runner.NewContainerRunner(cfg)
-		if err == nil {
-			cleanup := func() {
-				_ = cr.Close()
+		runtimePref := strings.ToLower(strings.TrimSpace(r.Lifecycle.Run.Container.Runtime))
+		switch runtimePref {
+		case "", "auto":
+			// Try containerd first, then CLI fallback.
+			cfg := runner.ContainerRunnerConfigFromEnv()
+			cr, err := runner.NewContainerRunner(cfg)
+			if err == nil {
+				cleanup := func() { _ = cr.Close() }
+				return cr, cleanup, nil
 			}
+			log.Printf("[agent] containerd not available (%v), trying CLI runner", err)
+			clir, err := runner.NewCLIRunner()
+			if err != nil {
+				return nil, nil, fmt.Errorf("no container runtime available: %w", err)
+			}
+			return clir, nil, nil
+		case "containerd":
+			cfg := runner.ContainerRunnerConfigFromEnv()
+			cr, err := runner.NewContainerRunner(cfg)
+			if err != nil {
+				return nil, nil, fmt.Errorf("container runtime=containerd requested but unavailable: %w", err)
+			}
+			cleanup := func() { _ = cr.Close() }
 			return cr, cleanup, nil
+		case "cli":
+			clir, err := runner.NewCLIRunner()
+			if err != nil {
+				return nil, nil, fmt.Errorf("container runtime=cli requested but unavailable: %w", err)
+			}
+			return clir, nil, nil
+		case "nerdctl", "docker", "podman":
+			clir, err := runner.NewCLIRunnerWithCLI(runtimePref)
+			if err != nil {
+				return nil, nil, fmt.Errorf("container runtime=%s requested but unavailable: %w", runtimePref, err)
+			}
+			return clir, nil, nil
+		default:
+			return nil, nil, fmt.Errorf("unsupported container runtime %q", runtimePref)
 		}
-		log.Printf("[agent] containerd not available (%v), trying CLI runner", err)
-
-		// Fall back to CLI runner
-		clir, err := runner.NewCLIRunner()
-		if err != nil {
-			return nil, nil, fmt.Errorf("no container runtime available: %w", err)
-		}
-		return clir, nil, nil
 	}
 
 	return nil, nil, fmt.Errorf("unknown run type: %s", runType)
@@ -789,11 +833,13 @@ func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Op
 	}
 
 	return runner.Options{
-		Name:        name,
-		Image:       c.Image,
-		PullPolicy:  c.PullPolicy,
-		Env:         env,
-		WorkingDir:  workDir,
+		Name:       name,
+		Image:      c.Image,
+		PullPolicy: c.PullPolicy,
+		Env:        env,
+		// Do not propagate host workDir to containers. OCI cwd must be a valid
+		// absolute path inside the container filesystem.
+		WorkingDir:  "",
 		Mounts:      mounts,
 		Ports:       ports,
 		NetworkMode: c.NetworkMode,
@@ -828,6 +874,39 @@ func buildHealthConfig(r *recipe.Recipe) runner.HealthConfig {
 		hc.FailureThreshold = r.Lifecycle.Run.Health.FailureThreshold
 	}
 	return hc
+}
+
+// computeReadyTimeout derives a supervisor readiness timeout from health settings.
+// This avoids failing startup before the first meaningful health probes can run.
+func computeReadyTimeout(r *recipe.Recipe) time.Duration {
+	// Keep previous default behavior when no health check is configured.
+	const defaultReadyTimeout = 15 * time.Second
+	const minHealthReadyTimeout = 30 * time.Second
+
+	hc := buildHealthConfig(r)
+	if hc.Check == "" {
+		return defaultReadyTimeout
+	}
+
+	interval := hc.Interval
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	timeout := hc.Timeout
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	threshold := hc.FailureThreshold
+	if threshold <= 0 {
+		threshold = 3
+	}
+
+	// Give enough time for probe cadence plus one probe timeout and small margin.
+	ready := (interval * time.Duration(threshold)) + timeout + (2 * time.Second)
+	if ready < minHealthReadyTimeout {
+		return minHealthReadyTimeout
+	}
+	return ready
 }
 
 func (a *Agent) persistSnapshot() {
@@ -865,10 +944,28 @@ func (a *Agent) restartFromPlan(name string) error {
 	if recPath == "" {
 		return fmt.Errorf("component %q not found in plan", name)
 	}
+	// Try to load from path first, then resolve from RecipeStore for "name:version".
 	r, err := recipe.Load(recPath)
+	if err != nil {
+		recName, recVersion := name, ""
+		if parts := strings.Split(recPath, ":"); len(parts) == 2 {
+			recName, recVersion = parts[0], parts[1]
+		} else if !strings.Contains(recPath, "/") && !strings.Contains(recPath, ".") {
+			recName = recPath
+		}
+		if path, serr := a.recipes.GetPath(recName, recVersion); serr == nil {
+			r, err = recipe.Load(path)
+		}
+	}
 	if err != nil {
 		return err
 	}
+	// Ensure API state reflects the recipe/version being restarted.
+	a.comps.Upsert(store.ComponentInfo{
+		Name:    name,
+		Recipe:  recPath,
+		Version: r.Metadata.Version,
+	})
 
 	workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
 	artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)

@@ -39,7 +39,10 @@ type Component struct {
 	// implementation when the service has actually started (e.g., child
 	// process spawned). If set, Start will wait for it up to ReadyTimeout
 	// before transitioning to Running.
-	ReadyCh      chan struct{}
+	ReadyCh chan struct{}
+	// ReadyErrCh is optional and lets async starters signal a terminal startup
+	// failure before readiness was reached.
+	ReadyErrCh   chan error
 	ReadyTimeout time.Duration
 }
 
@@ -103,10 +106,18 @@ func (c *Component) Start(ctx context.Context) error {
 		if timeout <= 0 {
 			timeout = 15 * time.Second
 		}
+		errCh := c.ReadyErrCh
 		c.mu.Unlock()
 		select {
 		case <-ch:
 			// ready
+		case err := <-errCh:
+			c.mu.Lock()
+			c.setState(StateFailed)
+			if err == nil {
+				err = errors.New("start failed before readiness")
+			}
+			return err
 		case <-ctx.Done():
 			c.mu.Lock()
 			c.setState(StateFailed)

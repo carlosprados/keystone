@@ -99,6 +99,9 @@ max_retries = 5
 # Required: container image reference
 image = "docker.io/myorg/myapp:1.0.0"
 
+# Runtime selection: "auto" (default), "containerd", "cli", "nerdctl", "docker", "podman"
+runtime = "auto"
+
 # Image pull policy: "always", "never", "if-not-present" (default)
 pull_policy = "if-not-present"
 
@@ -183,6 +186,7 @@ echo "Container stopped"
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `image` | string | (required) | Full image reference (registry/repo:tag) |
+| `runtime` | string | `"auto"` | Runtime selector: `auto`, `containerd`, `cli`, `nerdctl`, `docker`, `podman` |
 | `pull_policy` | string | `"if-not-present"` | When to pull: `always`, `never`, `if-not-present` |
 
 ### Network Settings
@@ -194,9 +198,20 @@ echo "Container stopped"
 | `ports` | array | `[]` | Port mappings (bridge mode only) |
 
 **Network Modes:**
-- **host**: Container shares host network namespace (best performance, no port mapping needed)
-- **bridge**: Container gets its own network namespace with NAT (requires port mappings)
-- **none**: No network access
+- **bridge**:
+  - Default mode.
+  - The container has its own network namespace behind NAT.
+  - Use `ports` to expose container services to the host/network.
+  - Recommended for most services because it keeps network isolation.
+- **host**:
+  - The container shares the host network namespace directly.
+  - No NAT and no network isolation from the host.
+  - Port mappings are generally not needed (and usually not meaningful) because services bind directly on host interfaces.
+  - Useful for low-latency workloads or tools that must access host networking directly.
+- **none**:
+  - Disables networking inside the container.
+  - No inbound/outbound connectivity.
+  - Useful for strictly offline tasks or batch jobs that should not have network access.
 
 ### Security Settings
 
@@ -224,6 +239,10 @@ echo "Container stopped"
 | `target` | string | (required) | Container path |
 | `type` | string | `"bind"` | Mount type: `bind`, `volume`, `tmpfs` |
 | `read_only` | bool | `false` | Mount as read-only |
+
+When using the `containerd` runner, Keystone also mounts image-declared volumes (`Config.Volumes`)
+so behavior matches Docker/nerdctl for images that expect writable paths (for example `/etc/influxdb2`).
+If a destination is declared both by the image and by `[[lifecycle.run.container.mounts]]`, the explicit recipe mount wins.
 
 ### Port Mappings
 
@@ -260,6 +279,14 @@ failure_threshold = 3
 | `KEYSTONE_CONTAINERD_NAMESPACE` | `keystone` | containerd namespace |
 | `KEYSTONE_CONTAINER_SNAPSHOTTER` | `overlayfs` | Snapshotter for images |
 | `KEYSTONE_CONTAINER_REGISTRY` | `docker.io` | Default registry |
+| `KEYSTONE_CNI_CONF_DIR` | `/etc/cni/net.d` | CNI network config directory for `network_mode="bridge"` |
+| `KEYSTONE_CNI_PLUGIN_DIRS` | `/opt/cni/bin:/usr/lib/cni` | Colon-separated directories for CNI binaries |
+| `KEYSTONE_CNI_NETNS_DIR` | `/var/run/netns` | Directory where Keystone creates bridge network namespaces |
+| `KEYSTONE_IMAGE_VOLUME_DIR` | `runtime/containervolumes/image` | Root directory for image-declared volume bind mounts (containerd runner) |
+
+`bridge` mode requires valid CNI config and plugins on the host (for example `bridge`, `host-local`, and `portmap`).
+For bridge NAT/port-forwarding to work, IPv4 forwarding must be enabled on the host:
+`sudo sysctl -w net.ipv4.ip_forward=1`
 
 ### Container Environment
 
@@ -441,6 +468,26 @@ sudo ctr -n keystone containers ls  # List containers
 - Missing required environment variables
 - Invalid command or entrypoint
 - Permission issues with mounts
+
+### Bridge Networking Works Partially (No Port Forwarding)
+
+If containers start in `network_mode = "bridge"` but host port access fails, verify IPv4 forwarding:
+
+```bash
+sysctl net.ipv4.ip_forward
+sudo sysctl -w net.ipv4.ip_forward=1
+```
+
+What this does:
+- `net.ipv4.ip_forward=1` allows the Linux kernel to route packets between interfaces.
+- CNI bridge + portmap depends on this for NAT and host-to-container port forwarding.
+
+To persist it across reboots:
+
+```bash
+echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/99-keystone-cni.conf
+sudo sysctl --system
+```
 
 ### No CLI Available
 

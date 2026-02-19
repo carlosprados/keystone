@@ -43,6 +43,7 @@ type LifecycleRunExec struct {
 // ContainerConfig holds container-specific configuration.
 type ContainerConfig struct {
 	Image       string             `toml:"image"`        // Container image (e.g., "docker.io/library/nginx:latest")
+	Runtime     string             `toml:"runtime"`      // "auto"(default), "containerd", "cli", "nerdctl", "docker", "podman"
 	PullPolicy  string             `toml:"pull_policy"`  // "always", "never", "if-not-present"
 	NetworkMode string             `toml:"network_mode"` // "host", "bridge", "none"
 	User        string             `toml:"user"`         // User to run as (e.g., "1000:1000")

@@ -321,6 +321,9 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_CONTAINERD_NAMESPACE`       | containerd namespace for containers (default: `keystone`).             |
 | `KEYSTONE_CONTAINER_SNAPSHOTTER`      | Snapshotter for container images (default: `overlayfs`).               |
 | `KEYSTONE_CONTAINER_REGISTRY`         | Default container registry (default: `docker.io`).                     |
+| `KEYSTONE_CNI_CONF_DIR`               | CNI config directory for bridge mode (default: `/etc/cni/net.d`).      |
+| `KEYSTONE_CNI_PLUGIN_DIRS`            | CNI plugin dirs (default: `/opt/cni/bin:/usr/lib/cni`).                |
+| `KEYSTONE_CNI_NETNS_DIR`              | Netns dir for bridge mode (default: `/var/run/netns`).                 |
 
 ### Robust Artifact Downloads
 

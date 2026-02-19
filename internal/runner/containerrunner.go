@@ -2,15 +2,26 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/core/containers"
+	"github.com/containerd/containerd/v2/core/content"
+	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/pkg/cio"
+	"github.com/containerd/containerd/v2/pkg/netns"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	gocni "github.com/containerd/go-cni"
+	imagev1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -27,6 +38,11 @@ type ContainerHandle struct {
 	// containerd-specific
 	container client.Container
 	task      client.Task
+
+	// network-specific (bridge mode with CNI)
+	netNS            *netns.NetNS
+	cniNamespaceOpts []gocni.NamespaceOpts
+	cniConfigured    bool
 }
 
 // ID returns the container ID.
@@ -61,6 +77,13 @@ type ContainerRunner struct {
 	client      *client.Client
 	namespace   string
 	snapshotter string
+
+	cniOnce      sync.Once
+	cni          gocni.CNI
+	cniErr       error
+	cniConfDir   string
+	cniPluginDir []string
+	cniNetNSDir  string
 }
 
 // ContainerRunnerConfig holds configuration for the container runner.
@@ -115,11 +138,28 @@ func NewContainerRunner(cfg ContainerRunnerConfig) (*ContainerRunner, error) {
 		return nil, fmt.Errorf("failed to connect to containerd at %s: %w", cfg.Socket, err)
 	}
 
-	return &ContainerRunner{
+	r := &ContainerRunner{
 		client:      c,
 		namespace:   cfg.Namespace,
 		snapshotter: cfg.Snapshotter,
-	}, nil
+		cniConfDir:  defaultString(os.Getenv("KEYSTONE_CNI_CONF_DIR"), "/etc/cni/net.d"),
+		cniNetNSDir: defaultString(os.Getenv("KEYSTONE_CNI_NETNS_DIR"), "/var/run/netns"),
+	}
+	pluginDirs := os.Getenv("KEYSTONE_CNI_PLUGIN_DIRS")
+	if pluginDirs == "" {
+		r.cniPluginDir = []string{"/opt/cni/bin", "/usr/lib/cni"}
+	} else {
+		for _, p := range strings.Split(pluginDirs, ":") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				r.cniPluginDir = append(r.cniPluginDir, p)
+			}
+		}
+		if len(r.cniPluginDir) == 0 {
+			r.cniPluginDir = []string{"/opt/cni/bin", "/usr/lib/cni"}
+		}
+	}
+	return r, nil
 }
 
 // Close closes the containerd client connection.
@@ -142,8 +182,23 @@ func (r *ContainerRunner) Start(ctx context.Context, opts Options) (Handle, erro
 		return nil, fmt.Errorf("failed to ensure image: %w", err)
 	}
 
-	// 2. Create container spec
+	// 2. Create container spec (optionally with an explicit netns for bridge mode)
+	var netNS *netns.NetNS
 	specOpts := r.buildSpecOpts(opts, image)
+	if defaultString(opts.NetworkMode, "bridge") == "bridge" {
+		if err := os.MkdirAll(r.cniNetNSDir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create cni netns dir %s: %w", r.cniNetNSDir, err)
+		}
+		ns, err := netns.NewNetNS(r.cniNetNSDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create network namespace: %w", err)
+		}
+		netNS = ns
+		specOpts = append(specOpts, oci.WithLinuxNamespace(specs.LinuxNamespace{
+			Type: specs.NetworkNamespace,
+			Path: ns.GetPath(),
+		}))
+	}
 
 	// 3. Create container
 	containerID := fmt.Sprintf("keystone-%s-%d", opts.Name, time.Now().UnixNano())
@@ -153,6 +208,9 @@ func (r *ContainerRunner) Start(ctx context.Context, opts Options) (Handle, erro
 		client.WithNewSpec(specOpts...),
 	)
 	if err != nil {
+		if netNS != nil {
+			_ = netNS.Remove()
+		}
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
 
@@ -161,6 +219,9 @@ func (r *ContainerRunner) Start(ctx context.Context, opts Options) (Handle, erro
 	if err != nil {
 		if delErr := container.Delete(ctx, client.WithSnapshotCleanup); delErr != nil {
 			log.Printf("[container] warning: failed to cleanup container after task creation failure: %v", delErr)
+		}
+		if netNS != nil {
+			_ = netNS.Remove()
 		}
 		return nil, fmt.Errorf("failed to create task: %w", err)
 	}
@@ -173,7 +234,36 @@ func (r *ContainerRunner) Start(ctx context.Context, opts Options) (Handle, erro
 		if delErr := container.Delete(ctx, client.WithSnapshotCleanup); delErr != nil {
 			log.Printf("[container] warning: failed to cleanup container after start failure: %v", delErr)
 		}
+		if netNS != nil {
+			_ = netNS.Remove()
+		}
 		return nil, fmt.Errorf("failed to start task: %w", err)
+	}
+
+	// 5.5 Setup CNI networking (bridge mode)
+	var cniNSOpts []gocni.NamespaceOpts
+	cniConfigured := false
+	if defaultString(opts.NetworkMode, "bridge") == "bridge" {
+		if err := r.ensureCNI(); err != nil {
+			_ = task.Kill(ctx, syscall.SIGKILL)
+			_, _ = task.Delete(ctx)
+			_ = container.Delete(ctx, client.WithSnapshotCleanup)
+			if netNS != nil {
+				_ = netNS.Remove()
+			}
+			return nil, fmt.Errorf("failed to initialize CNI bridge networking: %w", err)
+		}
+		cniNSOpts = buildCNINamespaceOpts(opts)
+		if _, err := r.cni.Setup(ctx, containerID, netNS.GetPath(), cniNSOpts...); err != nil {
+			_ = task.Kill(ctx, syscall.SIGKILL)
+			_, _ = task.Delete(ctx)
+			_ = container.Delete(ctx, client.WithSnapshotCleanup)
+			if netNS != nil {
+				_ = netNS.Remove()
+			}
+			return nil, fmt.Errorf("failed to setup CNI networking: %w", err)
+		}
+		cniConfigured = true
 	}
 
 	// 6. Create handle
@@ -184,6 +274,10 @@ func (r *ContainerRunner) Start(ctx context.Context, opts Options) (Handle, erro
 		done:        make(chan error, 1),
 		container:   container,
 		task:        task,
+		netNS:       netNS,
+		// Keep namespace opts so we can execute CNI DEL with the same capabilities.
+		cniNamespaceOpts: cniNSOpts,
+		cniConfigured:    cniConfigured,
 	}
 
 	// 7. Monitor task exit in background
@@ -232,12 +326,7 @@ func (r *ContainerRunner) Stop(ctx context.Context, h Handle, timeout time.Durat
 	}
 
 	// 3. Delete task and container
-	if _, err := ch.task.Delete(ctx); err != nil {
-		log.Printf("[container] warning: task delete for %s failed: %v", ch.containerID, err)
-	}
-	if err := ch.container.Delete(ctx, client.WithSnapshotCleanup); err != nil {
-		log.Printf("[container] warning: container delete for %s failed: %v", ch.containerID, err)
-	}
+	r.cleanupContainerResources(ctx, ch)
 
 	log.Printf("[container] component=%s container_id=%s msg=container stopped", ch.name, ch.containerID)
 	return nil
@@ -261,6 +350,7 @@ func (r *ContainerRunner) RunManaged(ctx context.Context, name string, opts Opti
 		// Start
 		handle, err := r.Start(ctx, opts)
 		if err != nil {
+			log.Printf("[container] component=%s error=%v msg=start attempt failed", name, err)
 			retries++
 			if maxRetries > 0 && retries > maxRetries {
 				errLimit := fmt.Errorf("start failed after %d retries: %w", maxRetries, err)
@@ -329,12 +419,7 @@ func (r *ContainerRunner) RunManaged(ctx context.Context, name string, opts Opti
 						// restart
 						log.Printf("[container] component=%s restarts=%d msg=restarting container", name, retries)
 						// Cleanup before restart
-						if _, delErr := ch.task.Delete(ctx); delErr != nil {
-							log.Printf("[container] warning: task delete failed during restart: %v", delErr)
-						}
-						if delErr := ch.container.Delete(ctx, client.WithSnapshotCleanup); delErr != nil {
-							log.Printf("[container] warning: container delete failed during restart: %v", delErr)
-						}
+						r.cleanupContainerResources(ctx, ch)
 						run = false
 						break
 					}
@@ -417,6 +502,9 @@ func (r *ContainerRunner) buildSpecOpts(opts Options, image client.Image) []oci.
 		oci.WithImageConfig(image),
 	}
 
+	// Mount image-declared volumes (Config.Volumes) like Docker/nerdctl do.
+	specOpts = append(specOpts, r.withImageDeclaredVolumes(image, opts))
+
 	// Command and args
 	if opts.Command != "" {
 		args := append([]string{opts.Command}, opts.Args...)
@@ -424,8 +512,12 @@ func (r *ContainerRunner) buildSpecOpts(opts Options, image client.Image) []oci.
 	}
 
 	// Environment
-	if len(opts.Env) > 0 {
-		specOpts = append(specOpts, oci.WithEnv(opts.Env))
+	env := append([]string{}, opts.Env...)
+	if opts.Hostname != "" && !hasEnvKey(env, "HOSTNAME") {
+		env = append(env, "HOSTNAME="+opts.Hostname)
+	}
+	if len(env) > 0 {
+		specOpts = append(specOpts, oci.WithEnv(env))
 	}
 
 	// Working directory
@@ -437,6 +529,9 @@ func (r *ContainerRunner) buildSpecOpts(opts Options, image client.Image) []oci.
 	if opts.Hostname != "" {
 		specOpts = append(specOpts, oci.WithHostname(opts.Hostname))
 	}
+
+	// Parity with common container CLIs: ensure localhost/DNS resolution files are present.
+	specOpts = append(specOpts, oci.WithHostHostsFile, oci.WithHostResolvconf)
 
 	// User
 	if opts.User != "" {
@@ -492,6 +587,221 @@ func (r *ContainerRunner) buildSpecOpts(opts Options, image client.Image) []oci.
 	return specOpts
 }
 
+func (r *ContainerRunner) withImageDeclaredVolumes(image client.Image, opts Options) oci.SpecOpts {
+	return func(ctx context.Context, _ oci.Client, c *containers.Container, s *oci.Spec) error {
+		declared, err := readImageDeclaredVolumes(ctx, image)
+		if err != nil {
+			return fmt.Errorf("read image-declared volumes: %w", err)
+		}
+		if len(declared) == 0 {
+			return nil
+		}
+
+		explicitTargets := map[string]struct{}{}
+		for _, m := range opts.Mounts {
+			t := strings.TrimSpace(m.Target)
+			if t == "" {
+				continue
+			}
+			explicitTargets[t] = struct{}{}
+		}
+
+		var mounts []specs.Mount
+		rootDir, err := resolveImageVolumeRootDir()
+		if err != nil {
+			return err
+		}
+		for _, target := range declared {
+			if _, exists := explicitTargets[target]; exists {
+				continue
+			}
+			hostPath := filepath.Join(rootDir, sanitizeComponentVolumeKey(opts.Name), sanitizeVolumeDestination(target))
+			if err := os.MkdirAll(hostPath, 0o755); err != nil {
+				return fmt.Errorf("create image volume path %s: %w", hostPath, err)
+			}
+			mounts = append(mounts, specs.Mount{
+				Destination: target,
+				Source:      hostPath,
+				Type:        "bind",
+				Options:     []string{"rbind", "rw"},
+			})
+		}
+		if len(mounts) == 0 {
+			return nil
+		}
+		return oci.WithMounts(mounts)(ctx, nil, c, s)
+	}
+}
+
+func readImageDeclaredVolumes(ctx context.Context, image client.Image) ([]string, error) {
+	configDesc, err := image.Config(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !images.IsConfigType(configDesc.MediaType) {
+		return nil, fmt.Errorf("unsupported image config media type %q", configDesc.MediaType)
+	}
+
+	raw, err := content.ReadBlob(ctx, image.ContentStore(), configDesc)
+	if err != nil {
+		return nil, err
+	}
+
+	var img imagev1.Image
+	if err := json.Unmarshal(raw, &img); err != nil {
+		return nil, err
+	}
+
+	vols := make([]string, 0, len(img.Config.Volumes))
+	for dst := range img.Config.Volumes {
+		dst = strings.TrimSpace(dst)
+		if dst == "" {
+			continue
+		}
+		vols = append(vols, dst)
+	}
+	sort.Strings(vols)
+	return vols, nil
+}
+
+func sanitizeVolumeDestination(dst string) string {
+	s := strings.TrimSpace(strings.TrimPrefix(dst, "/"))
+	if s == "" {
+		return "_root"
+	}
+	s = strings.ReplaceAll(s, "/", "_")
+	return s
+}
+
+func sanitizeComponentVolumeKey(name string) string {
+	s := strings.TrimSpace(name)
+	if s == "" {
+		return "_default"
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(s, "/", "_"), " ", "_")
+}
+
+func defaultImageVolumeRootDir() string {
+	return defaultString(os.Getenv("KEYSTONE_IMAGE_VOLUME_DIR"), "runtime/containervolumes/image")
+}
+
+func hasEnvKey(env []string, key string) bool {
+	prefix := key + "="
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveImageVolumeRootDir() (string, error) {
+	root := defaultImageVolumeRootDir()
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve image volume root %q: %w", root, err)
+	}
+	return absRoot, nil
+}
+
+func (r *ContainerRunner) ensureCNI() error {
+	r.cniOnce.Do(func() {
+		c, err := gocni.New(
+			gocni.WithPluginDir(r.cniPluginDir),
+			gocni.WithPluginConfDir(r.cniConfDir),
+			gocni.WithPluginMaxConfNum(1),
+		)
+		if err != nil {
+			r.cniErr = err
+			return
+		}
+		if err := c.Load(gocni.WithLoNetwork, gocni.WithDefaultConf); err != nil {
+			r.cniErr = err
+			return
+		}
+		r.cni = c
+	})
+	return r.cniErr
+}
+
+func buildCNINamespaceOpts(opts Options) []gocni.NamespaceOpts {
+	var nsOpts []gocni.NamespaceOpts
+	if len(opts.Labels) > 0 {
+		nsOpts = append(nsOpts, gocni.WithLabels(opts.Labels))
+	}
+	if len(opts.Ports) > 0 {
+		portMap := make([]gocni.PortMapping, 0, len(opts.Ports))
+		for _, p := range opts.Ports {
+			proto := defaultString(strings.ToLower(p.Protocol), "tcp")
+			if proto != "tcp" && proto != "udp" {
+				proto = "tcp"
+			}
+			hostIP := strings.TrimSpace(p.HostIP)
+			// CNI portmap treats empty host IP as "all interfaces".
+			// Passing 0.0.0.0 can lead to rules that never match.
+			if hostIP == "0.0.0.0" || hostIP == "::" {
+				hostIP = ""
+			}
+			portMap = append(portMap, gocni.PortMapping{
+				HostPort:      int32(p.HostPort),
+				ContainerPort: int32(p.ContainerPort),
+				Protocol:      proto,
+				HostIP:        hostIP,
+			})
+		}
+		nsOpts = append(nsOpts, gocni.WithCapabilityPortMap(portMap))
+	}
+	return nsOpts
+}
+
+func (r *ContainerRunner) cleanupContainerResources(ctx context.Context, ch *ContainerHandle) {
+	if ch == nil {
+		return
+	}
+	cleanupCtx, cancel := cleanupContext(ctx, 8*time.Second)
+	defer cancel()
+
+	if ch.cniConfigured && ch.netNS != nil && r.cni != nil {
+		if err := r.cni.Remove(cleanupCtx, ch.containerID, ch.netNS.GetPath(), ch.cniNamespaceOpts...); err != nil {
+			log.Printf("[container] warning: cni remove failed for %s: %v", ch.containerID, err)
+		}
+		ch.cniConfigured = false
+	}
+	if ch.task != nil {
+		if _, err := ch.task.Delete(cleanupCtx); err != nil {
+			log.Printf("[container] warning: task delete for %s failed: %v", ch.containerID, err)
+		}
+	}
+	if ch.container != nil {
+		if err := ch.container.Delete(cleanupCtx, client.WithSnapshotCleanup); err != nil {
+			log.Printf("[container] warning: container delete for %s failed: %v", ch.containerID, err)
+		}
+	}
+	if ch.netNS != nil {
+		if err := ch.netNS.Remove(); err != nil {
+			log.Printf("[container] warning: netns remove failed for %s: %v", ch.containerID, err)
+		}
+		ch.netNS = nil
+	}
+}
+
+func defaultString(v, def string) string {
+	if strings.TrimSpace(v) == "" {
+		return def
+	}
+	return v
+}
+
+func cleanupContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		timeout = 8 * time.Second
+	}
+	if ctx != nil && ctx.Err() == nil {
+		return context.WithTimeout(ctx, timeout)
+	}
+	return context.WithTimeout(context.Background(), timeout)
+}
+
 // monitorTask monitors the task exit and sends the result to the handle's done channel.
 func (r *ContainerRunner) monitorTask(ctx context.Context, h *ContainerHandle) {
 	exitCh, err := h.task.Wait(ctx)
@@ -535,6 +845,7 @@ func ProbeHealthContainer(hc HealthConfig, opts Options, ch *ContainerHandle) bo
 			&specs.Process{
 				Args: []string{"/bin/sh", "-c", cmdStr},
 				Cwd:  "/",
+				Env:  buildHealthExecEnv(opts.Env),
 			},
 			cio.NullIO,
 		)
@@ -562,4 +873,20 @@ func ProbeHealthContainer(hc HealthConfig, opts Options, ch *ContainerHandle) bo
 	}
 
 	return true
+}
+
+func buildHealthExecEnv(containerEnv []string) []string {
+	env := make([]string, 0, len(containerEnv)+2)
+	hasPath := false
+	for _, kv := range containerEnv {
+		if strings.HasPrefix(kv, "PATH=") {
+			hasPath = true
+		}
+		env = append(env, kv)
+	}
+	if !hasPath {
+		// Keep a sane default PATH for shell-based probes.
+		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	}
+	return env
 }
