@@ -240,6 +240,18 @@ echo "Container stopped"
 | `type` | string | `"bind"` | Mount type: `bind`, `volume`, `tmpfs` |
 | `read_only` | bool | `false` | Mount as read-only |
 
+Mount paths support host-side environment interpolation (Compose-like behavior).
+Keystone resolves variables from its own host environment when the recipe is loaded.
+
+```toml
+[[lifecycle.run.container.mounts]]
+source = "$KEYSTONE_HOME/containervolumes/influxdb"
+target = "/var/lib/influxdb2"
+type = "bind"
+```
+
+If a variable is not defined, the unresolved token remains in the string and Keystone logs a warning.
+
 When using the `containerd` runner, Keystone also mounts image-declared volumes (`Config.Volumes`)
 so behavior matches Docker/nerdctl for images that expect writable paths (for example `/etc/influxdb2`).
 If a destination is declared both by the image and by `[[lifecycle.run.container.mounts]]`, the explicit recipe mount wins.

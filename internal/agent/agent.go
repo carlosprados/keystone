@@ -40,6 +40,7 @@ type Agent struct {
 	closed  atomic.Bool
 	start   time.Time
 	mu      sync.RWMutex
+	snapMu  sync.Mutex
 	comps   *store.MemoryStore
 	handles map[string]runner.Handle // Process or container handles
 	runners map[string]runner.Runner // Runner instances (for containers that need cleanup)
@@ -738,6 +739,18 @@ func defaultString(s, def string) string {
 	return s
 }
 
+func expandContainerMountEnv(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return value
+	}
+	// Compose-like interpolation from Keystone host environment.
+	expanded := os.ExpandEnv(value)
+	if strings.Contains(expanded, "$") {
+		log.Printf("[agent] warning: unresolved env var in container mount path: %q -> %q", value, expanded)
+	}
+	return expanded
+}
+
 // createRunner creates the appropriate runner based on the recipe's run type.
 // It returns the runner and a cleanup function (for containers).
 func (a *Agent) createRunner(r *recipe.Recipe) (runner.Runner, func(), error) {
@@ -819,9 +832,11 @@ func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Op
 
 	var mounts []runner.Mount
 	for _, m := range c.Mounts {
+		source := expandContainerMountEnv(m.Source)
+		target := expandContainerMountEnv(m.Target)
 		mounts = append(mounts, runner.Mount{
-			Source:   m.Source,
-			Target:   m.Target,
+			Source:   source,
+			Target:   target,
 			Type:     m.Type,
 			ReadOnly: m.ReadOnly,
 		})
@@ -915,6 +930,9 @@ func computeReadyTimeout(r *recipe.Recipe) time.Duration {
 }
 
 func (a *Agent) persistSnapshot() {
+	a.snapMu.Lock()
+	defer a.snapMu.Unlock()
+
 	snap := state.Snapshot{
 		Plan: state.PlanStatus{
 			Path:    a.planPath,

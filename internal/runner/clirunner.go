@@ -164,7 +164,7 @@ func (r *CLIRunner) Stop(ctx context.Context, h Handle, timeout time.Duration) e
 			}
 		case <-ctx.Done():
 			// Continue with best-effort rm -f below.
-			log.Printf("[clirunner] warning: stop context done for %s, forcing remove", shortID(containerID))
+			log.Printf("[clirunner] component=%s container_id=%s msg=stop context done, forcing remove", name, shortID(containerID))
 		}
 	}
 
