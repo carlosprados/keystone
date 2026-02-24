@@ -36,15 +36,20 @@ type Options struct {
 // Agent is the top-level runtime handle for Keystone.
 // For the MVP it only exposes health and a tiny local API surface.
 type Agent struct {
-	opts    Options
-	closed  atomic.Bool
-	start   time.Time
-	mu      sync.RWMutex
-	snapMu  sync.Mutex
-	comps   *store.MemoryStore
-	handles map[string]runner.Handle // Process or container handles
-	runners map[string]runner.Runner // Runner instances (for containers that need cleanup)
-	cancels map[string]context.CancelFunc
+	opts   Options
+	closed atomic.Bool
+	start  time.Time
+	mu     sync.RWMutex
+	snapMu sync.Mutex
+	// applyInProgress acts as a process-wide critical section for plan apply operations.
+	applyInProgress atomic.Bool
+	comps           *store.MemoryStore
+	handles         map[string]runner.Handle // Process or container handles
+	runners         map[string]runner.Runner // Runner instances (for containers that need cleanup)
+	cancels         map[string]context.CancelFunc
+	// applySkipStart marks components that should be kept running as-is during
+	// the current reconcile apply pass.
+	applySkipStart map[string]bool
 	// shutdown context - set via SetContext, used for graceful shutdown
 	ctx       context.Context
 	ctxCancel context.CancelFunc
@@ -77,16 +82,17 @@ func New(opts Options) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	a := &Agent{
-		opts:      opts,
-		start:     time.Now(),
-		comps:     store.NewMemoryStore(),
-		recipes:   store.NewRecipeStore(filepath.Join("runtime", "recipes")),
-		handles:   make(map[string]runner.Handle),
-		runners:   make(map[string]runner.Runner),
-		cancels:   make(map[string]context.CancelFunc),
-		stateDir:  filepath.Join("runtime", "state"),
-		ctx:       ctx,
-		ctxCancel: cancel,
+		opts:           opts,
+		start:          time.Now(),
+		comps:          store.NewMemoryStore(),
+		recipes:        store.NewRecipeStore(filepath.Join("runtime", "recipes")),
+		handles:        make(map[string]runner.Handle),
+		runners:        make(map[string]runner.Runner),
+		cancels:        make(map[string]context.CancelFunc),
+		applySkipStart: make(map[string]bool),
+		stateDir:       filepath.Join("runtime", "state"),
+		ctx:            ctx,
+		ctxCancel:      cancel,
 	}
 	// Set artifact cache limit from env (bytes). Default: 2 GiB.
 	a.artifactCacheLimit = 2 * 1024 * 1024 * 1024
@@ -254,53 +260,63 @@ func (a *Agent) applyPlan(planPath string) error {
 	planMap := make([]state.PlanComponent, 0, len(p.Components))
 	// First pass: load all recipes and build name mapping recipeMeta -> compName
 	type loaded struct {
-		item deploy.Component
-		rec  *recipe.Recipe
+		item   deploy.Component
+		rec    *recipe.Recipe
+		digest string
+		id     string
 	}
 	var loadedList []loaded
 	metaToComp := map[string]string{}
+	compRecipes := map[string]*recipe.Recipe{}
 	for _, it := range p.Components {
-		// Try to load from path first, then from store
-		r, err := recipe.Load(it.RecipePath)
-		if err != nil {
-			// Try to resolve from store if it looks like name:version or if load failed
-			// For now, if load fails, try to find it in store by assuming RecipePath is name-version
-			// but better: if it contains ":", split it.
-			name, version := it.Name, "" // default
-			if parts := strings.Split(it.RecipePath, ":"); len(parts) == 2 {
-				name, version = parts[0], parts[1]
-			} else {
-				// fallback: use the path as name if it doesn't look like a real path
-				if !strings.Contains(it.RecipePath, "/") && !strings.Contains(it.RecipePath, ".") {
-					name = it.RecipePath
-				}
-			}
-
-			if path, serr := a.recipes.GetPath(name, version); serr == nil {
-				r, err = recipe.Load(path)
-			}
-		}
-
+		r, _, digest, err := a.resolveRecipeRef(it.RecipePath)
 		if err != nil {
 			return fmt.Errorf("failed to load recipe for %s (path: %s): %w", it.Name, it.RecipePath, err)
 		}
-		loadedList = append(loadedList, loaded{item: it, rec: r})
+		loadedList = append(loadedList, loaded{
+			item:   it,
+			rec:    r,
+			digest: digest,
+			id:     recipeIdentity(r),
+		})
 		metaToComp[r.Metadata.Name] = it.Name
+		compRecipes[it.Name] = r
 	}
 	// Second pass: compute deps among plan components using recipe dependencies
 	for _, l := range loadedList {
 		// compute dep component names
 		var depNames []string
 		for _, d := range l.rec.Dependencies {
-			if compName, ok := metaToComp[d.Name]; ok {
-				depNames = append(depNames, compName)
+			compName, ok := metaToComp[d.Name]
+			if !ok {
+				if isHardDependency(d.Type) {
+					return fmt.Errorf("component %s has hard dependency %q not present in plan", l.item.Name, d.Name)
+				}
+				log.Printf("[agent] component=%s msg=soft dependency %q not present in plan (ignored)", l.item.Name, d.Name)
+				continue
 			}
+			depRec := compRecipes[compName]
+			satisfied, derr := dependencyVersionSatisfied(d.Version, depRec.Metadata.Version)
+			if derr != nil {
+				return fmt.Errorf("component %s dependency %q has invalid version constraint %q: %w", l.item.Name, d.Name, d.Version, derr)
+			}
+			if !satisfied {
+				if isHardDependency(d.Type) {
+					return fmt.Errorf("component %s hard dependency %q constraint %q not satisfied by %s", l.item.Name, d.Name, d.Version, depRec.Metadata.Version)
+				}
+				log.Printf("[agent] component=%s msg=soft dependency %q constraint %q not satisfied by %s (ignored)", l.item.Name, d.Name, d.Version, depRec.Metadata.Version)
+				continue
+			}
+			depNames = append(depNames, compName)
 		}
 		planMap = append(planMap, state.PlanComponent{
-			Name:       l.item.Name,
-			RecipePath: l.item.RecipePath,
-			RecipeMeta: l.rec.Metadata.Name,
-			Deps:       depNames,
+			Name:          l.item.Name,
+			RecipePath:    l.item.RecipePath,
+			RecipeMeta:    l.rec.Metadata.Name,
+			RecipeVersion: l.rec.Metadata.Version,
+			RecipeID:      l.id,
+			RecipeDigest:  l.digest,
+			Deps:          depNames,
 		})
 	}
 	// Build supervisor components now using computed deps
@@ -318,6 +334,9 @@ func (a *Agent) applyPlan(planPath string) error {
 		}
 		r := l.rec
 		it := l.item
+		a.mu.RLock()
+		skipStart := a.applySkipStart[it.Name]
+		a.mu.RUnlock()
 		var startedOnce sync.Once
 		healthBasedReady := false
 		var readySignaled atomic.Bool
@@ -344,6 +363,9 @@ func (a *Agent) applyPlan(planPath string) error {
 		workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
 		artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)
 		installFn := func(ctx context.Context) error {
+			if skipStart {
+				return nil
+			}
 			// Download and verify artifacts
 			for _, adef := range r.Artifacts {
 				httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
@@ -413,6 +435,10 @@ func (a *Agent) applyPlan(planPath string) error {
 			return nil
 		}
 		startFn := func(ctx context.Context) error {
+			if skipStart {
+				signalReady()
+				return nil
+			}
 			// Create the appropriate runner
 			compRunner, runnerCleanup, err := a.createRunner(r)
 			if err != nil {
@@ -565,6 +591,9 @@ func (a *Agent) applyPlan(planPath string) error {
 			return nil
 		}
 		stopFn := func(ctx context.Context) error {
+			if skipStart {
+				return nil
+			}
 			a.mu.RLock()
 			h := a.handles[it.Name]
 			compRunner := a.runners[it.Name]
@@ -591,6 +620,10 @@ func (a *Agent) applyPlan(planPath string) error {
 		readyCh := make(chan struct{})
 		startErrCh := make(chan error, 1)
 		c := supervisor.NewComponent(it.Name, depNames, installFn, startFn, stopFn)
+		if skipStart {
+			c.MarkRunningForReuse()
+			log.Printf("[agent] component=%s msg=reusing existing running instance (no restart)", it.Name)
+		}
 		c.ReadyCh = readyCh
 		c.ReadyErrCh = startErrCh
 		c.ReadyTimeout = computeReadyTimeout(r)
@@ -1349,17 +1382,6 @@ func topoOrder(edges map[string][]string, indeg map[string]int) []string {
 		}
 	}
 	return order
-}
-
-// ApplyPlan runs the deployment plan with optional dry-run mode.
-// This is the main entry point for plan application from any adapter.
-func (a *Agent) ApplyPlan(planPath string, dry bool) error {
-	if dry {
-		saved := a.dryRun
-		a.dryRun = true
-		defer func() { a.dryRun = saved }()
-	}
-	return a.applyPlan(planPath)
 }
 
 // ApplyPlanContent saves the raw plan TOML to a local file and applies it.

@@ -5,10 +5,12 @@ go 1.24.3
 toolchain go1.24.7
 
 require (
+	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/containerd/containerd/v2 v2.2.1
 	github.com/containerd/go-cni v1.1.13
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/nats-io/nats.go v1.48.0
+	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.3.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
@@ -61,7 +63,6 @@ require (
 	github.com/nats-io/nkeys v0.4.11 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
-	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/opencontainers/selinux v1.13.1 // indirect
 	github.com/petermattis/goid v0.0.0-20240813172612-4fcff4a6cae7 // indirect
 	github.com/pkg/errors v0.9.1 // indirect

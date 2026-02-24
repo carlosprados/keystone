@@ -17,11 +17,23 @@ var _ adapter.CommandHandler = (*Agent)(nil)
 func (a *Agent) GetPlanStatus() *adapter.PlanStatus {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+
+	planNames := make(map[string]struct{}, len(a.planComps))
+	for _, pc := range a.planComps {
+		planNames[pc.Name] = struct{}{}
+	}
+	all := a.comps.List()
+	components := make([]store.ComponentInfo, 0, len(planNames))
+	for _, ci := range all {
+		if _, ok := planNames[ci.Name]; ok {
+			components = append(components, ci)
+		}
+	}
 	return &adapter.PlanStatus{
 		PlanPath:   a.planPath,
 		Status:     a.planStatus,
 		Error:      a.planErr,
-		Components: a.comps.List(),
+		Components: components,
 	}
 }
 

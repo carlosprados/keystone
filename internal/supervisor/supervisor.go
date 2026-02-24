@@ -51,6 +51,16 @@ func NewComponent(name string, deps []string, install, start, stop func(context.
 	return &Component{Name: name, Deps: deps, state: StateNone, InstallFn: install, StartFn: start, StopFn: stop, ReadyTimeout: 15 * time.Second}
 }
 
+// MarkRunningForReuse marks the component as already running without emitting
+// state transition logs. This is used by reconcile flows that reuse an
+// existing process/container instance and should avoid misleading lifecycle
+// transitions.
+func (c *Component) MarkRunningForReuse() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state = StateRunning
+}
+
 // State returns the current component state.
 func (c *Component) State() State {
 	c.mu.Lock()
