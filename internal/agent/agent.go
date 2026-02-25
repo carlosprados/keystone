@@ -1229,12 +1229,14 @@ func (a *Agent) stopComponent(name string) {
 			log.Printf("agent: stopComponent Stop error name=%s err=%v", name, stopErr)
 		}
 	}
-	// Update store (no need to hold a.mu here)
+	// Update store (no need to hold a.mu here). Keep a historical record even
+	// if the component was not present in memory at stop time.
 	ci, ok := a.comps.Get(name)
-	if ok {
-		ci.State = "stopped"
-		a.comps.Upsert(ci)
+	if !ok {
+		ci = store.ComponentInfo{Name: name}
 	}
+	ci.State = "stopped"
+	a.comps.Upsert(ci)
 	// Best-effort lifecycle shutdown hook for this component.
 	shCtx, shCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := a.runComponentShutdownScript(shCtx, name); err != nil {

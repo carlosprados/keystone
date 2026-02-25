@@ -82,6 +82,9 @@ func TestSubjects(t *testing.T) {
 	if s.CmdApply != "keystone.device-001.cmd.apply" {
 		t.Errorf("unexpected CmdApply subject: %s", s.CmdApply)
 	}
+	if s.CmdComponents != "keystone.device-001.cmd.components" {
+		t.Errorf("unexpected CmdComponents subject: %s", s.CmdComponents)
+	}
 
 	if s.EventState != "keystone.device-001.events.state" {
 		t.Errorf("unexpected EventState subject: %s", s.EventState)
@@ -248,6 +251,21 @@ func TestAdapter_Integration(t *testing.T) {
 
 	if !healthResp.Success {
 		t.Errorf("expected success, got error: %s", healthResp.Error)
+	}
+
+	// Request components
+	resp, err = client.Request(subjects.CmdComponents, []byte("{}"), 2*time.Second)
+	if err != nil {
+		t.Fatalf("failed to request components: %v", err)
+	}
+
+	var componentsResp Response
+	if err := json.Unmarshal(resp.Data, &componentsResp); err != nil {
+		t.Fatalf("failed to unmarshal components response: %v", err)
+	}
+
+	if !componentsResp.Success {
+		t.Errorf("expected success, got error: %s", componentsResp.Error)
 	}
 
 	// Test cmd.apply

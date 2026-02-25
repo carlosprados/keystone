@@ -234,6 +234,7 @@ func (a *Adapter) setupSubscriptions() error {
 		{a.subjects.CmdApply, a.handleApply},
 		{a.subjects.CmdStop, a.handleStop},
 		{a.subjects.CmdStatus, a.handleStatus},
+		{a.subjects.CmdComponents, a.handleComponents},
 		{a.subjects.CmdGraph, a.handleGraph},
 		{a.subjects.CmdRestart, a.handleRestart},
 		{a.subjects.CmdStopComp, a.handleStopComponent},
@@ -299,6 +300,13 @@ func (a *Adapter) handleStop(msg *nats.Msg) {
 func (a *Adapter) handleStatus(msg *nats.Msg) {
 	log.Printf("[nats] cmd.status")
 	a.respond(msg, NewSuccessResponse(a.handler.GetPlanStatus()))
+}
+
+func (a *Adapter) handleComponents(msg *nats.Msg) {
+	log.Printf("[nats] cmd.components")
+	a.respond(msg, NewSuccessResponse(&ComponentsResponse{
+		Components: a.handler.GetComponents(),
+	}))
 }
 
 func (a *Adapter) handleGraph(msg *nats.Msg) {

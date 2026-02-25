@@ -167,7 +167,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 	opts.SetOnConnectHandler(func(c pahomqtt.Client) {
 		log.Printf("[mqtt] connected to %s as %s", a.cfg.Broker, clientID)
 		// Re-subscribe on reconnect
-		if err := a.setupSubscriptions(); err != nil {
+		if err := a.setupSubscriptionsWithClient(c); err != nil {
 			log.Printf("[mqtt] failed to setup subscriptions: %v", err)
 		}
 		// Publish online status
@@ -265,21 +265,25 @@ func (a *Adapter) setupSubscriptions() error {
 	a.mu.RLock()
 	client := a.client
 	a.mu.RUnlock()
+	return a.setupSubscriptionsWithClient(client)
+}
 
+func (a *Adapter) setupSubscriptionsWithClient(client pahomqtt.Client) error {
 	if client == nil {
 		return fmt.Errorf("not connected")
 	}
 
 	subs := map[string]pahomqtt.MessageHandler{
-		a.topics.CmdApply:     a.handleApply,
-		a.topics.CmdStop:      a.handleStop,
-		a.topics.CmdStatus:    a.handleStatus,
-		a.topics.CmdGraph:     a.handleGraph,
-		a.topics.CmdRestart:   a.handleRestart,
-		a.topics.CmdStopComp:  a.handleStopComponent,
-		a.topics.CmdHealth:    a.handleHealth,
-		a.topics.CmdRecipes:   a.handleRecipes,
-		a.topics.CmdAddRecipe: a.handleAddRecipe,
+		a.topics.CmdApply:      a.handleApply,
+		a.topics.CmdStop:       a.handleStop,
+		a.topics.CmdStatus:     a.handleStatus,
+		a.topics.CmdComponents: a.handleComponents,
+		a.topics.CmdGraph:      a.handleGraph,
+		a.topics.CmdRestart:    a.handleRestart,
+		a.topics.CmdStopComp:   a.handleStopComponent,
+		a.topics.CmdHealth:     a.handleHealth,
+		a.topics.CmdRecipes:    a.handleRecipes,
+		a.topics.CmdAddRecipe:  a.handleAddRecipe,
 	}
 
 	for topic, handler := range subs {
@@ -344,6 +348,16 @@ func (a *Adapter) handleStatus(client pahomqtt.Client, msg pahomqtt.Message) {
 
 	log.Printf("[mqtt] cmd/status")
 	a.respond(a.topics.RespStatus, req.CorrelationID, NewSuccessResponse(req.CorrelationID, a.handler.GetPlanStatus()))
+}
+
+func (a *Adapter) handleComponents(client pahomqtt.Client, msg pahomqtt.Message) {
+	var req SimpleRequest
+	_ = json.Unmarshal(msg.Payload(), &req)
+
+	log.Printf("[mqtt] cmd/components")
+	a.respond(a.topics.RespComponents, req.CorrelationID, NewSuccessResponse(req.CorrelationID, &ComponentsResponse{
+		Components: a.handler.GetComponents(),
+	}))
 }
 
 func (a *Adapter) handleGraph(client pahomqtt.Client, msg pahomqtt.Message) {

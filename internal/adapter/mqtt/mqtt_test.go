@@ -34,6 +34,7 @@ func TestNewTopics(t *testing.T) {
 	assert.Equal(t, "keystone/device-123/cmd/apply", topics.CmdApply)
 	assert.Equal(t, "keystone/device-123/cmd/stop", topics.CmdStop)
 	assert.Equal(t, "keystone/device-123/cmd/status", topics.CmdStatus)
+	assert.Equal(t, "keystone/device-123/cmd/components", topics.CmdComponents)
 	assert.Equal(t, "keystone/device-123/cmd/graph", topics.CmdGraph)
 	assert.Equal(t, "keystone/device-123/cmd/restart", topics.CmdRestart)
 	assert.Equal(t, "keystone/device-123/cmd/stop-comp", topics.CmdStopComp)
@@ -45,6 +46,7 @@ func TestNewTopics(t *testing.T) {
 	assert.Equal(t, "keystone/device-123/resp/apply", topics.RespApply)
 	assert.Equal(t, "keystone/device-123/resp/stop", topics.RespStop)
 	assert.Equal(t, "keystone/device-123/resp/status", topics.RespStatus)
+	assert.Equal(t, "keystone/device-123/resp/components", topics.RespComponents)
 	assert.Equal(t, "keystone/device-123/resp/graph", topics.RespGraph)
 	assert.Equal(t, "keystone/device-123/resp/restart", topics.RespRestart)
 	assert.Equal(t, "keystone/device-123/resp/stop-comp", topics.RespStopComp)
@@ -66,6 +68,7 @@ func TestTopicsResponseTopic(t *testing.T) {
 		{topics.CmdApply, topics.RespApply},
 		{topics.CmdStop, topics.RespStop},
 		{topics.CmdStatus, topics.RespStatus},
+		{topics.CmdComponents, topics.RespComponents},
 		{topics.CmdGraph, topics.RespGraph},
 		{topics.CmdRestart, topics.RespRestart},
 		{topics.CmdStopComp, topics.RespStopComp},
