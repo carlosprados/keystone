@@ -9,6 +9,8 @@ type ComponentInfo struct {
 	Restarts   int    `json:"restarts"`
 	LastHealth string `json:"last_health"` // healthy|unhealthy|unknown
 	PID        int    `json:"pid"`
+	Recipe     string `json:"recipe,omitempty"`  // Recipe reference used in plan (path or name:version)
+	Version    string `json:"version,omitempty"` // Resolved metadata.version from loaded recipe
 }
 
 // MemoryStore is a tiny in-memory store for components.
@@ -36,6 +38,12 @@ func (s *MemoryStore) Upsert(ci ComponentInfo) {
 		}
 		if ci.PID == 0 {
 			ci.PID = prev.PID
+		}
+		if ci.Recipe == "" {
+			ci.Recipe = prev.Recipe
+		}
+		if ci.Version == "" {
+			ci.Version = prev.Version
 		}
 	}
 	if ci.LastHealth == "" {

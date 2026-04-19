@@ -120,11 +120,11 @@ type AddRecipeResponse struct {
 
 // StateEvent is published when component state changes.
 type StateEvent struct {
-	Timestamp  time.Time           `json:"timestamp"`
-	DeviceID   string              `json:"deviceId"`
+	Timestamp  time.Time             `json:"timestamp"`
+	DeviceID   string                `json:"deviceId"`
 	Components []store.ComponentInfo `json:"components"`
-	PlanStatus string              `json:"planStatus"`
-	PlanPath   string              `json:"planPath,omitempty"`
+	PlanStatus string                `json:"planStatus"`
+	PlanPath   string                `json:"planPath,omitempty"`
 }
 
 // HealthEvent is published periodically with health status.

@@ -24,10 +24,13 @@ type Snapshot struct {
 
 // PlanComponent persists mapping from component name to recipe and deps.
 type PlanComponent struct {
-	Name       string   `json:"name"`
-	RecipePath string   `json:"recipe_path"`
-	RecipeMeta string   `json:"recipe_meta"`
-	Deps       []string `json:"deps"`
+	Name          string   `json:"name"`
+	RecipePath    string   `json:"recipe_path"`
+	RecipeMeta    string   `json:"recipe_meta"`
+	RecipeVersion string   `json:"recipe_version,omitempty"`
+	RecipeID      string   `json:"recipe_id,omitempty"`
+	RecipeDigest  string   `json:"recipe_digest,omitempty"`
+	Deps          []string `json:"deps"`
 }
 
 // Save persists the snapshot to disk atomically.
@@ -58,7 +61,7 @@ func Save(dir string, snap Snapshot) error {
 		return err
 	}
 	if info.Size() != int64(len(b)) {
-		_ = os.Remove(tmp) // Cleanup
+		_ = os.Remove(tmp)   // Cleanup
 		return os.ErrInvalid // Partial write detected
 	}
 

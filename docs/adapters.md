@@ -214,6 +214,7 @@ All subjects use the pattern `keystone.{deviceId}.*`:
 | `keystone.{deviceId}.cmd.apply` | Apply a deployment plan |
 | `keystone.{deviceId}.cmd.stop` | Stop all components |
 | `keystone.{deviceId}.cmd.status` | Get plan status |
+| `keystone.{deviceId}.cmd.components` | Get components list |
 | `keystone.{deviceId}.cmd.graph` | Get dependency graph |
 | `keystone.{deviceId}.cmd.restart` | Restart a component |
 | `keystone.{deviceId}.cmd.stop-comp` | Stop a specific component |
@@ -346,6 +347,12 @@ The MQTT adapter provides IoT-friendly communication, compatible with popular MQ
 | `--mqtt-state-interval` | `10s` | State event publish interval (0 to disable) |
 | `--mqtt-health-interval` | `30s` | Health event publish interval (0 to disable) |
 
+Environment variable equivalents are supported (flags take precedence):
+`KEYSTONE_MQTT_BROKER`, `KEYSTONE_MQTT_DEVICE_ID`, `KEYSTONE_MQTT_CLIENT_ID`,
+`KEYSTONE_MQTT_TLS_CERT`, `KEYSTONE_MQTT_TLS_KEY`, `KEYSTONE_MQTT_TLS_CA`,
+`KEYSTONE_MQTT_TLS_VERIFY`, `KEYSTONE_MQTT_USER`, `KEYSTONE_MQTT_PASS`,
+`KEYSTONE_MQTT_QOS`, `KEYSTONE_MQTT_STATE_INTERVAL`, `KEYSTONE_MQTT_HEALTH_INTERVAL`.
+
 ### Topic Patterns
 
 All topics use the pattern `keystone/{deviceId}/*`:
@@ -357,6 +364,7 @@ All topics use the pattern `keystone/{deviceId}/*`:
 | `keystone/{deviceId}/cmd/apply` | Apply a deployment plan |
 | `keystone/{deviceId}/cmd/stop` | Stop all components |
 | `keystone/{deviceId}/cmd/status` | Get plan status |
+| `keystone/{deviceId}/cmd/components` | Get components list |
 | `keystone/{deviceId}/cmd/graph` | Get dependency graph |
 | `keystone/{deviceId}/cmd/restart` | Restart a component |
 | `keystone/{deviceId}/cmd/stop-comp` | Stop a specific component |
@@ -371,6 +379,7 @@ All topics use the pattern `keystone/{deviceId}/*`:
 | `keystone/{deviceId}/resp/apply` | Apply response |
 | `keystone/{deviceId}/resp/stop` | Stop response |
 | `keystone/{deviceId}/resp/status` | Status response |
+| `keystone/{deviceId}/resp/components` | Components response |
 | `keystone/{deviceId}/resp/graph` | Graph response |
 | `keystone/{deviceId}/resp/restart` | Restart response |
 | `keystone/{deviceId}/resp/stop-comp` | Stop component response |
@@ -483,11 +492,23 @@ Adapters can run simultaneously. A typical production setup might use:
 
 ## Environment Variables
 
-Some adapter settings can be configured via environment variables:
+Adapter settings configurable via environment variables (flags take precedence):
 
 | Variable | Description |
 |----------|-------------|
-| `KEYSTONE_DEVICE_ID` | Default device ID for NATS/MQTT (if not specified via flags) |
+| `KEYSTONE_DEVICE_ID` | Default device ID for NATS/MQTT (if not specified via flags). |
+| `KEYSTONE_MQTT_BROKER` | MQTT broker URL (used if `--mqtt-broker` is not passed). |
+| `KEYSTONE_MQTT_DEVICE_ID` | MQTT-specific device ID (used if `--mqtt-device-id` is not passed). |
+| `KEYSTONE_MQTT_CLIENT_ID` | MQTT client ID (used if `--mqtt-client-id` is not passed). |
+| `KEYSTONE_MQTT_TLS_CERT` | Path to MQTT client TLS certificate. |
+| `KEYSTONE_MQTT_TLS_KEY` | Path to MQTT client TLS private key. |
+| `KEYSTONE_MQTT_TLS_CA` | Path to MQTT CA certificate. |
+| `KEYSTONE_MQTT_TLS_VERIFY` | Verify MQTT broker certificate (`true`/`false`). |
+| `KEYSTONE_MQTT_USER` | MQTT username. |
+| `KEYSTONE_MQTT_PASS` | MQTT password. |
+| `KEYSTONE_MQTT_QOS` | MQTT QoS level for commands/responses (0, 1, 2). |
+| `KEYSTONE_MQTT_STATE_INTERVAL` | MQTT state event interval (`10s`, `30s`, `0` to disable). |
+| `KEYSTONE_MQTT_HEALTH_INTERVAL` | MQTT health event interval (`30s`, `0` to disable). |
 
 ## Troubleshooting
 

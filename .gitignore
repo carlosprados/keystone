@@ -39,3 +39,6 @@ go.work.sum
 
 # keystone runtime
 runtime
+
+#OS Files
+.DS_Store

@@ -17,11 +17,23 @@ var _ adapter.CommandHandler = (*Agent)(nil)
 func (a *Agent) GetPlanStatus() *adapter.PlanStatus {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+
+	planNames := make(map[string]struct{}, len(a.planComps))
+	for _, pc := range a.planComps {
+		planNames[pc.Name] = struct{}{}
+	}
+	all := a.comps.List()
+	components := make([]store.ComponentInfo, 0, len(planNames))
+	for _, ci := range all {
+		if _, ok := planNames[ci.Name]; ok {
+			components = append(components, ci)
+		}
+	}
 	return &adapter.PlanStatus{
 		PlanPath:   a.planPath,
 		Status:     a.planStatus,
 		Error:      a.planErr,
-		Components: a.comps.List(),
+		Components: components,
 	}
 }
 
@@ -62,21 +74,31 @@ func (a *Agent) GetComponents() []store.ComponentInfo {
 
 // StopPlan stops all running components.
 func (a *Agent) StopPlan() error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	return a.stopPlanInternal(true)
+}
 
-	for name, cancel := range a.cancels {
+func (a *Agent) stopPlanInternal(markPlanStopped bool) error {
+	a.mu.Lock()
+	cancels := a.cancels
+	handles := a.handles
+	runnersByName := a.runners
+	a.cancels = make(map[string]context.CancelFunc)
+	a.handles = make(map[string]runner.Handle)
+	a.runners = make(map[string]runner.Runner)
+	a.mu.Unlock()
+
+	// Cancel managed loops first so restart_policy does not relaunch components while stopping.
+	for _, cancel := range cancels {
 		if cancel != nil {
 			cancel()
 		}
-		delete(a.cancels, name)
 	}
 
 	pr := runner.NewProcessRunner()
-	for name, h := range a.handles {
-		stopCtx, stopCancel := context.WithTimeout(a.Context(), 10*time.Second)
+	for name, h := range handles {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		// Use stored runner if available, otherwise use appropriate runner based on type
-		if compRunner, ok := a.runners[name]; ok {
+		if compRunner, ok := runnersByName[name]; ok {
 			_ = compRunner.Stop(stopCtx, h, 5*time.Second)
 		} else if _, ok := h.(*runner.ProcessHandle); ok {
 			_ = pr.Stop(stopCtx, h, 5*time.Second)
@@ -86,19 +108,28 @@ func (a *Agent) StopPlan() error {
 				_ = clir.Stop(stopCtx, h, 5*time.Second)
 			}
 		}
+		shCtx, shCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = a.runComponentShutdownScript(shCtx, name)
+		shCancel()
 		stopCancel()
-		delete(a.handles, name)
 		if ci, ok := a.comps.Get(name); ok {
 			ci.State = "stopped"
 			a.comps.Upsert(ci)
 		}
 	}
-	// Clean up runners
-	for name := range a.runners {
-		delete(a.runners, name)
+
+	// Close runners that hold resources (e.g., containerd client).
+	for _, rr := range runnersByName {
+		if c, ok := rr.(interface{ Close() error }); ok {
+			_ = c.Close()
+		}
 	}
 
-	a.planStatus = "stopped"
+	if markPlanStopped {
+		a.mu.Lock()
+		a.planStatus = "stopped"
+		a.mu.Unlock()
+	}
 	return nil
 }
 
