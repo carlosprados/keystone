@@ -83,6 +83,23 @@ demo/
 
 Todos los scripts se ejecutan desde la **raíz del repo**.
 
+> **Alternativa con Task.** Hay un `demo/Taskfile.yml` que envuelve todos los
+> scripts. Desde la raíz del repo: `task -t demo/Taskfile.yml --list` para ver
+> las tareas. Equivalencias útiles:
+>
+> | Script                              | Tarea equivalente                         |
+> |-------------------------------------|-------------------------------------------|
+> | `./demo/scripts/build.sh`           | `task -t demo/Taskfile.yml build`         |
+> | `./demo/scripts/serve-artifacts.sh` | `task -t demo/Taskfile.yml serve`         |
+> | `./demo/scripts/run-agent.sh`       | `task -t demo/Taskfile.yml agent`         |
+> | `./demo/scripts/apply-v1.sh`        | `task -t demo/Taskfile.yml apply:v1`      |
+> | `./demo/scripts/apply-v2.sh`        | `task -t demo/Taskfile.yml apply:v2`      |
+> | `./demo/scripts/status.sh`          | `task -t demo/Taskfile.yml status`        |
+> | `./demo/scripts/clean.sh`           | `task -t demo/Taskfile.yml clean`         |
+>
+> Extras del Taskfile: `probe:v1`, `probe:v2`, `graph`, `components`,
+> `demo:up` (build+apply v1+probe) y `demo:upgrade` (apply v2+probe).
+
 ### Terminal 1 — repositorio de artefactos
 
 ```bash
@@ -262,3 +279,128 @@ recipes renderizadas:
 ### Repositorio de artefactos
 
 - `keystoneserver` — `:9000/<nombre-de-binario>`, `:9000/healthz`
+
+## Extra: ejecutar la demo también sobre NATS o MQTT
+
+La demo usa HTTP (`keystonectl apply`) porque es lo más simple para mostrar en
+directo, pero Keystone es **multi-adapter**: puedes arrancar el agente con HTTP
++ NATS + MQTT simultáneamente y aplicar el mismo plan por cualquiera de los
+tres. Útil si después del demo base queréis ver cómo se orquesta una flota
+remota.
+
+Referencia completa: `docs/adapters.md`.
+
+### Ruta rápida con NATS (embebido en contenedor)
+
+1. **Arranca un NATS local** (sin autenticación, solo para demo):
+
+   ```bash
+   docker run --rm -d --name nats -p 4222:4222 nats:2
+   ```
+
+2. **Relanza el agente con el adaptador NATS**, además de HTTP:
+
+   ```bash
+   ./keystone \
+     --http :8080 \
+     --nats-url nats://localhost:4222 \
+     --nats-device-id edge-demo
+   ```
+
+3. **Aplica el plan vía NATS** con `nats` CLI (también vale `nats-top`):
+
+   ```bash
+   # Instalar: go install github.com/nats-io/natscli/nats@latest
+   nats request 'keystone.edge-demo.cmd.apply' \
+     "$(cat demo/plans/plan-v1.toml)" \
+     --timeout 10s
+   ```
+
+   El agente responde con el estado del plan. Luego el update v2:
+
+   ```bash
+   nats request 'keystone.edge-demo.cmd.apply' \
+     "$(cat demo/plans/plan-v2.toml)" \
+     --timeout 10s
+   ```
+
+4. **Suscríbete a los eventos de estado y salud** (otra terminal):
+
+   ```bash
+   nats sub 'keystone.edge-demo.events.>'
+   ```
+
+   Verás en tiempo real las transiciones `state:running`, `health:healthy`,
+   restarts, etc. Esto es lo que una plataforma de flota consume.
+
+Subjects relevantes (reemplaza `edge-demo` por tu `--nats-device-id`):
+
+| Subject                              | Uso                               |
+|--------------------------------------|-----------------------------------|
+| `keystone.edge-demo.cmd.apply`       | Apply plan (payload = TOML)       |
+| `keystone.edge-demo.cmd.stop`        | Stop plan                         |
+| `keystone.edge-demo.cmd.status`      | Estado del plan                   |
+| `keystone.edge-demo.cmd.graph`       | Grafo de dependencias             |
+| `keystone.edge-demo.cmd.restart`     | Reinicio de componente            |
+| `keystone.edge-demo.events.state`    | Eventos de estado publicados      |
+| `keystone.edge-demo.events.health`   | Eventos de salud publicados       |
+
+### Ruta rápida con MQTT (Mosquitto local)
+
+1. **Arranca Mosquitto**:
+
+   ```bash
+   docker run --rm -d --name mosquitto -p 1883:1883 eclipse-mosquitto:2 \
+     mosquitto -c /mosquitto-no-auth.conf
+   ```
+
+2. **Relanza el agente con MQTT**:
+
+   ```bash
+   ./keystone \
+     --http :8080 \
+     --mqtt-broker tcp://localhost:1883 \
+     --mqtt-device-id edge-demo
+   ```
+
+3. **Aplica el plan publicando el TOML** en el topic `apply`:
+
+   ```bash
+   mosquitto_pub -h localhost \
+     -t 'keystone/edge-demo/cmd/apply' \
+     -f demo/plans/plan-v1.toml -q 1
+   ```
+
+4. **Observa eventos**:
+
+   ```bash
+   mosquitto_sub -h localhost -t 'keystone/edge-demo/events/#' -q 1
+   ```
+
+Topics relevantes:
+
+| Topic                                  | Uso                         |
+|----------------------------------------|-----------------------------|
+| `keystone/edge-demo/cmd/apply`         | Apply plan (payload = TOML) |
+| `keystone/edge-demo/cmd/stop`          | Stop plan                   |
+| `keystone/edge-demo/cmd/status`        | Estado del plan             |
+| `keystone/edge-demo/events/state`      | Eventos de estado           |
+| `keystone/edge-demo/events/health`     | Eventos de salud            |
+| `keystone/edge-demo/status` (LWT)      | `online` / `offline`        |
+
+### Qué contar en esta parte de la demo
+
+- **El mismo `Agent` y la misma `CommandHandler` detrás de los tres adaptadores.**
+  Las recipes y el plan son idénticos. El adaptador solo cambia el transporte.
+- **Los eventos MQTT/NATS son el mecanismo para monitorizar una flota remota**:
+  lo que aquí vemos como logs en terminal, una plataforma los consume por
+  subject/topic y los agrega.
+- **LWT (Last Will & Testament) de MQTT** marca el dispositivo como `offline`
+  si pierde conexión — clave para inventarios edge.
+- **Para producción**: añadir TLS (`--nats-tls-ca`, `--mqtt-tls-ca`, …) y
+  autenticación (NKey/creds en NATS, user/pass o mTLS en MQTT). Todo vía flags.
+
+> Nota: los binarios de demo (`config`, `producer`, `consumer`) siguen
+> expuestos por HTTP desde `keystoneserver :9000`. NATS/MQTT solo transportan
+> el *control plane* (aplicar planes, recibir estado); la descarga de
+> artefactos sigue siendo HTTP(S).

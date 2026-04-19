@@ -1,0 +1,147 @@
+version: "3"
+
+# Taskfile de la demo de Keystone.
+# Se ejecuta desde la raíz del repo:
+#   task -t demo/Taskfile.yml <tarea>
+# o entrando:
+#   cd demo && task <tarea>
+#
+# Todas las tareas asumen CWD = raíz del repo. Si entras en demo/, las tareas
+# ajustan el cwd automáticamente.
+
+vars:
+  ROOT:
+    sh: git rev-parse --show-toplevel
+  CTL_ADDR: '{{.CTL_ADDR | default "http://127.0.0.1:8080"}}'
+
+tasks:
+  default:
+    desc: Lista las tareas de la demo
+    cmds:
+      - task -t demo/Taskfile.yml --list
+    dir: "{{.ROOT}}"
+
+  build:
+    desc: Compila los 6 binarios y renderiza las recipes con SHA-256
+    dir: "{{.ROOT}}"
+    cmds:
+      - ./demo/scripts/build.sh
+
+  serve:
+    desc: "Levanta keystoneserver en :9000 sirviendo demo/artifacts (foreground)"
+    dir: "{{.ROOT}}"
+    deps: [keystone-bins]
+    cmds:
+      - ./demo/scripts/serve-artifacts.sh
+
+  agent:
+    desc: "Levanta el agente keystone en :8080 (foreground)"
+    dir: "{{.ROOT}}"
+    deps: [keystone-bins]
+    cmds:
+      - ./demo/scripts/run-agent.sh
+
+  apply:v1:
+    desc: Aplica el plan v1 (primer despliegue)
+    dir: "{{.ROOT}}"
+    deps: [keystone-bins]
+    cmds:
+      - ./keystonectl --addr {{.CTL_ADDR}} apply demo/plans/plan-v1.toml
+
+  apply:v2:
+    desc: Aplica el plan v2 (actualización atómica v1 -> v2)
+    dir: "{{.ROOT}}"
+    deps: [keystone-bins]
+    cmds:
+      - ./keystonectl --addr {{.CTL_ADDR}} apply demo/plans/plan-v2.toml
+
+  status:
+    desc: Estado del agente + endpoints de los servicios de demo
+    dir: "{{.ROOT}}"
+    cmds:
+      - ./demo/scripts/status.sh
+
+  graph:
+    desc: Muestra el DAG y orden topológico del plan aplicado
+    dir: "{{.ROOT}}"
+    deps: [keystone-bins]
+    cmds:
+      - ./keystonectl --addr {{.CTL_ADDR}} graph
+
+  components:
+    desc: Lista los componentes en ejecución
+    dir: "{{.ROOT}}"
+    deps: [keystone-bins]
+    cmds:
+      - ./keystonectl --addr {{.CTL_ADDR}} components
+
+  probe:v1:
+    desc: Hace curl a los tres endpoints esperando respuestas de v1.0.0
+    dir: "{{.ROOT}}"
+    cmds:
+      - 'echo "--- config ---"   && curl -s http://localhost:7001/config'
+      - 'echo ""'
+      - 'echo "--- producer ---" && curl -s http://localhost:7002/events | head -c 300'
+      - 'echo ""'
+      - 'echo "--- consumer ---" && curl -s http://localhost:7003/stats'
+      - 'echo ""'
+
+  probe:v2:
+    desc: Prueba endpoints nuevos que solo existen en v2 (producer /metrics, etc.)
+    dir: "{{.ROOT}}"
+    cmds:
+      - 'echo "--- config v2 ---"          && curl -s http://localhost:7001/config'
+      - 'echo ""'
+      - 'echo "--- producer v2 metrics ---" && curl -s http://localhost:7002/metrics'
+      - 'echo ""'
+      - 'echo "--- consumer v2 stats ---"  && curl -s http://localhost:7003/stats'
+      - 'echo ""'
+
+  stop-plan:
+    desc: Para todos los componentes del plan en el agente
+    dir: "{{.ROOT}}"
+    deps: [keystone-bins]
+    cmds:
+      - ./keystonectl --addr {{.CTL_ADDR}} stop-plan
+
+  clean:
+    desc: Para el plan y borra runtime/
+    dir: "{{.ROOT}}"
+    cmds:
+      - ./demo/scripts/clean.sh
+
+  clean:deep:
+    desc: Limpieza profunda (runtime + binarios demo + recipes renderizadas)
+    dir: "{{.ROOT}}"
+    cmds:
+      - ./demo/scripts/clean.sh --deep
+
+  demo:up:
+    desc: "Secuencia típica para arrancar la demo (build + apply v1). Requiere agent y serve corriendo aparte."
+    dir: "{{.ROOT}}"
+    cmds:
+      - task: build
+      - task: apply:v1
+      - sleep 6
+      - task: probe:v1
+
+  demo:upgrade:
+    desc: "Dispara el update v1 -> v2 y valida endpoints"
+    dir: "{{.ROOT}}"
+    cmds:
+      - task: apply:v2
+      - sleep 8
+      - task: probe:v2
+
+  # Tarea interna: asegura que ./keystone, ./keystonectl, ./keystoneserver existen.
+  keystone-bins:
+    internal: true
+    dir: "{{.ROOT}}"
+    cmds:
+      - test -x ./keystone || task build
+      - test -x ./keystonectl || task build
+      - test -x ./keystoneserver || task build
+    status:
+      - test -x ./keystone
+      - test -x ./keystonectl
+      - test -x ./keystoneserver
