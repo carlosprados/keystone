@@ -79,6 +79,9 @@ func (r *CLIRunner) Start(ctx context.Context, opts Options) (Handle, error) {
 	if opts.Image == "" {
 		return nil, fmt.Errorf("empty image")
 	}
+	if err := r.cleanupStaleManagedContainers(ctx, opts.Name); err != nil {
+		log.Printf("[clirunner] component=%s warning: stale cleanup failed: %v", opts.Name, err)
+	}
 
 	// Build run arguments
 	args := r.buildRunArgs(opts)
@@ -122,12 +125,16 @@ func (r *CLIRunner) Start(ctx context.Context, opts Options) (Handle, error) {
 
 // Stop stops a container using the CLI.
 func (r *CLIRunner) Stop(ctx context.Context, h Handle, timeout time.Duration) error {
-	ch, ok := h.(*CLIHandle)
-	if !ok {
-		return fmt.Errorf("invalid handle type for CLIRunner: expected *CLIHandle, got %T", h)
-	}
-	if ch == nil || ch.containerID == "" {
+	if h == nil || h.ID() == "" {
 		return nil
+	}
+	containerID := h.ID()
+	name := h.Name()
+	var done <-chan error
+	if ch, ok := h.(*CLIHandle); ok && ch != nil {
+		containerID = ch.containerID
+		name = ch.name
+		done = ch.done
 	}
 
 	if timeout <= 0 {
@@ -135,36 +142,44 @@ func (r *CLIRunner) Stop(ctx context.Context, h Handle, timeout time.Duration) e
 	}
 
 	// Stop container with timeout
-	stopArgs := []string{"stop", "-t", strconv.Itoa(int(timeout.Seconds())), ch.containerID}
+	stopArgs := []string{"stop", "-t", strconv.Itoa(int(timeout.Seconds())), containerID}
 	cmd := exec.CommandContext(ctx, r.cli, stopArgs...)
 	if err := cmd.Run(); err != nil {
 		log.Printf("[clirunner] warning: %s stop failed: %v", r.cli, err)
 	}
 
-	// Wait for container to exit
-	select {
-	case <-ch.done:
-		// Container exited
-	case <-time.After(timeout + 5*time.Second):
-		// Force kill
-		log.Printf("[clirunner] timeout waiting for container %s, forcing kill", ch.containerID[:12])
-		killArgs := []string{"kill", ch.containerID}
-		killCmd := exec.CommandContext(ctx, r.cli, killArgs...)
-		if err := killCmd.Run(); err != nil {
-			log.Printf("[clirunner] warning: %s kill failed: %v", r.cli, err)
+	// Wait for container to exit when we have a live done channel.
+	// If we don't (e.g. handle restored from snapshot), continue to rm -f directly.
+	if done != nil {
+		select {
+		case <-done:
+			// Container exited
+		case <-time.After(timeout + 5*time.Second):
+			// Force kill
+			log.Printf("[clirunner] timeout waiting for container %s, forcing kill", shortID(containerID))
+			killArgs := []string{"kill", containerID}
+			killCmd := exec.CommandContext(ctx, r.cli, killArgs...)
+			if err := killCmd.Run(); err != nil {
+				log.Printf("[clirunner] warning: %s kill failed: %v", r.cli, err)
+			}
+		case <-ctx.Done():
+			// Continue with best-effort rm -f below.
+			log.Printf("[clirunner] component=%s container_id=%s msg=stop context done, forcing remove", name, shortID(containerID))
 		}
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 
 	// Remove container
-	rmArgs := []string{"rm", "-f", ch.containerID}
-	rmCmd := exec.CommandContext(ctx, r.cli, rmArgs...)
+	rmArgs := []string{"rm", "-f", containerID}
+	rmCtx, rmCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer rmCancel()
+	rmCmd := exec.CommandContext(rmCtx, r.cli, rmArgs...)
 	if err := rmCmd.Run(); err != nil {
 		log.Printf("[clirunner] warning: %s rm failed: %v", r.cli, err)
+	} else {
+		log.Printf("[clirunner] component=%s container_id=%s msg=container removed", name, shortID(containerID))
 	}
 
-	log.Printf("[clirunner] component=%s container_id=%s msg=container stopped", ch.name, ch.containerID[:12])
+	log.Printf("[clirunner] component=%s container_id=%s msg=container stopped", name, shortID(containerID))
 	return nil
 }
 
@@ -185,6 +200,7 @@ func (r *CLIRunner) RunManaged(ctx context.Context, name string, opts Options, h
 		// Start
 		handle, err := r.Start(ctx, opts)
 		if err != nil {
+			log.Printf("[clirunner] component=%s error=%v msg=start attempt failed", name, err)
 			retries++
 			if maxRetries > 0 && retries > maxRetries {
 				errLimit := fmt.Errorf("start failed after %d retries: %w", maxRetries, err)
@@ -299,6 +315,9 @@ func (r *CLIRunner) RunManaged(ctx context.Context, name string, opts Options, h
 // buildRunArgs builds the CLI arguments for running a container.
 func (r *CLIRunner) buildRunArgs(opts Options) []string {
 	args := []string{"run", "-d", "--name", fmt.Sprintf("keystone-%s-%d", opts.Name, time.Now().UnixNano())}
+	// Keystone ownership labels: used for safe cleanup/adoption of managed CLI containers.
+	args = append(args, "--label", "keystone.managed=true")
+	args = append(args, "--label", fmt.Sprintf("keystone.component=%s", opts.Name))
 
 	// Environment variables
 	for _, env := range opts.Env {
@@ -490,4 +509,92 @@ func (r *CLIRunner) StreamLogs(ctx context.Context, h *CLIHandle) {
 	}()
 
 	_ = cmd.Wait()
+}
+
+func (r *CLIRunner) cleanupStaleManagedContainers(ctx context.Context, componentName string) error {
+	if strings.TrimSpace(componentName) == "" {
+		return nil
+	}
+	prefix := fmt.Sprintf("keystone-%s-", componentName)
+	args := []string{
+		"ps", "-a",
+		"--filter", "label=keystone.managed=true",
+		"--filter", "label=keystone.component=" + componentName,
+		"--format", "{{.ID}} {{.Names}} {{.Status}}",
+	}
+	cmd := exec.CommandContext(ctx, r.cli, args...)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Errorf("%s ps failed: %s", r.cli, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return err
+	}
+
+	for _, ln := range strings.Split(string(out), "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		fields := strings.Fields(ln)
+		if len(fields) < 2 {
+			continue
+		}
+		id := fields[0]
+		name := fields[1]
+		status := strings.ToLower(strings.Join(fields[2:], " "))
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		// Keep currently running containers; remove the rest.
+		if strings.HasPrefix(status, "up") || strings.Contains(status, "running") {
+			continue
+		}
+		rm := exec.CommandContext(ctx, r.cli, "rm", "-f", id)
+		if err := rm.Run(); err != nil {
+			log.Printf("[clirunner] component=%s container_id=%s warning: stale container remove failed: %v", componentName, shortID(id), err)
+			continue
+		}
+		log.Printf("[clirunner] component=%s container_id=%s msg=removed stale container", componentName, shortID(id))
+	}
+
+	// Backward-compat cleanup: old containers created before labels were added.
+	fallback := exec.CommandContext(ctx, r.cli, "ps", "-a", "--format", "{{.ID}} {{.Names}} {{.Status}}")
+	fout, ferr := fallback.Output()
+	if ferr != nil {
+		return nil
+	}
+	for _, ln := range strings.Split(string(fout), "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		fields := strings.Fields(ln)
+		if len(fields) < 2 {
+			continue
+		}
+		id := fields[0]
+		name := fields[1]
+		status := strings.ToLower(strings.Join(fields[2:], " "))
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if strings.HasPrefix(status, "up") || strings.Contains(status, "running") {
+			continue
+		}
+		rm := exec.CommandContext(ctx, r.cli, "rm", "-f", id)
+		if err := rm.Run(); err != nil {
+			log.Printf("[clirunner] component=%s container_id=%s warning: stale container remove failed: %v", componentName, shortID(id), err)
+			continue
+		}
+		log.Printf("[clirunner] component=%s container_id=%s msg=removed stale container", componentName, shortID(id))
+	}
+	return nil
+}
+
+func shortID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12]
 }

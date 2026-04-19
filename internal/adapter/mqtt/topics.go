@@ -6,27 +6,29 @@ import "fmt"
 // All topics are prefixed with "keystone/{deviceId}/" for multi-tenancy.
 const (
 	// Command topics (agent subscribes to these)
-	TopicCmdApply     = "keystone/%s/cmd/apply"      // Apply a deployment plan
-	TopicCmdStop      = "keystone/%s/cmd/stop"       // Stop all components
-	TopicCmdStatus    = "keystone/%s/cmd/status"     // Get plan status
-	TopicCmdGraph     = "keystone/%s/cmd/graph"      // Get dependency graph
-	TopicCmdRestart   = "keystone/%s/cmd/restart"    // Restart a component
-	TopicCmdStopComp  = "keystone/%s/cmd/stop-comp"  // Stop a component
-	TopicCmdHealth    = "keystone/%s/cmd/health"     // Get health status
-	TopicCmdRecipes   = "keystone/%s/cmd/recipes"    // List recipes
-	TopicCmdAddRecipe = "keystone/%s/cmd/add-recipe" // Add a recipe
+	TopicCmdApply      = "keystone/%s/cmd/apply"      // Apply a deployment plan
+	TopicCmdStop       = "keystone/%s/cmd/stop"       // Stop all components
+	TopicCmdStatus     = "keystone/%s/cmd/status"     // Get plan status
+	TopicCmdComponents = "keystone/%s/cmd/components" // Get components list
+	TopicCmdGraph      = "keystone/%s/cmd/graph"      // Get dependency graph
+	TopicCmdRestart    = "keystone/%s/cmd/restart"    // Restart a component
+	TopicCmdStopComp   = "keystone/%s/cmd/stop-comp"  // Stop a component
+	TopicCmdHealth     = "keystone/%s/cmd/health"     // Get health status
+	TopicCmdRecipes    = "keystone/%s/cmd/recipes"    // List recipes
+	TopicCmdAddRecipe  = "keystone/%s/cmd/add-recipe" // Add a recipe
 
 	// Response topics (agent publishes responses here)
 	// The response topic is derived from the command: cmd/X -> resp/X
-	TopicRespApply     = "keystone/%s/resp/apply"
-	TopicRespStop      = "keystone/%s/resp/stop"
-	TopicRespStatus    = "keystone/%s/resp/status"
-	TopicRespGraph     = "keystone/%s/resp/graph"
-	TopicRespRestart   = "keystone/%s/resp/restart"
-	TopicRespStopComp  = "keystone/%s/resp/stop-comp"
-	TopicRespHealth    = "keystone/%s/resp/health"
-	TopicRespRecipes   = "keystone/%s/resp/recipes"
-	TopicRespAddRecipe = "keystone/%s/resp/add-recipe"
+	TopicRespApply      = "keystone/%s/resp/apply"
+	TopicRespStop       = "keystone/%s/resp/stop"
+	TopicRespStatus     = "keystone/%s/resp/status"
+	TopicRespComponents = "keystone/%s/resp/components"
+	TopicRespGraph      = "keystone/%s/resp/graph"
+	TopicRespRestart    = "keystone/%s/resp/restart"
+	TopicRespStopComp   = "keystone/%s/resp/stop-comp"
+	TopicRespHealth     = "keystone/%s/resp/health"
+	TopicRespRecipes    = "keystone/%s/resp/recipes"
+	TopicRespAddRecipe  = "keystone/%s/resp/add-recipe"
 
 	// Event topics (agent publishes these)
 	TopicEventState  = "keystone/%s/events/state"  // State changes
@@ -41,27 +43,29 @@ type Topics struct {
 	deviceID string
 
 	// Commands (agent subscribes to these)
-	CmdApply     string
-	CmdStop      string
-	CmdStatus    string
-	CmdGraph     string
-	CmdRestart   string
-	CmdStopComp  string
-	CmdHealth    string
-	CmdRecipes   string
-	CmdAddRecipe string
-	CmdWildcard  string
+	CmdApply      string
+	CmdStop       string
+	CmdStatus     string
+	CmdComponents string
+	CmdGraph      string
+	CmdRestart    string
+	CmdStopComp   string
+	CmdHealth     string
+	CmdRecipes    string
+	CmdAddRecipe  string
+	CmdWildcard   string
 
 	// Responses (agent publishes to these)
-	RespApply     string
-	RespStop      string
-	RespStatus    string
-	RespGraph     string
-	RespRestart   string
-	RespStopComp  string
-	RespHealth    string
-	RespRecipes   string
-	RespAddRecipe string
+	RespApply      string
+	RespStop       string
+	RespStatus     string
+	RespComponents string
+	RespGraph      string
+	RespRestart    string
+	RespStopComp   string
+	RespHealth     string
+	RespRecipes    string
+	RespAddRecipe  string
 
 	// Events (agent publishes to these)
 	EventState  string
@@ -73,26 +77,28 @@ func NewTopics(deviceID string) *Topics {
 	return &Topics{
 		deviceID: deviceID,
 
-		CmdApply:     fmt.Sprintf(TopicCmdApply, deviceID),
-		CmdStop:      fmt.Sprintf(TopicCmdStop, deviceID),
-		CmdStatus:    fmt.Sprintf(TopicCmdStatus, deviceID),
-		CmdGraph:     fmt.Sprintf(TopicCmdGraph, deviceID),
-		CmdRestart:   fmt.Sprintf(TopicCmdRestart, deviceID),
-		CmdStopComp:  fmt.Sprintf(TopicCmdStopComp, deviceID),
-		CmdHealth:    fmt.Sprintf(TopicCmdHealth, deviceID),
-		CmdRecipes:   fmt.Sprintf(TopicCmdRecipes, deviceID),
-		CmdAddRecipe: fmt.Sprintf(TopicCmdAddRecipe, deviceID),
-		CmdWildcard:  fmt.Sprintf(TopicCmdWildcard, deviceID),
+		CmdApply:      fmt.Sprintf(TopicCmdApply, deviceID),
+		CmdStop:       fmt.Sprintf(TopicCmdStop, deviceID),
+		CmdStatus:     fmt.Sprintf(TopicCmdStatus, deviceID),
+		CmdComponents: fmt.Sprintf(TopicCmdComponents, deviceID),
+		CmdGraph:      fmt.Sprintf(TopicCmdGraph, deviceID),
+		CmdRestart:    fmt.Sprintf(TopicCmdRestart, deviceID),
+		CmdStopComp:   fmt.Sprintf(TopicCmdStopComp, deviceID),
+		CmdHealth:     fmt.Sprintf(TopicCmdHealth, deviceID),
+		CmdRecipes:    fmt.Sprintf(TopicCmdRecipes, deviceID),
+		CmdAddRecipe:  fmt.Sprintf(TopicCmdAddRecipe, deviceID),
+		CmdWildcard:   fmt.Sprintf(TopicCmdWildcard, deviceID),
 
-		RespApply:     fmt.Sprintf(TopicRespApply, deviceID),
-		RespStop:      fmt.Sprintf(TopicRespStop, deviceID),
-		RespStatus:    fmt.Sprintf(TopicRespStatus, deviceID),
-		RespGraph:     fmt.Sprintf(TopicRespGraph, deviceID),
-		RespRestart:   fmt.Sprintf(TopicRespRestart, deviceID),
-		RespStopComp:  fmt.Sprintf(TopicRespStopComp, deviceID),
-		RespHealth:    fmt.Sprintf(TopicRespHealth, deviceID),
-		RespRecipes:   fmt.Sprintf(TopicRespRecipes, deviceID),
-		RespAddRecipe: fmt.Sprintf(TopicRespAddRecipe, deviceID),
+		RespApply:      fmt.Sprintf(TopicRespApply, deviceID),
+		RespStop:       fmt.Sprintf(TopicRespStop, deviceID),
+		RespStatus:     fmt.Sprintf(TopicRespStatus, deviceID),
+		RespComponents: fmt.Sprintf(TopicRespComponents, deviceID),
+		RespGraph:      fmt.Sprintf(TopicRespGraph, deviceID),
+		RespRestart:    fmt.Sprintf(TopicRespRestart, deviceID),
+		RespStopComp:   fmt.Sprintf(TopicRespStopComp, deviceID),
+		RespHealth:     fmt.Sprintf(TopicRespHealth, deviceID),
+		RespRecipes:    fmt.Sprintf(TopicRespRecipes, deviceID),
+		RespAddRecipe:  fmt.Sprintf(TopicRespAddRecipe, deviceID),
 
 		EventState:  fmt.Sprintf(TopicEventState, deviceID),
 		EventHealth: fmt.Sprintf(TopicEventHealth, deviceID),
@@ -113,6 +119,8 @@ func (t *Topics) ResponseTopic(cmdTopic string) string {
 		return t.RespStop
 	case t.CmdStatus:
 		return t.RespStatus
+	case t.CmdComponents:
+		return t.RespComponents
 	case t.CmdGraph:
 		return t.RespGraph
 	case t.CmdRestart:

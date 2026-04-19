@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -15,10 +16,14 @@ import (
 	mqttadapter "github.com/carlosprados/keystone/internal/adapter/mqtt"
 	natsadapter "github.com/carlosprados/keystone/internal/adapter/nats"
 	"github.com/carlosprados/keystone/internal/agent"
+	"github.com/carlosprados/keystone/internal/config"
 	"github.com/carlosprados/keystone/internal/version"
 )
 
 func main() {
+	// Load .env as early as possible so adapter configuration (flags/env) can use it.
+	config.LoadDotEnvDefault()
+
 	// HTTP adapter flags
 	httpAddr := flag.String("http", ":8080", "HTTP listen address (empty to disable)")
 
@@ -62,6 +67,80 @@ func main() {
 	demo := flag.Bool("demo", false, "Run a built-in demo: start a mock 3-component stack")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
+
+	// Track explicitly-set flags so env vars only fill missing values.
+	setFlags := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) {
+		setFlags[f.Name] = true
+	})
+
+	applyStringEnv := func(flagName string, dst *string, envKey string) {
+		if setFlags[flagName] {
+			return
+		}
+		if v, ok := os.LookupEnv(envKey); ok && v != "" {
+			*dst = v
+		}
+	}
+	applyBoolEnv := func(flagName string, dst *bool, envKey string) {
+		if setFlags[flagName] {
+			return
+		}
+		v, ok := os.LookupEnv(envKey)
+		if !ok || v == "" {
+			return
+		}
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			log.Printf("[main] warning: invalid boolean env %s=%q (ignored)", envKey, v)
+			return
+		}
+		*dst = parsed
+	}
+	applyIntEnv := func(flagName string, dst *int, envKey string) {
+		if setFlags[flagName] {
+			return
+		}
+		v, ok := os.LookupEnv(envKey)
+		if !ok || v == "" {
+			return
+		}
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			log.Printf("[main] warning: invalid integer env %s=%q (ignored)", envKey, v)
+			return
+		}
+		*dst = parsed
+	}
+	applyDurationEnv := func(flagName string, dst *time.Duration, envKey string) {
+		if setFlags[flagName] {
+			return
+		}
+		v, ok := os.LookupEnv(envKey)
+		if !ok || v == "" {
+			return
+		}
+		parsed, err := time.ParseDuration(v)
+		if err != nil {
+			log.Printf("[main] warning: invalid duration env %s=%q (ignored)", envKey, v)
+			return
+		}
+		*dst = parsed
+	}
+
+	// MQTT env support (flags always win over env vars).
+	applyStringEnv("mqtt-broker", mqttBroker, "KEYSTONE_MQTT_BROKER")
+	applyStringEnv("mqtt-device-id", mqttDeviceID, "KEYSTONE_MQTT_DEVICE_ID")
+	applyStringEnv("mqtt-client-id", mqttClientID, "KEYSTONE_MQTT_CLIENT_ID")
+	applyStringEnv("mqtt-tls-cert", mqttTLSCert, "KEYSTONE_MQTT_TLS_CERT")
+	applyStringEnv("mqtt-tls-key", mqttTLSKey, "KEYSTONE_MQTT_TLS_KEY")
+	applyStringEnv("mqtt-tls-ca", mqttTLSCA, "KEYSTONE_MQTT_TLS_CA")
+	applyBoolEnv("mqtt-tls-verify", mqttTLSVerify, "KEYSTONE_MQTT_TLS_VERIFY")
+	applyStringEnv("mqtt-user", mqttUser, "KEYSTONE_MQTT_USER")
+	applyStringEnv("mqtt-pass", mqttPass, "KEYSTONE_MQTT_PASS")
+	applyIntEnv("mqtt-qos", mqttQoS, "KEYSTONE_MQTT_QOS")
+	applyDurationEnv("mqtt-state-interval", mqttStateInterval, "KEYSTONE_MQTT_STATE_INTERVAL")
+	applyDurationEnv("mqtt-health-interval", mqttHealthInterval, "KEYSTONE_MQTT_HEALTH_INTERVAL")
 
 	if *showVersion {
 		fmt.Printf("keystone %s (%s)\n", version.Version, version.Commit)

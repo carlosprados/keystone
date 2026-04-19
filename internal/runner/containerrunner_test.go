@@ -2,6 +2,7 @@ package runner
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -142,4 +143,79 @@ func TestContainerRunner_Integration(t *testing.T) {
 
 	// This would test actual container operations
 	// Skipped by default since it requires containerd to be running
+}
+
+func TestSanitizeVolumeDestination(t *testing.T) {
+	cases := map[string]string{
+		"/etc/influxdb2": "etc_influxdb2",
+		"/var/lib/data":  "var_lib_data",
+		"/":              "_root",
+		"   /tmp/a  ":    "tmp_a",
+		"":               "_root",
+	}
+
+	for in, want := range cases {
+		got := sanitizeVolumeDestination(in)
+		if got != want {
+			t.Fatalf("sanitizeVolumeDestination(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDefaultImageVolumeRootDir(t *testing.T) {
+	os.Unsetenv("KEYSTONE_IMAGE_VOLUME_DIR")
+	if got := defaultImageVolumeRootDir(); got != "runtime/containervolumes/image" {
+		t.Fatalf("defaultImageVolumeRootDir() = %q, want %q", got, "runtime/containervolumes/image")
+	}
+
+	os.Setenv("KEYSTONE_IMAGE_VOLUME_DIR", "/tmp/kv")
+	defer os.Unsetenv("KEYSTONE_IMAGE_VOLUME_DIR")
+	if got := defaultImageVolumeRootDir(); got != "/tmp/kv" {
+		t.Fatalf("defaultImageVolumeRootDir() = %q, want %q", got, "/tmp/kv")
+	}
+}
+
+func TestSanitizeComponentVolumeKey(t *testing.T) {
+	cases := map[string]string{
+		"influxdb":      "influxdb",
+		" edge/guard  ": "edge_guard",
+		"":              "_default",
+	}
+	for in, want := range cases {
+		got := sanitizeComponentVolumeKey(in)
+		if got != want {
+			t.Fatalf("sanitizeComponentVolumeKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestResolveImageVolumeRootDir(t *testing.T) {
+	os.Unsetenv("KEYSTONE_IMAGE_VOLUME_DIR")
+	got, err := resolveImageVolumeRootDir()
+	if err != nil {
+		t.Fatalf("resolveImageVolumeRootDir() unexpected error: %v", err)
+	}
+	if !filepath.IsAbs(got) {
+		t.Fatalf("resolveImageVolumeRootDir() = %q, expected absolute path", got)
+	}
+
+	os.Setenv("KEYSTONE_IMAGE_VOLUME_DIR", "/tmp/keystone-image-vols")
+	defer os.Unsetenv("KEYSTONE_IMAGE_VOLUME_DIR")
+	got, err = resolveImageVolumeRootDir()
+	if err != nil {
+		t.Fatalf("resolveImageVolumeRootDir() unexpected error: %v", err)
+	}
+	if got != "/tmp/keystone-image-vols" {
+		t.Fatalf("resolveImageVolumeRootDir() = %q, want %q", got, "/tmp/keystone-image-vols")
+	}
+}
+
+func TestHasEnvKey(t *testing.T) {
+	env := []string{"A=1", "HOSTNAME=influxdb"}
+	if !hasEnvKey(env, "HOSTNAME") {
+		t.Fatalf("expected HOSTNAME to be detected")
+	}
+	if hasEnvKey(env, "MISSING") {
+		t.Fatalf("did not expect MISSING key")
+	}
 }

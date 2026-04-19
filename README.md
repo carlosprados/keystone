@@ -316,11 +316,26 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_LEAF_CERT`                  | Default certificate (PEM) for signature verification if not in recipe. |
 | `KEYSTONE_GITHUB_TOKEN`               | Default token for GitHub artifact downloads (if not in recipe).        |
 | `KEYSTONE_DEVICE_ID`                  | Device ID for NATS/MQTT topics (default: hostname).                    |
+| `KEYSTONE_MQTT_BROKER`                | MQTT broker URL (enables MQTT if set and `--mqtt-broker` not passed).  |
+| `KEYSTONE_MQTT_DEVICE_ID`             | MQTT device ID (overrides `KEYSTONE_DEVICE_ID` for MQTT only).         |
+| `KEYSTONE_MQTT_CLIENT_ID`             | MQTT client ID.                                                         |
+| `KEYSTONE_MQTT_TLS_CERT`              | Path to MQTT client TLS certificate.                                    |
+| `KEYSTONE_MQTT_TLS_KEY`               | Path to MQTT client TLS private key.                                    |
+| `KEYSTONE_MQTT_TLS_CA`                | Path to MQTT CA certificate bundle.                                     |
+| `KEYSTONE_MQTT_TLS_VERIFY`            | Verify MQTT broker certificate (`true`/`false`).                        |
+| `KEYSTONE_MQTT_USER`                  | MQTT username.                                                          |
+| `KEYSTONE_MQTT_PASS`                  | MQTT password.                                                          |
+| `KEYSTONE_MQTT_QOS`                   | MQTT QoS for command/response (0, 1, 2).                               |
+| `KEYSTONE_MQTT_STATE_INTERVAL`        | MQTT state event interval (e.g. `10s`, `0` to disable).                |
+| `KEYSTONE_MQTT_HEALTH_INTERVAL`       | MQTT health event interval (e.g. `30s`, `0` to disable).               |
 | `KEYSTONE_INSTALL_TIMEOUT`            | Install phase timeout (default: 2m). Supports duration strings.        |
 | `KEYSTONE_CONTAINERD_SOCKET`          | containerd socket path (default: `/run/containerd/containerd.sock`).   |
 | `KEYSTONE_CONTAINERD_NAMESPACE`       | containerd namespace for containers (default: `keystone`).             |
 | `KEYSTONE_CONTAINER_SNAPSHOTTER`      | Snapshotter for container images (default: `overlayfs`).               |
 | `KEYSTONE_CONTAINER_REGISTRY`         | Default container registry (default: `docker.io`).                     |
+| `KEYSTONE_CNI_CONF_DIR`               | CNI config directory for bridge mode (default: `/etc/cni/net.d`).      |
+| `KEYSTONE_CNI_PLUGIN_DIRS`            | CNI plugin dirs (default: `/opt/cni/bin:/usr/lib/cni`).                |
+| `KEYSTONE_CNI_NETNS_DIR`              | Netns dir for bridge mode (default: `/var/run/netns`).                 |
 
 ### Robust Artifact Downloads
 
@@ -482,6 +497,12 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 | `--mqtt-qos` | `1` | QoS level (0, 1, 2) |
 | `--mqtt-state-interval` | `10s` | State event interval (0 to disable) |
 | `--mqtt-health-interval` | `30s` | Health event interval (0 to disable) |
+
+Environment variable equivalents are also supported (flags take precedence):
+`KEYSTONE_MQTT_BROKER`, `KEYSTONE_MQTT_DEVICE_ID`, `KEYSTONE_MQTT_CLIENT_ID`,
+`KEYSTONE_MQTT_TLS_CERT`, `KEYSTONE_MQTT_TLS_KEY`, `KEYSTONE_MQTT_TLS_CA`,
+`KEYSTONE_MQTT_TLS_VERIFY`, `KEYSTONE_MQTT_USER`, `KEYSTONE_MQTT_PASS`,
+`KEYSTONE_MQTT_QOS`, `KEYSTONE_MQTT_STATE_INTERVAL`, `KEYSTONE_MQTT_HEALTH_INTERVAL`.
 
 </details>
 

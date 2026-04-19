@@ -19,13 +19,13 @@ type mockHandler struct {
 	planStatus *adapter.PlanStatus
 }
 
-func (m *mockHandler) ApplyPlan(planPath string, dry bool) error        { return nil }
-func (m *mockHandler) ApplyPlanContent(content string, dry bool) error  { return nil }
-func (m *mockHandler) StopPlan() error                                  { return nil }
-func (m *mockHandler) GetPlanStatus() *adapter.PlanStatus               { return m.planStatus }
-func (m *mockHandler) GetPlanGraph() *adapter.GraphInfo                 { return &adapter.GraphInfo{} }
-func (m *mockHandler) GetComponents() []store.ComponentInfo             { return m.components }
-func (m *mockHandler) StopComponent(name string) error                  { return nil }
+func (m *mockHandler) ApplyPlan(planPath string, dry bool) error       { return nil }
+func (m *mockHandler) ApplyPlanContent(content string, dry bool) error { return nil }
+func (m *mockHandler) StopPlan() error                                 { return nil }
+func (m *mockHandler) GetPlanStatus() *adapter.PlanStatus              { return m.planStatus }
+func (m *mockHandler) GetPlanGraph() *adapter.GraphInfo                { return &adapter.GraphInfo{} }
+func (m *mockHandler) GetComponents() []store.ComponentInfo            { return m.components }
+func (m *mockHandler) StopComponent(name string) error                 { return nil }
 func (m *mockHandler) RestartComponent(name string, wait string, timeout time.Duration) (*adapter.RestartResult, error) {
 	return &adapter.RestartResult{Component: name, PID: 1234}, nil
 }

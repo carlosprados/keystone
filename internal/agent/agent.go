@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -35,14 +36,20 @@ type Options struct {
 // Agent is the top-level runtime handle for Keystone.
 // For the MVP it only exposes health and a tiny local API surface.
 type Agent struct {
-	opts    Options
-	closed  atomic.Bool
-	start   time.Time
-	mu      sync.RWMutex
-	comps   *store.MemoryStore
-	handles map[string]runner.Handle     // Process or container handles
-	runners map[string]runner.Runner     // Runner instances (for containers that need cleanup)
-	cancels map[string]context.CancelFunc
+	opts   Options
+	closed atomic.Bool
+	start  time.Time
+	mu     sync.RWMutex
+	snapMu sync.Mutex
+	// applyInProgress acts as a process-wide critical section for plan apply operations.
+	applyInProgress atomic.Bool
+	comps           *store.MemoryStore
+	handles         map[string]runner.Handle // Process or container handles
+	runners         map[string]runner.Runner // Runner instances (for containers that need cleanup)
+	cancels         map[string]context.CancelFunc
+	// applySkipStart marks components that should be kept running as-is during
+	// the current reconcile apply pass.
+	applySkipStart map[string]bool
 	// shutdown context - set via SetContext, used for graceful shutdown
 	ctx       context.Context
 	ctxCancel context.CancelFunc
@@ -55,9 +62,9 @@ type Agent struct {
 	// plan mapping
 	planComps []state.PlanComponent
 	// cache budget
-	artifactCacheLimit   int64
+	artifactCacheLimit      int64
 	artifactDownloadTimeout time.Duration
-	dryRun             bool
+	dryRun                  bool
 	// trust
 	trustPool *x509.CertPool
 	trustPath string
@@ -75,16 +82,17 @@ func New(opts Options) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	a := &Agent{
-		opts:      opts,
-		start:    time.Now(),
-		comps:    store.NewMemoryStore(),
-		recipes:  store.NewRecipeStore(filepath.Join("runtime", "recipes")),
-		handles:  make(map[string]runner.Handle),
-		runners:  make(map[string]runner.Runner),
-		cancels:  make(map[string]context.CancelFunc),
-		stateDir: filepath.Join("runtime", "state"),
-		ctx:      ctx,
-		ctxCancel: cancel,
+		opts:           opts,
+		start:          time.Now(),
+		comps:          store.NewMemoryStore(),
+		recipes:        store.NewRecipeStore(filepath.Join("runtime", "recipes")),
+		handles:        make(map[string]runner.Handle),
+		runners:        make(map[string]runner.Runner),
+		cancels:        make(map[string]context.CancelFunc),
+		applySkipStart: make(map[string]bool),
+		stateDir:       filepath.Join("runtime", "state"),
+		ctx:            ctx,
+		ctxCancel:      cancel,
 	}
 	// Set artifact cache limit from env (bytes). Default: 2 GiB.
 	a.artifactCacheLimit = 2 * 1024 * 1024 * 1024
@@ -149,6 +157,12 @@ func New(opts Options) *Agent {
 func (a *Agent) Close() error {
 	if a.closed.Swap(true) {
 		return nil
+	}
+	// Stop managed components first (graceful) so lifecycle shutdown hooks run.
+	// Do not mark the plan as "stopped" here: on next boot we want to resume
+	// the last applied plan automatically.
+	if err := a.stopPlanInternal(false); err != nil {
+		log.Printf("[agent] warning: stop plan during close failed: %v", err)
 	}
 	// Cancel the agent context to signal all operations to stop
 	if a.ctxCancel != nil {
@@ -246,58 +260,69 @@ func (a *Agent) applyPlan(planPath string) error {
 	planMap := make([]state.PlanComponent, 0, len(p.Components))
 	// First pass: load all recipes and build name mapping recipeMeta -> compName
 	type loaded struct {
-		item deploy.Component
-		rec  *recipe.Recipe
+		item   deploy.Component
+		rec    *recipe.Recipe
+		digest string
+		id     string
 	}
 	var loadedList []loaded
 	metaToComp := map[string]string{}
+	compRecipes := map[string]*recipe.Recipe{}
 	for _, it := range p.Components {
-		// Try to load from path first, then from store
-		r, err := recipe.Load(it.RecipePath)
-		if err != nil {
-			// Try to resolve from store if it looks like name:version or if load failed
-			// For now, if load fails, try to find it in store by assuming RecipePath is name-version
-			// but better: if it contains ":", split it.
-			name, version := it.Name, "" // default
-			if parts := strings.Split(it.RecipePath, ":"); len(parts) == 2 {
-				name, version = parts[0], parts[1]
-			} else {
-				// fallback: use the path as name if it doesn't look like a real path
-				if !strings.Contains(it.RecipePath, "/") && !strings.Contains(it.RecipePath, ".") {
-					name = it.RecipePath
-				}
-			}
-
-			if path, serr := a.recipes.GetPath(name, version); serr == nil {
-				r, err = recipe.Load(path)
-			}
-		}
-
+		r, _, digest, err := a.resolveRecipeRef(it.RecipePath)
 		if err != nil {
 			return fmt.Errorf("failed to load recipe for %s (path: %s): %w", it.Name, it.RecipePath, err)
 		}
-		loadedList = append(loadedList, loaded{item: it, rec: r})
+		loadedList = append(loadedList, loaded{
+			item:   it,
+			rec:    r,
+			digest: digest,
+			id:     recipeIdentity(r),
+		})
 		metaToComp[r.Metadata.Name] = it.Name
+		compRecipes[it.Name] = r
 	}
 	// Second pass: compute deps among plan components using recipe dependencies
 	for _, l := range loadedList {
 		// compute dep component names
 		var depNames []string
 		for _, d := range l.rec.Dependencies {
-			if compName, ok := metaToComp[d.Name]; ok {
-				depNames = append(depNames, compName)
+			compName, ok := metaToComp[d.Name]
+			if !ok {
+				if isHardDependency(d.Type) {
+					return fmt.Errorf("component %s has hard dependency %q not present in plan", l.item.Name, d.Name)
+				}
+				log.Printf("[agent] component=%s msg=soft dependency %q not present in plan (ignored)", l.item.Name, d.Name)
+				continue
 			}
+			depRec := compRecipes[compName]
+			satisfied, derr := dependencyVersionSatisfied(d.Version, depRec.Metadata.Version)
+			if derr != nil {
+				return fmt.Errorf("component %s dependency %q has invalid version constraint %q: %w", l.item.Name, d.Name, d.Version, derr)
+			}
+			if !satisfied {
+				if isHardDependency(d.Type) {
+					return fmt.Errorf("component %s hard dependency %q constraint %q not satisfied by %s", l.item.Name, d.Name, d.Version, depRec.Metadata.Version)
+				}
+				log.Printf("[agent] component=%s msg=soft dependency %q constraint %q not satisfied by %s (ignored)", l.item.Name, d.Name, d.Version, depRec.Metadata.Version)
+				continue
+			}
+			depNames = append(depNames, compName)
 		}
 		planMap = append(planMap, state.PlanComponent{
-			Name:       l.item.Name,
-			RecipePath: l.item.RecipePath,
-			RecipeMeta: l.rec.Metadata.Name,
-			Deps:       depNames,
+			Name:          l.item.Name,
+			RecipePath:    l.item.RecipePath,
+			RecipeMeta:    l.rec.Metadata.Name,
+			RecipeVersion: l.rec.Metadata.Version,
+			RecipeID:      l.id,
+			RecipeDigest:  l.digest,
+			Deps:          depNames,
 		})
 	}
 	// Build supervisor components now using computed deps
 	// readiness channels per component (closed when process/container actually starts)
 	compReady := make(map[string]chan struct{})
+	compStartErr := make(map[string]chan error)
 	for _, l := range loadedList {
 		// find deps for this comp
 		var depNames []string
@@ -309,12 +334,38 @@ func (a *Agent) applyPlan(planPath string) error {
 		}
 		r := l.rec
 		it := l.item
+		a.mu.RLock()
+		skipStart := a.applySkipStart[it.Name]
+		a.mu.RUnlock()
 		var startedOnce sync.Once
 		healthBasedReady := false
+		var readySignaled atomic.Bool
+		signalReady := func() {
+			startedOnce.Do(func() {
+				readySignaled.Store(true)
+				if ch, ok := compReady[it.Name]; ok && ch != nil {
+					close(ch)
+				}
+			})
+		}
+		signalStartErr := func(err error) {
+			if err == nil || readySignaled.Load() {
+				return
+			}
+			if ch, ok := compStartErr[it.Name]; ok && ch != nil {
+				select {
+				case ch <- err:
+				default:
+				}
+			}
+		}
 		// Prepare workspace per component version
 		workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
 		artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)
 		installFn := func(ctx context.Context) error {
+			if skipStart {
+				return nil
+			}
 			// Download and verify artifacts
 			for _, adef := range r.Artifacts {
 				httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
@@ -353,6 +404,11 @@ func (a *Agent) applyPlan(planPath string) error {
 						_ = os.MkdirAll(filepath.Dir(marker), 0o755)
 						_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
 					}
+				} else {
+					// Stage non-archive artifacts into workDir as files.
+					if err := stageArtifactToWorkDir(path, workDir); err != nil {
+						return err
+					}
 				}
 			}
 			// If not unpacked, ensure working dir exists
@@ -379,14 +435,18 @@ func (a *Agent) applyPlan(planPath string) error {
 			return nil
 		}
 		startFn := func(ctx context.Context) error {
+			if skipStart {
+				signalReady()
+				return nil
+			}
 			// Create the appropriate runner
 			compRunner, runnerCleanup, err := a.createRunner(r)
 			if err != nil {
 				return fmt.Errorf("failed to create runner: %w", err)
 			}
 
-			// Store runner for cleanup if needed
-			if runnerCleanup != nil {
+			// Store runner so stop paths use the same runtime implementation.
+			if compRunner != nil {
 				a.mu.Lock()
 				a.runners[it.Name] = compRunner
 				a.mu.Unlock()
@@ -434,7 +494,7 @@ func (a *Agent) applyPlan(planPath string) error {
 			}
 
 			// Cleanup orphaned process if any (only for process type)
-			if (runType == "" || runType == "process") {
+			if runType == "" || runType == "process" {
 				if ci, ok := a.comps.Get(it.Name); ok && ci.PID > 0 {
 					if sysrt.IsProcessRunning(ci.PID) {
 						log.Printf("[agent] component=%s pid=%d msg=found orphaned process, stopping it", it.Name, ci.PID)
@@ -456,12 +516,6 @@ func (a *Agent) applyPlan(planPath string) error {
 				a.mu.Lock()
 				a.cancels[it.Name] = cancel
 				a.mu.Unlock()
-
-				defer func() {
-					if runnerCleanup != nil {
-						runnerCleanup()
-					}
-				}()
 
 				_ = compRunner.RunManaged(ctx2, it.Name, opts, hc, rp, maxRetries,
 					func(h runner.Handle) {
@@ -487,13 +541,8 @@ func (a *Agent) applyPlan(planPath string) error {
 							a.comps.Upsert(ci)
 						}
 						a.mu.Unlock()
-						// signal readiness once on first successful start (if no health check)
 						if !healthBasedReady {
-							startedOnce.Do(func() {
-								if ch, ok := compReady[it.Name]; ok && ch != nil {
-									close(ch)
-								}
-							})
+							signalReady()
 						}
 						// Sample metrics for processes
 						if ph, ok := h.(*runner.ProcessHandle); ok {
@@ -515,16 +564,13 @@ func (a *Agent) applyPlan(planPath string) error {
 						a.mu.Unlock()
 						metrics.SetHealthy(it.Name, ok)
 						if healthBasedReady && ok {
-							startedOnce.Do(func() {
-								if ch, ok := compReady[it.Name]; ok && ch != nil {
-									close(ch)
-								}
-							})
+							signalReady()
 						}
 					},
 					func(err error) {
 						if err != nil {
 							log.Printf("[agent] component=%s terminal failure: %v", it.Name, err)
+							signalStartErr(err)
 							a.mu.Lock()
 							ci, ok := a.comps.Get(it.Name)
 							if ok {
@@ -532,6 +578,11 @@ func (a *Agent) applyPlan(planPath string) error {
 								a.comps.Upsert(ci)
 							}
 							delete(a.handles, it.Name)
+							// Release runner resources for terminal components.
+							if runnerCleanup != nil {
+								runnerCleanup()
+								delete(a.runners, it.Name)
+							}
 							a.mu.Unlock()
 						}
 					},
@@ -540,6 +591,9 @@ func (a *Agent) applyPlan(planPath string) error {
 			return nil
 		}
 		stopFn := func(ctx context.Context) error {
+			if skipStart {
+				return nil
+			}
 			a.mu.RLock()
 			h := a.handles[it.Name]
 			compRunner := a.runners[it.Name]
@@ -564,10 +618,18 @@ func (a *Agent) applyPlan(planPath string) error {
 		}
 		// Create component with readiness channel and register it
 		readyCh := make(chan struct{})
+		startErrCh := make(chan error, 1)
 		c := supervisor.NewComponent(it.Name, depNames, installFn, startFn, stopFn)
+		if skipStart {
+			c.MarkRunningForReuse()
+			log.Printf("[agent] component=%s msg=reusing existing running instance (no restart)", it.Name)
+		}
 		c.ReadyCh = readyCh
+		c.ReadyErrCh = startErrCh
+		c.ReadyTimeout = computeReadyTimeout(r)
 		comps = append(comps, c)
 		compReady[it.Name] = readyCh
+		compStartErr[it.Name] = startErrCh
 	}
 	// If dry-run, set status and return after printing order
 	if a.dryRun {
@@ -594,9 +656,14 @@ func (a *Agent) applyPlan(planPath string) error {
 		return nil
 	}
 
-	// Update store initially
-	for _, c := range comps {
-		a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: string(c.State())})
+	// Update store initially with recipe/version metadata for API visibility.
+	for _, l := range loadedList {
+		a.comps.Upsert(store.ComponentInfo{
+			Name:    l.item.Name,
+			State:   string(supervisor.StateNone),
+			Recipe:  l.item.RecipePath,
+			Version: l.rec.Metadata.Version,
+		})
 	}
 	// Poll states to store and component-state metric
 	go func() {
@@ -662,11 +729,59 @@ func (a *Agent) applyPlan(planPath string) error {
 	return err
 }
 
+// stageArtifactToWorkDir copies a downloaded artifact into the component workDir
+// using the artifact basename. Existing files are overwritten.
+func stageArtifactToWorkDir(srcPath, workDir string) error {
+	st, err := os.Stat(srcPath)
+	if err != nil {
+		return err
+	}
+	if st.IsDir() {
+		return fmt.Errorf("artifact path is a directory: %s", srcPath)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return err
+	}
+	dstPath := filepath.Join(workDir, filepath.Base(srcPath))
+
+	in, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	mode := st.Mode().Perm()
+	if mode == 0 {
+		mode = 0o644
+	}
+	out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
 func defaultString(s, def string) string {
 	if s == "" {
 		return def
 	}
 	return s
+}
+
+func expandContainerMountEnv(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return value
+	}
+	// Compose-like interpolation from Keystone host environment.
+	expanded := os.ExpandEnv(value)
+	if strings.Contains(expanded, "$") {
+		log.Printf("[agent] warning: unresolved env var in container mount path: %q -> %q", value, expanded)
+	}
+	return expanded
 }
 
 // createRunner creates the appropriate runner based on the recipe's run type.
@@ -678,23 +793,45 @@ func (a *Agent) createRunner(r *recipe.Recipe) (runner.Runner, func(), error) {
 	}
 
 	if runType == "container" {
-		// Try containerd client first
-		cfg := runner.ContainerRunnerConfigFromEnv()
-		cr, err := runner.NewContainerRunner(cfg)
-		if err == nil {
-			cleanup := func() {
-				_ = cr.Close()
+		runtimePref := strings.ToLower(strings.TrimSpace(r.Lifecycle.Run.Container.Runtime))
+		switch runtimePref {
+		case "", "auto":
+			// Try containerd first, then CLI fallback.
+			cfg := runner.ContainerRunnerConfigFromEnv()
+			cr, err := runner.NewContainerRunner(cfg)
+			if err == nil {
+				cleanup := func() { _ = cr.Close() }
+				return cr, cleanup, nil
 			}
+			log.Printf("[agent] containerd not available (%v), trying CLI runner", err)
+			clir, err := runner.NewCLIRunner()
+			if err != nil {
+				return nil, nil, fmt.Errorf("no container runtime available: %w", err)
+			}
+			return clir, nil, nil
+		case "containerd":
+			cfg := runner.ContainerRunnerConfigFromEnv()
+			cr, err := runner.NewContainerRunner(cfg)
+			if err != nil {
+				return nil, nil, fmt.Errorf("container runtime=containerd requested but unavailable: %w", err)
+			}
+			cleanup := func() { _ = cr.Close() }
 			return cr, cleanup, nil
+		case "cli":
+			clir, err := runner.NewCLIRunner()
+			if err != nil {
+				return nil, nil, fmt.Errorf("container runtime=cli requested but unavailable: %w", err)
+			}
+			return clir, nil, nil
+		case "nerdctl", "docker", "podman":
+			clir, err := runner.NewCLIRunnerWithCLI(runtimePref)
+			if err != nil {
+				return nil, nil, fmt.Errorf("container runtime=%s requested but unavailable: %w", runtimePref, err)
+			}
+			return clir, nil, nil
+		default:
+			return nil, nil, fmt.Errorf("unsupported container runtime %q", runtimePref)
 		}
-		log.Printf("[agent] containerd not available (%v), trying CLI runner", err)
-
-		// Fall back to CLI runner
-		clir, err := runner.NewCLIRunner()
-		if err != nil {
-			return nil, nil, fmt.Errorf("no container runtime available: %w", err)
-		}
-		return clir, nil, nil
 	}
 
 	return nil, nil, fmt.Errorf("unknown run type: %s", runType)
@@ -728,9 +865,11 @@ func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Op
 
 	var mounts []runner.Mount
 	for _, m := range c.Mounts {
+		source := expandContainerMountEnv(m.Source)
+		target := expandContainerMountEnv(m.Target)
 		mounts = append(mounts, runner.Mount{
-			Source:   m.Source,
-			Target:   m.Target,
+			Source:   source,
+			Target:   target,
 			Type:     m.Type,
 			ReadOnly: m.ReadOnly,
 		})
@@ -747,11 +886,13 @@ func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Op
 	}
 
 	return runner.Options{
-		Name:        name,
-		Image:       c.Image,
-		PullPolicy:  c.PullPolicy,
-		Env:         env,
-		WorkingDir:  workDir,
+		Name:       name,
+		Image:      c.Image,
+		PullPolicy: c.PullPolicy,
+		Env:        env,
+		// Do not propagate host workDir to containers. OCI cwd must be a valid
+		// absolute path inside the container filesystem.
+		WorkingDir:  "",
 		Mounts:      mounts,
 		Ports:       ports,
 		NetworkMode: c.NetworkMode,
@@ -788,7 +929,43 @@ func buildHealthConfig(r *recipe.Recipe) runner.HealthConfig {
 	return hc
 }
 
+// computeReadyTimeout derives a supervisor readiness timeout from health settings.
+// This avoids failing startup before the first meaningful health probes can run.
+func computeReadyTimeout(r *recipe.Recipe) time.Duration {
+	// Keep previous default behavior when no health check is configured.
+	const defaultReadyTimeout = 15 * time.Second
+	const minHealthReadyTimeout = 30 * time.Second
+
+	hc := buildHealthConfig(r)
+	if hc.Check == "" {
+		return defaultReadyTimeout
+	}
+
+	interval := hc.Interval
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	timeout := hc.Timeout
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	threshold := hc.FailureThreshold
+	if threshold <= 0 {
+		threshold = 3
+	}
+
+	// Give enough time for probe cadence plus one probe timeout and small margin.
+	ready := (interval * time.Duration(threshold)) + timeout + (2 * time.Second)
+	if ready < minHealthReadyTimeout {
+		return minHealthReadyTimeout
+	}
+	return ready
+}
+
 func (a *Agent) persistSnapshot() {
+	a.snapMu.Lock()
+	defer a.snapMu.Unlock()
+
 	snap := state.Snapshot{
 		Plan: state.PlanStatus{
 			Path:    a.planPath,
@@ -823,10 +1000,28 @@ func (a *Agent) restartFromPlan(name string) error {
 	if recPath == "" {
 		return fmt.Errorf("component %q not found in plan", name)
 	}
+	// Try to load from path first, then resolve from RecipeStore for "name:version".
 	r, err := recipe.Load(recPath)
+	if err != nil {
+		recName, recVersion := name, ""
+		if parts := strings.Split(recPath, ":"); len(parts) == 2 {
+			recName, recVersion = parts[0], parts[1]
+		} else if !strings.Contains(recPath, "/") && !strings.Contains(recPath, ".") {
+			recName = recPath
+		}
+		if path, serr := a.recipes.GetPath(recName, recVersion); serr == nil {
+			r, err = recipe.Load(path)
+		}
+	}
 	if err != nil {
 		return err
 	}
+	// Ensure API state reflects the recipe/version being restarted.
+	a.comps.Upsert(store.ComponentInfo{
+		Name:    name,
+		Recipe:  recPath,
+		Version: r.Metadata.Version,
+	})
 
 	workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
 	artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)
@@ -845,6 +1040,11 @@ func (a *Agent) restartFromPlan(name string) error {
 				}
 				_ = os.MkdirAll(filepath.Dir(marker), 0o755)
 				_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+			}
+		} else {
+			// Keep restart behavior aligned with apply: stage files to workDir.
+			if err := stageArtifactToWorkDir(path, workDir); err != nil {
+				return err
 			}
 		}
 	}
@@ -905,16 +1105,10 @@ func (a *Agent) restartFromPlan(name string) error {
 		ctx2, cancel := context.WithCancel(a.Context())
 		a.mu.Lock()
 		a.cancels[name] = cancel
-		if runnerCleanup != nil {
+		if compRunner != nil {
 			a.runners[name] = compRunner
 		}
 		a.mu.Unlock()
-
-		defer func() {
-			if runnerCleanup != nil {
-				runnerCleanup()
-			}
-		}()
 
 		_ = compRunner.RunManaged(ctx2, name, opts, hc, rp, maxRetries,
 			func(h runner.Handle) {
@@ -965,6 +1159,10 @@ func (a *Agent) restartFromPlan(name string) error {
 						a.comps.Upsert(ci)
 					}
 					delete(a.handles, name)
+					if runnerCleanup != nil {
+						runnerCleanup()
+						delete(a.runners, name)
+					}
 					a.mu.Unlock()
 				}
 			},
@@ -1000,6 +1198,7 @@ func (a *Agent) stopComponent(name string) {
 		log.Printf("agent: cancel managed loop for %s", name)
 		cancel()
 	}
+
 	if h != nil {
 		// Use a timeout context for stop operation
 		stopCtx, stopCancel := context.WithTimeout(a.Context(), 10*time.Second)
@@ -1030,12 +1229,20 @@ func (a *Agent) stopComponent(name string) {
 			log.Printf("agent: stopComponent Stop error name=%s err=%v", name, stopErr)
 		}
 	}
-	// Update store (no need to hold a.mu here)
+	// Update store (no need to hold a.mu here). Keep a historical record even
+	// if the component was not present in memory at stop time.
 	ci, ok := a.comps.Get(name)
-	if ok {
-		ci.State = "stopped"
-		a.comps.Upsert(ci)
+	if !ok {
+		ci = store.ComponentInfo{Name: name}
 	}
+	ci.State = "stopped"
+	a.comps.Upsert(ci)
+	// Best-effort lifecycle shutdown hook for this component.
+	shCtx, shCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := a.runComponentShutdownScript(shCtx, name); err != nil {
+		log.Printf("agent: stopComponent shutdown script error name=%s err=%v", name, err)
+	}
+	shCancel()
 	log.Printf("agent: stopComponent done name=%s", name)
 }
 
@@ -1179,17 +1386,6 @@ func topoOrder(edges map[string][]string, indeg map[string]int) []string {
 	return order
 }
 
-// ApplyPlan runs the deployment plan with optional dry-run mode.
-// This is the main entry point for plan application from any adapter.
-func (a *Agent) ApplyPlan(planPath string, dry bool) error {
-	if dry {
-		saved := a.dryRun
-		a.dryRun = true
-		defer func() { a.dryRun = saved }()
-	}
-	return a.applyPlan(planPath)
-}
-
 // ApplyPlanContent saves the raw plan TOML to a local file and applies it.
 func (a *Agent) ApplyPlanContent(content string, dry bool) error {
 	dir := filepath.Join("runtime", "plans")
@@ -1255,4 +1451,48 @@ func runShellWithOutput(ctx context.Context, workDir, script string) (string, er
 		out = out[len(out)-limit:]
 	}
 	return string(out), err
+}
+
+func (a *Agent) runComponentShutdownScript(ctx context.Context, name string) error {
+	a.mu.RLock()
+	var recipeRef string
+	for _, pc := range a.planComps {
+		if pc.Name == name {
+			recipeRef = pc.RecipePath
+			break
+		}
+	}
+	a.mu.RUnlock()
+	if recipeRef == "" {
+		return nil
+	}
+
+	r, err := recipe.Load(recipeRef)
+	if err != nil {
+		recName, recVersion := name, ""
+		if parts := strings.Split(recipeRef, ":"); len(parts) == 2 {
+			recName, recVersion = parts[0], parts[1]
+		} else if !strings.Contains(recipeRef, "/") && !strings.Contains(recipeRef, ".") {
+			recName = recipeRef
+		}
+		if path, serr := a.recipes.GetPath(recName, recVersion); serr == nil {
+			r, err = recipe.Load(path)
+		}
+	}
+	if err != nil || r == nil {
+		return err
+	}
+	if strings.TrimSpace(r.Lifecycle.Shutdown.Script) == "" {
+		return nil
+	}
+
+	workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
+	out, err := runShellWithOutput(ctx, workDir, r.Lifecycle.Shutdown.Script)
+	if strings.TrimSpace(out) != "" {
+		log.Printf("[agent] component=%s msg=shutdown script output:\n%s", name, strings.TrimSpace(out))
+	}
+	if err != nil {
+		return fmt.Errorf("shutdown script failed for %s: %w", name, err)
+	}
+	return nil
 }
