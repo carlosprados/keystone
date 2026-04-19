@@ -1,0 +1,11 @@
+[[components]]
+name = "config"
+recipe = "demo/recipes/v2/com.demo.config.recipe.toml"
+
+[[components]]
+name = "producer"
+recipe = "demo/recipes/v2/com.demo.producer.recipe.toml"
+
+[[components]]
+name = "consumer"
+recipe = "demo/recipes/v2/com.demo.consumer.recipe.toml"

@@ -1,0 +1,7 @@
+# Compiled binaries produced by scripts/build.sh
+artifacts/*
+!artifacts/.gitkeep
+
+# Rendered recipes (generated from *.tmpl by scripts/build.sh)
+recipes/v1/*.recipe.toml
+recipes/v2/*.recipe.toml

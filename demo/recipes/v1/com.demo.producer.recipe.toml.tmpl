@@ -1,0 +1,37 @@
+[metadata]
+name = "com.demo.producer"
+version = "1.0.0"
+description = "Demo data-producer v1"
+publisher = "keystone-demo"
+
+[[dependencies]]
+name = "com.demo.config"
+version = "1.0.0"
+type = "hard"
+
+[[artifacts]]
+uri = "http://localhost:9000/data-producer-v1"
+sha256 = "{{SHA256}}"
+
+[lifecycle.install]
+script = """
+cp ../../../artifacts/com.demo.producer/1.0.0/data-producer-v1 ./app
+chmod +x ./app
+"""
+
+[lifecycle.run]
+restart_policy = "on-failure"
+max_retries = 3
+
+[lifecycle.run.exec]
+command = "./app"
+
+[lifecycle.run.exec.env]
+PRODUCER_ADDR = ":7002"
+CONFIG_URL = "http://localhost:7001/config"
+
+[lifecycle.run.health]
+check = "http://localhost:7002/healthz"
+interval = "3s"
+timeout = "2s"
+failure_threshold = 3

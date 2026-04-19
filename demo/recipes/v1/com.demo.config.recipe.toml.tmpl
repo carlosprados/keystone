@@ -1,0 +1,31 @@
+[metadata]
+name = "com.demo.config"
+version = "1.0.0"
+description = "Demo config-service v1"
+publisher = "keystone-demo"
+
+[[artifacts]]
+uri = "http://localhost:9000/config-service-v1"
+sha256 = "{{SHA256}}"
+
+[lifecycle.install]
+script = """
+cp ../../../artifacts/com.demo.config/1.0.0/config-service-v1 ./app
+chmod +x ./app
+"""
+
+[lifecycle.run]
+restart_policy = "on-failure"
+max_retries = 3
+
+[lifecycle.run.exec]
+command = "./app"
+
+[lifecycle.run.exec.env]
+CONFIG_ADDR = ":7001"
+
+[lifecycle.run.health]
+check = "http://localhost:7001/healthz"
+interval = "3s"
+timeout = "2s"
+failure_threshold = 3
