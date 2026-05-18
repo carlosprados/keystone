@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 620" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="13">
+  <defs>
+    <style>
+      .layer-label { font-size: 10px; fill: #8b8b8b; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 600; }
+      .box-title { font-size: 13px; font-weight: 600; fill: #1a1a2e; }
+      .box-sub { font-size: 11px; fill: #555; }
+      .interface-label { font-size: 11px; font-weight: 600; fill: #6c5ce7; font-style: italic; }
+      .arrow { stroke: #adb5bd; stroke-width: 1.5; fill: none; marker-end: url(#arrowhead); }
+      .arrow-dashed { stroke: #adb5bd; stroke-width: 1.5; fill: none; stroke-dasharray: 6,4; marker-end: url(#arrowhead); }
+    </style>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#adb5bd"/>
+    </marker>
+    <!-- Rounded rectangle filter for subtle shadow -->
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="108%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="620" fill="#fafbfc" rx="8"/>
+
+  <!-- Title -->
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="700" fill="#1a1a2e">Keystone Architecture</text>
+  <text x="400" y="50" text-anchor="middle" font-size="11" fill="#888">Edge Orchestration Agent</text>
+
+  <!-- ═══════════════════ EXTERNAL LAYER ═══════════════════ -->
+  <text x="30" y="82" class="layer-label">External</text>
+
+  <!-- CLI -->
+  <rect x="80" y="68" width="130" height="40" rx="6" fill="#f1f3f5" stroke="#dee2e6" stroke-width="1" filter="url(#shadow)"/>
+  <text x="145" y="84" text-anchor="middle" class="box-title">keystonectl</text>
+  <text x="145" y="98" text-anchor="middle" class="box-sub">CLI client</text>
+
+  <!-- Cloud / NATS Server -->
+  <rect x="335" y="68" width="130" height="40" rx="6" fill="#f1f3f5" stroke="#dee2e6" stroke-width="1" filter="url(#shadow)"/>
+  <text x="400" y="84" text-anchor="middle" class="box-title">NATS Server</text>
+  <text x="400" y="98" text-anchor="middle" class="box-sub">Fleet control plane</text>
+
+  <!-- MQTT Broker -->
+  <rect x="590" y="68" width="130" height="40" rx="6" fill="#f1f3f5" stroke="#dee2e6" stroke-width="1" filter="url(#shadow)"/>
+  <text x="655" y="84" text-anchor="middle" class="box-title">MQTT Broker</text>
+  <text x="655" y="98" text-anchor="middle" class="box-sub">IoT messaging</text>
+
+  <!-- Arrows from external to adapters -->
+  <path class="arrow" d="M145,108 L145,148"/>
+  <path class="arrow" d="M400,108 L400,148"/>
+  <path class="arrow" d="M655,108 L655,148"/>
+
+  <!-- ═══════════════════ ADAPTER LAYER ═══════════════════ -->
+  <rect x="50" y="140" width="700" height="70" rx="8" fill="#e8f4f8" stroke="#b8daff" stroke-width="1"/>
+  <text x="30" y="172" class="layer-label" transform="rotate(-90, 30, 172)">Adapters</text>
+
+  <!-- HTTP Adapter -->
+  <rect x="70" y="150" width="170" height="48" rx="6" fill="white" stroke="#74b9ff" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="155" y="170" text-anchor="middle" class="box-title">HTTP Adapter</text>
+  <text x="155" y="186" text-anchor="middle" class="box-sub">REST API · Prometheus · :8080</text>
+
+  <!-- NATS Adapter -->
+  <rect x="310" y="150" width="180" height="48" rx="6" fill="white" stroke="#74b9ff" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="400" y="170" text-anchor="middle" class="box-title">NATS Adapter</text>
+  <text x="400" y="186" text-anchor="middle" class="box-sub">Pub/Sub · JetStream jobs</text>
+
+  <!-- MQTT Adapter -->
+  <rect x="560" y="150" width="170" height="48" rx="6" fill="white" stroke="#74b9ff" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="645" y="170" text-anchor="middle" class="box-title">MQTT Adapter</text>
+  <text x="645" y="186" text-anchor="middle" class="box-sub">QoS · LWT · mTLS</text>
+
+  <!-- Interface label -->
+  <text x="400" y="226" text-anchor="middle" class="interface-label">« CommandHandler interface »</text>
+
+  <!-- Arrow from adapters to agent -->
+  <path class="arrow" d="M400,210 L400,248"/>
+
+  <!-- ═══════════════════ AGENT LAYER ═══════════════════ -->
+  <rect x="160" y="248" width="480" height="56" rx="8" fill="#d4edda" stroke="#82c991" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="400" y="272" text-anchor="middle" font-size="15" font-weight="700" fill="#1a1a2e">Agent</text>
+  <text x="400" y="292" text-anchor="middle" class="box-sub">Plan application · Component coordination · State persistence</text>
+
+  <!-- Arrow from agent to supervisor -->
+  <path class="arrow" d="M400,304 L400,340"/>
+
+  <!-- ═══════════════════ SUPERVISOR LAYER ═══════════════════ -->
+  <rect x="160" y="340" width="480" height="56" rx="8" fill="#fff3cd" stroke="#e6c766" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="400" y="364" text-anchor="middle" font-size="15" font-weight="700" fill="#1a1a2e">Supervisor</text>
+  <text x="400" y="384" text-anchor="middle" class="box-sub">DAG topological ordering · FSM lifecycle · Parallel layer startup</text>
+
+  <!-- Interface label -->
+  <text x="400" y="412" text-anchor="middle" class="interface-label">« Runner interface »</text>
+
+  <!-- Arrows from supervisor to runners -->
+  <path class="arrow" d="M320,396 L320,436"/>
+  <path class="arrow" d="M480,396 L480,436"/>
+
+  <!-- ═══════════════════ RUNNER LAYER ═══════════════════ -->
+  <rect x="100" y="428" width="600" height="70" rx="8" fill="#f8e8e8" stroke="#e6a0a0" stroke-width="1"/>
+
+  <!-- ProcessRunner -->
+  <rect x="120" y="438" width="250" height="48" rx="6" fill="white" stroke="#e07070" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="245" y="458" text-anchor="middle" class="box-title">ProcessRunner</text>
+  <text x="245" y="474" text-anchor="middle" class="box-sub">Signals · log streaming · health probes</text>
+
+  <!-- ContainerRunner -->
+  <rect x="430" y="438" width="250" height="48" rx="6" fill="white" stroke="#e07070" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="555" y="458" text-anchor="middle" class="box-title">ContainerRunner</text>
+  <text x="555" y="474" text-anchor="middle" class="box-sub">containerd · docker/nerdctl/podman</text>
+
+  <!-- ═══════════════════ SUPPORT SYSTEMS (right side) ═══════════════════ -->
+  <text x="30" y="542" class="layer-label">Support</text>
+
+  <!-- Artifact Manager -->
+  <rect x="60" y="528" width="150" height="42" rx="6" fill="white" stroke="#b8b8d0" stroke-width="1" filter="url(#shadow)"/>
+  <text x="135" y="546" text-anchor="middle" class="box-title">Artifact Manager</text>
+  <text x="135" y="560" text-anchor="middle" class="box-sub">Download · verify · cache</text>
+
+  <!-- Recipe Store -->
+  <rect x="230" y="528" width="130" height="42" rx="6" fill="white" stroke="#b8b8d0" stroke-width="1" filter="url(#shadow)"/>
+  <text x="295" y="546" text-anchor="middle" class="box-title">Recipe Store</text>
+  <text x="295" y="560" text-anchor="middle" class="box-sub">TOML parsing</text>
+
+  <!-- State -->
+  <rect x="380" y="528" width="130" height="42" rx="6" fill="white" stroke="#b8b8d0" stroke-width="1" filter="url(#shadow)"/>
+  <text x="445" y="546" text-anchor="middle" class="box-title">State</text>
+  <text x="445" y="560" text-anchor="middle" class="box-sub">Snapshots · recovery</text>
+
+  <!-- Security -->
+  <rect x="530" y="528" width="120" height="42" rx="6" fill="white" stroke="#b8b8d0" stroke-width="1" filter="url(#shadow)"/>
+  <text x="590" y="546" text-anchor="middle" class="box-title">Security</text>
+  <text x="590" y="560" text-anchor="middle" class="box-sub">Signatures · mTLS</text>
+
+  <!-- Metrics -->
+  <rect x="670" y="528" width="100" height="42" rx="6" fill="white" stroke="#b8b8d0" stroke-width="1" filter="url(#shadow)"/>
+  <text x="720" y="546" text-anchor="middle" class="box-title">Metrics</text>
+  <text x="720" y="560" text-anchor="middle" class="box-sub">Prometheus</text>
+
+  <!-- Dashed arrows from runner layer to support systems -->
+  <path class="arrow-dashed" d="M160,498 L135,528"/>
+  <path class="arrow-dashed" d="M260,498 L295,528"/>
+  <path class="arrow-dashed" d="M400,498 L445,528"/>
+  <path class="arrow-dashed" d="M540,498 L590,528"/>
+  <path class="arrow-dashed" d="M660,498 L720,528"/>
+
+  <!-- Footer -->
+  <text x="400" y="600" text-anchor="middle" font-size="10" fill="#aaa">github.com/carlosprados/keystone</text>
+</svg>

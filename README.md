@@ -10,7 +10,7 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 
 ## Highlights
 
-- **Lightweight**: idle CPU ~0%, small RAM baseline (<40MB)
+- **Lightweight**: idle CPU ~0%, ~23 MB RAM baseline, 21 MB binary
 - **Solid**: atomic deployments, checkpoints, rollback, exponential backoff
 - **Secure**: mTLS, artifact signatures (ECDSA/RSA), checksums
 - **Portable**: Linux x86/ARM, single binary, no mandatory Docker/CRI
@@ -22,7 +22,7 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 | Feature          | AWS Greengrass        | **Keystone**              |
 | :--------------- | :-------------------- | :------------------------ |
 | **Runtime**      | Java (JVM) / C (Lite) | **Go (Native)**           |
-| **RAM Baseline** | ~100MB+               | **< 40MB**                |
+| **RAM Baseline** | ~100MB+               | **~23 MB**                |
 | **Complexity**   | High (Cloud-first)    | **Low (Lean & Simple)**   |
 | **Setup**        | Heavy Bootstrap       | **Single Binary**         |
 | **Control Plane**| AWS IoT Core only     | **HTTP, NATS, MQTT**      |
