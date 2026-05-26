@@ -269,10 +269,14 @@ func (a *Agent) applyPlan(planPath string) error {
 	metaToComp := map[string]string{}
 	compRecipes := map[string]*recipe.Recipe{}
 	for _, it := range p.Components {
-		r, _, digest, err := a.resolveRecipeRef(it.RecipePath)
+		r, resolvedPath, digest, err := a.resolveRecipeRef(it.RecipePath)
 		if err != nil {
 			return fmt.Errorf("failed to load recipe for %s (path: %s): %w", it.Name, it.RecipePath, err)
 		}
+		// Mirror plan-driven recipes into the local recipe store so that
+		// GET /v1/recipes reflects what is actually supervised. Errors are
+		// non-fatal: a failed store write must not block the install.
+		a.mirrorRecipeToStore(it.Name, r.Metadata.Name, r.Metadata.Version, resolvedPath)
 		loadedList = append(loadedList, loaded{
 			item:   it,
 			rec:    r,
@@ -1244,6 +1248,22 @@ func (a *Agent) stopComponent(name string) {
 	}
 	shCancel()
 	log.Printf("agent: stopComponent done name=%s", name)
+}
+
+// mirrorRecipeToStore copies the recipe file at resolvedPath into the
+// local recipe store under (name, version). Used by applyPlan to keep
+// GET /v1/recipes in sync with what is actually supervised. Errors are
+// non-fatal: a failed read or write must not block the install (e.g.
+// read-only mount, racing API call); they are logged and swallowed.
+func (a *Agent) mirrorRecipeToStore(compName, recipeName, recipeVersion, resolvedPath string) {
+	content, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		log.Printf("[agent] component=%s msg=failed to read recipe content for store sync (path=%s): %v", compName, resolvedPath, err)
+		return
+	}
+	if err := a.recipes.Save(recipeName, recipeVersion, string(content), true); err != nil {
+		log.Printf("[agent] component=%s msg=failed to sync recipe %s:%s to store: %v", compName, recipeName, recipeVersion, err)
+	}
 }
 
 // AddRecipe saves a recipe to the local store.
