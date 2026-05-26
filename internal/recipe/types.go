@@ -129,8 +129,20 @@ type Resources struct {
 }
 
 // Dependency models recipe-level dependencies referencing other components by name.
+//
+// Type controls two independent semantics of the dependency:
+//
+//   - hard      (default): dependency must be present in the plan AND the
+//     dependent is restarted whenever the dependency is restarted.
+//   - soft               : dependency is optional in the plan AND the
+//     dependent is restarted whenever the dependency is restarted.
+//   - ordering           : dependency must be present in the plan but the
+//     dependent is NOT restarted when the dependency is restarted; it only
+//     governs start/stop ordering.
+//
+// An empty value is treated as "hard" for backward compatibility.
 type Dependency struct {
 	Name    string `toml:"name"`
 	Version string `toml:"version"`
-	Type    string `toml:"type"` // hard|soft (unused in MVP)
+	Type    string `toml:"type"` // hard|soft|ordering (default hard)
 }

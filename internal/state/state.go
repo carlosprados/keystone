@@ -23,14 +23,20 @@ type Snapshot struct {
 }
 
 // PlanComponent persists mapping from component name to recipe and deps.
+//
+// DepTypes carries the dependency type ("hard", "soft", or "ordering") per
+// entry in Deps, keyed by the dependent plan-component name. It is optional
+// for backward compatibility: snapshots written before the field existed have
+// an empty map and consumers must default missing entries to "hard".
 type PlanComponent struct {
-	Name          string   `json:"name"`
-	RecipePath    string   `json:"recipe_path"`
-	RecipeMeta    string   `json:"recipe_meta"`
-	RecipeVersion string   `json:"recipe_version,omitempty"`
-	RecipeID      string   `json:"recipe_id,omitempty"`
-	RecipeDigest  string   `json:"recipe_digest,omitempty"`
-	Deps          []string `json:"deps"`
+	Name          string            `json:"name"`
+	RecipePath    string            `json:"recipe_path"`
+	RecipeMeta    string            `json:"recipe_meta"`
+	RecipeVersion string            `json:"recipe_version,omitempty"`
+	RecipeID      string            `json:"recipe_id,omitempty"`
+	RecipeDigest  string            `json:"recipe_digest,omitempty"`
+	Deps          []string          `json:"deps"`
+	DepTypes      map[string]string `json:"dep_types,omitempty"`
 }
 
 // Save persists the snapshot to disk atomically.

@@ -154,7 +154,7 @@ func (a *Agent) RestartComponent(name string, wait string, timeout time.Duration
 	}
 
 	// Get dependents in topological order
-	depsOrder := a.planDependentsTopological(name)
+	depsOrder := a.planDependentsTopological(name, true)
 	log.Printf("[handler] component=%s dependents=%v msg=restart: stopping dependents", name, depsOrder)
 
 	// Stop dependents first (reverse dependency order)
@@ -206,7 +206,7 @@ func (a *Agent) RestartComponent(name string, wait string, timeout time.Duration
 
 // RestartComponentDry returns the planned stop/start order without executing.
 func (a *Agent) RestartComponentDry(name string) *adapter.RestartDryResult {
-	depsOrder := a.planDependentsTopological(name)
+	depsOrder := a.planDependentsTopological(name, true)
 	startOrder := append([]string{name}, depsOrder...)
 	return &adapter.RestartDryResult{
 		StopOrder:  depsOrder,

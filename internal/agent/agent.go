@@ -288,15 +288,20 @@ func (a *Agent) applyPlan(planPath string) error {
 	}
 	// Second pass: compute deps among plan components using recipe dependencies
 	for _, l := range loadedList {
-		// compute dep component names
+		// compute dep component names and per-edge type
 		var depNames []string
+		var depTypes map[string]string
 		for _, d := range l.rec.Dependencies {
+			if err := validateDepType(d.Type); err != nil {
+				return fmt.Errorf("component %s dependency %q: %w", l.item.Name, d.Name, err)
+			}
+			depType := normalizeDepType(d.Type)
 			compName, ok := metaToComp[d.Name]
 			if !ok {
-				if isHardDependency(d.Type) {
-					return fmt.Errorf("component %s has hard dependency %q not present in plan", l.item.Name, d.Name)
+				if isPresenceMandatory(d.Type) {
+					return fmt.Errorf("component %s has mandatory (%s) dependency %q not present in plan", l.item.Name, depType, d.Name)
 				}
-				log.Printf("[agent] component=%s msg=soft dependency %q not present in plan (ignored)", l.item.Name, d.Name)
+				log.Printf("[agent] component=%s msg=optional (%s) dependency %q not present in plan (ignored)", l.item.Name, depType, d.Name)
 				continue
 			}
 			depRec := compRecipes[compName]
@@ -305,13 +310,17 @@ func (a *Agent) applyPlan(planPath string) error {
 				return fmt.Errorf("component %s dependency %q has invalid version constraint %q: %w", l.item.Name, d.Name, d.Version, derr)
 			}
 			if !satisfied {
-				if isHardDependency(d.Type) {
-					return fmt.Errorf("component %s hard dependency %q constraint %q not satisfied by %s", l.item.Name, d.Name, d.Version, depRec.Metadata.Version)
+				if isPresenceMandatory(d.Type) {
+					return fmt.Errorf("component %s mandatory (%s) dependency %q constraint %q not satisfied by %s", l.item.Name, depType, d.Name, d.Version, depRec.Metadata.Version)
 				}
-				log.Printf("[agent] component=%s msg=soft dependency %q constraint %q not satisfied by %s (ignored)", l.item.Name, d.Name, d.Version, depRec.Metadata.Version)
+				log.Printf("[agent] component=%s msg=optional (%s) dependency %q constraint %q not satisfied by %s (ignored)", l.item.Name, depType, d.Name, d.Version, depRec.Metadata.Version)
 				continue
 			}
 			depNames = append(depNames, compName)
+			if depTypes == nil {
+				depTypes = make(map[string]string)
+			}
+			depTypes[compName] = depType
 		}
 		planMap = append(planMap, state.PlanComponent{
 			Name:          l.item.Name,
@@ -321,6 +330,7 @@ func (a *Agent) applyPlan(planPath string) error {
 			RecipeID:      l.id,
 			RecipeDigest:  l.digest,
 			Deps:          depNames,
+			DepTypes:      depTypes,
 		})
 	}
 	// Build supervisor components now using computed deps
@@ -1304,8 +1314,13 @@ func (a *Agent) ListRecipes() ([]string, error) {
 	return a.recipes.List()
 }
 
-// planDependentsTopological returns dependents of 'name' in topological order (closest first -> farthest last).
-func (a *Agent) planDependentsTopological(name string) []string {
+// planDependentsTopological returns dependents of 'name' in topological order
+// (closest first -> farthest last). When cascadingOnly is true, only edges
+// whose declared type implies a restart cascade ("hard", "soft") are followed;
+// "ordering" edges and any unknown/missing type defaulting to a cascade
+// behaviour different from hard/soft are skipped. An empty/missing dep type
+// in DepTypes is treated as "hard" for backward compatibility.
+func (a *Agent) planDependentsTopological(name string, cascadingOnly bool) []string {
 	// Build graph: dep -> comp
 	edges := map[string][]string{}
 	indeg := map[string]int{}
@@ -1315,6 +1330,12 @@ func (a *Agent) planDependentsTopological(name string) []string {
 	}
 	for _, pc := range a.planComps {
 		for _, d := range pc.Deps {
+			if cascadingOnly {
+				t := pc.DepTypes[d]
+				if !shouldCascadeRestart(t) {
+					continue
+				}
+			}
 			edges[d] = append(edges[d], pc.Name)
 			indeg[pc.Name]++
 		}
