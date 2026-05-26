@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/carlosprados/keystone/internal/artifact"
@@ -114,18 +115,32 @@ func New(opts Options) *Agent {
 		a.planPath = snap.Plan.Path
 		a.planStatus = snap.Plan.Status
 		a.planErr = snap.Plan.Error
-		for _, ci := range snap.Components {
-			a.comps.Upsert(ci)
-		}
 		a.planComps = snap.PlanComponents
 
-		// Resume the last plan unless the operator explicitly stopped it or
-		// the last persisted status was a dry-run (which never installed
-		// anything). The previous code only resumed on "running" / "failed",
-		// which left the agent silent after an interrupted apply: the status
-		// stayed at "applying" forever and no component was ever supervised
-		// even though /healthz reported OK.
-		if a.planPath != "" && shouldResumeLastPlan(a.planStatus) {
+		resume := a.planPath != "" && shouldResumeLastPlan(a.planStatus)
+
+		// Variant B recovery: when the previous agent run did not exit via
+		// Close() (SIGKILL, segfault, OOM kill), its child processes are
+		// reparented to PID 1 and continue running, but the new agent has
+		// no runner handles for them. Reap any orphans recorded in the
+		// snapshot before reconcile reads the in-memory state, then reset
+		// the persisted "running" state so the resume re-applies from
+		// scratch (the snapshot's component states are informational
+		// post-crash, not authoritative).
+		if resume {
+			if reaped := reapOrphanedComponents(snap.Components); reaped > 0 {
+				log.Printf("[agent] reaped %d orphan component process(es) from previous run", reaped)
+			}
+		}
+		for _, ci := range snap.Components {
+			if resume {
+				ci.State = "stopped"
+				ci.PID = 0
+			}
+			a.comps.Upsert(ci)
+		}
+
+		if resume {
 			if strings.EqualFold(strings.TrimSpace(a.planStatus), "applying") {
 				log.Printf("[agent] previous apply was interrupted (status=applying); recovering by re-applying from scratch")
 			}
@@ -1266,6 +1281,78 @@ func (a *Agent) stopComponent(name string) {
 	}
 	shCancel()
 	log.Printf("agent: stopComponent done name=%s", name)
+}
+
+// reapOrphanedComponents signals every PID recorded in the supplied component
+// list that still looks like an orphan from the previous agent run, then
+// returns how many PIDs were signalled.
+//
+// "Orphan" here is a process whose parent is PID 1 (init) — the signature of
+// a process whose original parent died without reaping it (typically: previous
+// keystone agent killed by SIGKILL / crashed). For each such PID the helper
+// sends SIGTERM, waits up to ~2 s for the process to exit, and escalates to
+// SIGKILL if it is still alive. Processes whose parent is not init are left
+// untouched: that PID has likely been reused by something unrelated.
+//
+// This is required because Variant B of the boot-resume bug: after a crash,
+// children survive as init-owned orphans the new agent has no handle to. The
+// snapshot's "running" state is informational at that point, not
+// authoritative — reapOrphanedComponents removes the orphans so the resumed
+// plan starts fresh without port/file collisions.
+func reapOrphanedComponents(comps []store.ComponentInfo) int {
+	reaped := 0
+	for _, ci := range comps {
+		if ci.PID <= 0 {
+			continue
+		}
+		if !processIsInitOrphan(ci.PID) {
+			continue
+		}
+		log.Printf("[agent] reaping orphan from previous run: component=%s pid=%d", ci.Name, ci.PID)
+		_ = syscall.Kill(ci.PID, syscall.SIGTERM)
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if !processExists(ci.PID) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if processExists(ci.PID) {
+			_ = syscall.Kill(ci.PID, syscall.SIGKILL)
+		}
+		reaped++
+	}
+	return reaped
+}
+
+// processExists reports whether a process with this PID is reachable from the
+// current process (sig 0 doesn't deliver anything, it just probes existence
+// and permission).
+func processExists(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	return syscall.Kill(pid, 0) == nil
+}
+
+// processIsInitOrphan reports whether the process with PID is currently
+// parented by PID 1 (init) on Linux. Returns false for any read/parse error
+// or when the parent is not init; the conservative default is to leave the
+// PID alone in those cases.
+func processIsInitOrphan(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(line, "PPid:"); ok {
+			return strings.TrimSpace(rest) == "1"
+		}
+	}
+	return false
 }
 
 // shouldResumeLastPlan decides whether the agent should re-apply the last
