@@ -1453,16 +1453,49 @@ func topoOrder(edges map[string][]string, indeg map[string]int) []string {
 }
 
 // ApplyPlanContent saves the raw plan TOML to a local file and applies it.
+//
+// The canonical "last applied" file (runtime/plans/applied.toml) is touched
+// only after a successful real apply. The candidate plan is first staged to a
+// sibling .staging file: a dry-run runs the reconcile against the staged file
+// and discards it, while a failed real apply leaves applied.toml intact so
+// that the next resume (and the in-flight rollback inside applyPlan, which
+// reads `oldPlanPath = a.planPath`) still sees the previously-known-good plan
+// instead of the rejected candidate.
 func (a *Agent) ApplyPlanContent(content string, dry bool) error {
 	dir := filepath.Join("runtime", "plans")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "applied.toml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	finalPath := filepath.Join(dir, "applied.toml")
+	stagedPath := finalPath + ".staging"
+
+	if err := os.WriteFile(stagedPath, []byte(content), 0o644); err != nil {
 		return err
 	}
-	return a.ApplyPlan(path, dry)
+
+	if err := a.ApplyPlan(stagedPath, dry); err != nil {
+		_ = os.Remove(stagedPath)
+		return err
+	}
+	if dry {
+		_ = os.Remove(stagedPath)
+		return nil
+	}
+
+	// Promote the staged file onto the canonical applied.toml. The rename
+	// is atomic on POSIX filesystems for files in the same directory.
+	if err := os.Rename(stagedPath, finalPath); err != nil {
+		_ = os.Remove(stagedPath)
+		return fmt.Errorf("apply: promote staged plan to %s: %w", finalPath, err)
+	}
+	// Re-point the in-memory plan path at the canonical location so the
+	// snapshot (and any future resume) does not reference the staged path
+	// that no longer exists.
+	a.mu.Lock()
+	a.planPath = finalPath
+	a.mu.Unlock()
+	a.persistSnapshot()
+	return nil
 }
 
 // Helpers for synchronous restart
