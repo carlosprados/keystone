@@ -119,8 +119,16 @@ func New(opts Options) *Agent {
 		}
 		a.planComps = snap.PlanComponents
 
-		// Resume plan if it was running or failed
-		if a.planPath != "" && (a.planStatus == "running" || a.planStatus == "failed") {
+		// Resume the last plan unless the operator explicitly stopped it or
+		// the last persisted status was a dry-run (which never installed
+		// anything). The previous code only resumed on "running" / "failed",
+		// which left the agent silent after an interrupted apply: the status
+		// stayed at "applying" forever and no component was ever supervised
+		// even though /healthz reported OK.
+		if a.planPath != "" && shouldResumeLastPlan(a.planStatus) {
+			if strings.EqualFold(strings.TrimSpace(a.planStatus), "applying") {
+				log.Printf("[agent] previous apply was interrupted (status=applying); recovering by re-applying from scratch")
+			}
 			go func() {
 				log.Printf("[agent] resuming last plan: %s", a.planPath)
 				if err := a.ApplyPlan(a.planPath, false); err != nil {
@@ -1258,6 +1266,23 @@ func (a *Agent) stopComponent(name string) {
 	}
 	shCancel()
 	log.Printf("agent: stopComponent done name=%s", name)
+}
+
+// shouldResumeLastPlan decides whether the agent should re-apply the last
+// persisted plan at startup based on the persisted plan status.
+//
+// The agent resumes for any status that represents an active or interrupted
+// deployment, including the previously-buggy "applying" case (the apply was
+// killed mid-flight; without resuming, the plan stays silently unsupervised).
+// It refuses to resume only when the operator explicitly stopped the plan or
+// when the last persisted state was a dry-run that never installed anything.
+func shouldResumeLastPlan(planStatus string) bool {
+	switch strings.ToLower(strings.TrimSpace(planStatus)) {
+	case "stopped", "dry-run":
+		return false
+	default:
+		return true
+	}
 }
 
 // mirrorRecipeToStore copies the recipe file at resolvedPath into the
