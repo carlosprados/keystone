@@ -2,6 +2,7 @@ package recipe
 
 import (
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/carlosprados/keystone/internal/validate"
@@ -18,8 +19,8 @@ func Load(path string) (*Recipe, error) {
 	if err := toml.Unmarshal(b, &r); err != nil {
 		return nil, err
 	}
-	if r.Metadata.Name == "" || r.Metadata.Version == "" {
-		return nil, errors.New("invalid recipe: missing metadata.name or version")
+	if err := validateMetadata(&r); err != nil {
+		return nil, err
 	}
 	// Also validate generically with JSON Schema
 	var generic map[string]any
@@ -35,5 +36,25 @@ func Unmarshal(b []byte) (*Recipe, error) {
 	if err := toml.Unmarshal(b, &r); err != nil {
 		return nil, err
 	}
+	if err := validateMetadata(&r); err != nil {
+		return nil, err
+	}
 	return &r, nil
+}
+
+// validateMetadata enforces that name and version are present and safe to use
+// as filesystem path components. name/version flow into store filenames and
+// runtime/{components,artifacts}/<name>/<version> paths, so rejecting traversal
+// here closes those path-injection vectors at the parsing boundary.
+func validateMetadata(r *Recipe) error {
+	if r.Metadata.Name == "" || r.Metadata.Version == "" {
+		return errors.New("invalid recipe: missing metadata.name or version")
+	}
+	if err := validate.ValidatePathSegment("recipe metadata.name", r.Metadata.Name); err != nil {
+		return fmt.Errorf("invalid recipe: %w", err)
+	}
+	if err := validate.ValidatePathSegment("recipe metadata.version", r.Metadata.Version); err != nil {
+		return fmt.Errorf("invalid recipe: %w", err)
+	}
+	return nil
 }

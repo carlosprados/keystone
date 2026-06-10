@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/carlosprados/keystone/internal/validate"
 )
 
 // RecipeStore manages TOML recipe files in a local directory.
@@ -23,11 +25,15 @@ func (s *RecipeStore) Save(name, version, content string, force bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	path, err := s.path(name, version)
+	if err != nil {
+		return err
+	}
+
 	if err := os.MkdirAll(s.dir, 0755); err != nil {
 		return fmt.Errorf("failed to create recipes directory: %w", err)
 	}
 
-	path := s.path(name, version)
 	if _, err := os.Stat(path); err == nil && !force {
 		return fmt.Errorf("recipe %s version %s already exists", name, version)
 	}
@@ -44,7 +50,10 @@ func (s *RecipeStore) GetPath(name, version string) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path := s.path(name, version)
+	path, err := s.path(name, version)
+	if err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(path); err != nil {
 		return "", fmt.Errorf("recipe %s version %s not found: %w", name, version, err)
 	}
@@ -57,7 +66,10 @@ func (s *RecipeStore) Delete(name, version string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	path := s.path(name, version)
+	path, err := s.path(name, version)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return fmt.Errorf("recipe %s version %s not found", name, version)
 	}
@@ -88,8 +100,17 @@ func (s *RecipeStore) List() ([]string, error) {
 	return list, nil
 }
 
-func (s *RecipeStore) path(name, version string) string {
+func (s *RecipeStore) path(name, version string) (string, error) {
+	// name and version become a filesystem path component, so they must be
+	// validated before use to prevent path traversal (e.g. a recipe whose
+	// metadata.name is "../../etc/x"). See validate.ValidatePathSegment.
+	if err := validate.ValidatePathSegment("recipe name", name); err != nil {
+		return "", err
+	}
+	if err := validate.ValidatePathSegment("recipe version", version); err != nil {
+		return "", err
+	}
 	// Simple naming scheme: name-version.toml
 	filename := fmt.Sprintf("%s-%s.toml", name, version)
-	return filepath.Join(s.dir, filename)
+	return filepath.Join(s.dir, filename), nil
 }
