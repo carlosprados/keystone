@@ -228,14 +228,22 @@ func (g *Graph) TopoLayers() ([][]string, error) {
 
 // StartStack starts components respecting the DAG.
 func StartStack(parent context.Context, comps []*Component) error {
-	// Create a derived context, but do not cancel it on successful return.
-	// Cancellation is used only on failure to stop started components.
+	// Create a derived context. On success it must stay alive so the started
+	// components keep running under it, so cancellation only happens on a
+	// failure path. The deferred guard cancels unless we reached a successful
+	// return (keepRunning), which both releases the context on every error
+	// path and satisfies vet's lostcancel check.
 	ctx, cancel := context.WithCancel(parent)
+	keepRunning := false
+	defer func() {
+		if !keepRunning {
+			cancel()
+		}
+	}()
 
 	g := BuildGraph(comps)
 	layers, err := g.TopoLayers()
 	if err != nil {
-		cancel()
 		return err
 	}
 	started := make(map[string]*Component)
@@ -270,7 +278,8 @@ func StartStack(parent context.Context, comps []*Component) error {
 		if first := <-errCh; first != nil {
 			log.Printf("[supervisor] layer=%d error=%v msg=layer failed", i, first)
 			cancel()
-			// Stop what started so far (best-effort) with timeout
+			// Stop what started so far (best-effort) with timeout.
+			// cancel() above is idempotent with the deferred guard.
 			stopCtx, stopCancel := context.WithTimeout(parent, 30*time.Second)
 			for j := i; j >= 0; j-- {
 				for _, n := range layers[j] {
@@ -284,6 +293,7 @@ func StartStack(parent context.Context, comps []*Component) error {
 		}
 	}
 	log.Println("[supervisor] all components running")
+	keepRunning = true
 	return nil
 }
 

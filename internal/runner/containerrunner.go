@@ -753,7 +753,7 @@ func readImageDeclaredVolumes(ctx context.Context, image client.Image) ([]string
 }
 
 func sanitizeVolumeDestination(dst string) string {
-	s := strings.TrimSpace(strings.TrimPrefix(dst, "/"))
+	s := strings.TrimPrefix(strings.TrimSpace(dst), "/")
 	if s == "" {
 		return "_root"
 	}
