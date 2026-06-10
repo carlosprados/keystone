@@ -192,9 +192,11 @@ recipe = "configs/examples/com.keystone.server.recipe.toml"
 Apply it:
 
 ```bash
-# 1. Start the agent (now remote-first)
+# 1. Start the agent (now remote-first).
+#    --insecure-skip-verify is needed here because the example recipe is
+#    unsigned; drop it once your recipes/artifacts are signed (see below).
 task build
-./keystone --http 127.0.0.1:8080
+./keystone --http 127.0.0.1:8080 --insecure-skip-verify
 
 # 2. Apply the plan remotely using the CLI
 ./keystonectl apply configs/examples/plan.toml
@@ -202,8 +204,8 @@ task build
 
 Notes:
 
-- The example recipe uses the built-in `keystoneserver` binary and declares no downloadable artifacts, so it runs as-is.
-- When a recipe **does** declare `[[artifacts]]`, integrity verification is mandatory by default: each artifact needs a `sha256` and a detached signature (`sig_uri`) chaining to `KEYSTONE_TRUST_BUNDLE`. For local experiments with unsigned artifacts, pass `--insecure-skip-verify` (or `KEYSTONE_INSECURE_SKIP_VERIFY=true`).
+- The example recipe uses the built-in `keystoneserver` binary and declares no downloadable artifacts.
+- **Recipes loaded from a file must be signed by default** (see "Signed Recipes and Artifacts"). Recipes pushed through the authenticated API (`keystonectl upload-recipe`) are trusted by that authentication and are not re-verified. For local experiments with unsigned files, run the agent with `--insecure-skip-verify` (or `KEYSTONE_INSECURE_SKIP_VERIFY=true`).
 - ProcessRunner applies basic `RLIMIT_NOFILE`; cgroups integration is a safe no-op placeholder for now.
 
 ## Quick Usage
@@ -224,9 +226,18 @@ Notes:
 - Metrics (Prometheus):
   - `curl -s localhost:8080/metrics | head`
 
-### Signed Artifacts
+### Signed Recipes and Artifacts
 
-- Signature verification is **mandatory by default** for any declared artifact: a `sha256`, a `sig_uri`, and a configured `KEYSTONE_TRUST_BUNDLE` are all required, on both apply and restart. Missing any of them aborts the install (fail-closed). Use `--insecure-skip-verify` only for dev/demo.
+Verification is **mandatory by default** and fails closed; `--insecure-skip-verify` (or `KEYSTONE_INSECURE_SKIP_VERIFY=true`) relaxes all of it for dev/demo only.
+
+**Recipes** loaded from a filesystem path must carry a detached signature before any lifecycle hook (install/run/shutdown) runs:
+
+- Place a sibling `<recipe>.sig` next to the recipe, and a cert as `<recipe>.crt` or via `KEYSTONE_LEAF_CERT`, chaining to `KEYSTONE_TRUST_BUNDLE`.
+- Sign with OpenSSL: `openssl dgst -sha256 -sign signer.key -out com.example.app.recipe.toml.sig com.example.app.recipe.toml`.
+- Recipes uploaded through the authenticated HTTP API are trusted by that authentication and are not re-verified.
+
+**Artifacts** declared in a recipe each require a `sha256`, a `sig_uri`, and a configured trust bundle, on both apply and restart:
+
 - Provide a trust bundle (PEM) via `KEYSTONE_TRUST_BUNDLE` and a leaf certificate via `KEYSTONE_LEAF_CERT`, or include `cert_uri` in the recipe.
 - Add `sig_uri` to each artifact entry in the recipe.
 - Signature format: detached signature over SHA-256 of the artifact, produced with OpenSSL (`openssl dgst -sha256 -sign ...`).

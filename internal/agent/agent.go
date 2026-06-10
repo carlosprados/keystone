@@ -737,6 +737,39 @@ func (a *Agent) applyPlan(planPath string) error {
 
 // stageArtifactToWorkDir copies a downloaded artifact into the component workDir
 // using the artifact basename. Existing files are overwritten.
+// verifyRecipeFileSignature enforces that a recipe loaded from a filesystem
+// path carries a valid detached signature before any of its lifecycle hooks
+// (install/run/shutdown scripts — arbitrary shell) can run. The signature is a
+// sibling "<recipe>.sig" verified against a cert ("<recipe>.crt" or
+// KEYSTONE_LEAF_CERT) chaining to the trust bundle.
+//
+// Recipes resolved from the recipe store are intentionally NOT passed here:
+// they entered through the authenticated HTTP API, which is the trust boundary
+// for uploaded recipes. With insecureSkipVerify (dev/demo) the check is skipped.
+func (a *Agent) verifyRecipeFileSignature(recipePath string) error {
+	if a.insecureSkipVerify {
+		return nil
+	}
+	if a.trustPool == nil {
+		return fmt.Errorf("recipe %q rejected: signature required but no trust bundle configured; set KEYSTONE_TRUST_BUNDLE (or --insecure-skip-verify for dev)", recipePath)
+	}
+	sigPath := recipePath + ".sig"
+	if _, err := os.Stat(sigPath); err != nil {
+		return fmt.Errorf("recipe %q rejected: missing detached signature %q (or --insecure-skip-verify for dev)", recipePath, filepath.Base(sigPath))
+	}
+	certPath := recipePath + ".crt"
+	if _, err := os.Stat(certPath); err != nil {
+		certPath = os.Getenv("KEYSTONE_LEAF_CERT")
+	}
+	if certPath == "" {
+		return fmt.Errorf("recipe %q rejected: no certificate for signature verification (set KEYSTONE_LEAF_CERT or provide %s.crt)", recipePath, filepath.Base(recipePath))
+	}
+	if err := security.VerifyDetached(recipePath, sigPath, certPath, a.trustPool); err != nil {
+		return fmt.Errorf("recipe signature verify failed for %s: %w", filepath.Base(recipePath), err)
+	}
+	return nil
+}
+
 // ensureAndVerifyArtifact downloads an artifact, enforces the integrity policy,
 // verifies its detached signature, and unpacks or stages it into workDir. It is
 // the single verification path shared by plan apply and component restart.
@@ -1074,7 +1107,12 @@ func (a *Agent) restartFromPlan(name string) error {
 	}
 	// Try to load from path first, then resolve from RecipeStore for "name:version".
 	r, err := recipe.Load(recPath)
-	if err != nil {
+	if err == nil {
+		// File-based recipe: enforce its signature before any hook runs.
+		if verr := a.verifyRecipeFileSignature(recPath); verr != nil {
+			return verr
+		}
+	} else {
 		recName, recVersion := name, ""
 		if parts := strings.Split(recPath, ":"); len(parts) == 2 {
 			recName, recVersion = parts[0], parts[1]
@@ -1082,7 +1120,7 @@ func (a *Agent) restartFromPlan(name string) error {
 			recName = recPath
 		}
 		if path, serr := a.recipes.GetPath(recName, recVersion); serr == nil {
-			r, err = recipe.Load(path)
+			r, err = recipe.Load(path) // from store: trusted via authenticated API
 		}
 	}
 	if err != nil {
@@ -1673,7 +1711,12 @@ func (a *Agent) runComponentShutdownScript(ctx context.Context, name string) err
 	}
 
 	r, err := recipe.Load(recipeRef)
-	if err != nil {
+	if err == nil {
+		// File-based recipe: enforce its signature before running shutdown hook.
+		if verr := a.verifyRecipeFileSignature(recipeRef); verr != nil {
+			return verr
+		}
+	} else {
 		recName, recVersion := name, ""
 		if parts := strings.Split(recipeRef, ":"); len(parts) == 2 {
 			recName, recVersion = parts[0], parts[1]
@@ -1681,7 +1724,7 @@ func (a *Agent) runComponentShutdownScript(ctx context.Context, name string) err
 			recName = recipeRef
 		}
 		if path, serr := a.recipes.GetPath(recName, recVersion); serr == nil {
-			r, err = recipe.Load(path)
+			r, err = recipe.Load(path) // from store: trusted via authenticated API
 		}
 	}
 	if err != nil || r == nil {
