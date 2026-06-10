@@ -120,7 +120,7 @@ See everything running at a glance:
 ## Quick Start
 
 ```bash
-go run ./cmd/keystone --http :8080
+go run ./cmd/keystone --http 127.0.0.1:8080
 ```
 
 For development with live reload (requires [air](https://github.com/air-verse/air)):
@@ -194,7 +194,7 @@ Apply it:
 ```bash
 # 1. Start the agent (now remote-first)
 task build
-./keystone --http :8080
+./keystone --http 127.0.0.1:8080
 
 # 2. Apply the plan remotely using the CLI
 ./keystonectl apply configs/examples/plan.toml
@@ -209,7 +209,7 @@ Notes:
 ## Quick Usage
 
 - Start agent:
-  - `./keystone --http :8080`
+  - `./keystone --http 127.0.0.1:8080`
 - Apply plan:
   - `./keystonectl apply configs/examples/plan.toml`
 - Health and discovery:
@@ -304,12 +304,29 @@ The GitHub Action will automatically build the binaries for multiple architectur
 
 ## Configuration
 
+### API Security
+
+The HTTP API can apply plans and run lifecycle hooks, so it is treated as a
+privileged surface:
+
+- It binds to `127.0.0.1:8080` by default. Binding a non-loopback address
+  (e.g. `--http 0.0.0.0:8080`) **requires** a token via `--api-token` or
+  `KEYSTONE_API_TOKEN`; otherwise the agent refuses to start.
+- When a token is set, every endpoint except `/healthz` requires
+  `Authorization: Bearer <token>`. `keystonectl` sends it automatically from
+  `--token` or `KEYSTONE_API_TOKEN`.
+- The API accepts plans as uploaded content only; the legacy `planPath` field
+  (loading an arbitrary server-side file) is rejected.
+
 ### Environment Variables
 
 Keystone supports loading environment variables from a `.env` file in the current working directory.
 
 | Variable                              | Description                                                            |
 | ------------------------------------- | ---------------------------------------------------------------------- |
+| `KEYSTONE_API_TOKEN`                  | Bearer token required for the HTTP API. Mandatory to bind a non-loopback address. |
+| `KEYSTONE_MAX_REQUEST_BYTES`          | Max HTTP request body size in bytes (default: 4 MiB).                  |
+| `KEYSTONE_MAX_EXTRACT_BYTES`          | Max total uncompressed size per archive extraction (default: 2 GiB).   |
 | `KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES` | Max size of `runtime/artifacts` (default: 2GiB).                       |
 | `KEYSTONE_ARTIFACT_DOWNLOAD_TIMEOUT`  | Artifact download timeout (default: 30m). Supports "5m", "1h", etc.    |
 | `KEYSTONE_TRUST_BUNDLE`               | Path to CA trust bundle (PEM) for signature verification.              |
@@ -370,7 +387,7 @@ The HTTP adapter exposes a REST API for local management:
 
 ```bash
 # Default: enabled on port 8080
-./keystone --http :8080
+./keystone --http 127.0.0.1:8080
 
 # Disable HTTP (use only messaging adapters)
 ./keystone --http "" --nats-url nats://server:4222 --nats-device-id edge-001
@@ -391,12 +408,12 @@ Enable NATS for asynchronous fleet management with optional JetStream persistenc
 
 ```bash
 # Basic NATS
-./keystone --http :8080 \
+./keystone --http 127.0.0.1:8080 \
   --nats-url nats://control-plane:4222 \
   --nats-device-id edge-001
 
 # With mTLS and JetStream
-./keystone --http :8080 \
+./keystone --http 127.0.0.1:8080 \
   --nats-url nats://control-plane:4222 \
   --nats-device-id edge-001 \
   --nats-tls-cert /etc/keystone/certs/client.crt \
@@ -418,12 +435,12 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 
 ```bash
 # Basic MQTT
-./keystone --http :8080 \
+./keystone --http 127.0.0.1:8080 \
   --mqtt-broker tcp://broker:1883 \
   --mqtt-device-id edge-001
 
 # With TLS and auth
-./keystone --http :8080 \
+./keystone --http 127.0.0.1:8080 \
   --mqtt-broker ssl://broker:8883 \
   --mqtt-device-id edge-001 \
   --mqtt-tls-ca /etc/keystone/certs/ca.crt \
@@ -440,7 +457,7 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 
 ```bash
 # HTTP + NATS + MQTT simultaneously
-./keystone --http :8080 \
+./keystone --http 127.0.0.1:8080 \
   --nats-url nats://nats.internal:4222 --nats-device-id edge-001 \
   --mqtt-broker tcp://mqtt.internal:1883 --mqtt-device-id edge-001
 ```

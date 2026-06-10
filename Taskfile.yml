@@ -28,7 +28,7 @@ tasks:
   run:
     desc: Run the Keystone agent
     cmds:
-      - go run {{.LDFLAGS}} ./cmd/keystone --http :8080
+      - go run {{.LDFLAGS}} ./cmd/keystone --http 127.0.0.1:8080
 
   dev:
     desc: Run the Keystone agent with live reload (requires air)
@@ -68,7 +68,7 @@ tasks:
           echo "Usage: task plan-dry PLAN=path/to/plan.toml"
           exit 1
         fi
-        go run ./cmd/keystone --apply {{.PLAN}} --dry-run --http :0
+        go run ./cmd/keystone --apply {{.PLAN}} --dry-run --http 127.0.0.1:0
 
   hooks:
     desc: Setup git hooks
