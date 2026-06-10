@@ -21,6 +21,7 @@ type plannedComponent struct {
 	recipeDigest string
 	recipeID     string
 	deps         []string
+	depTypes     map[string]string // dependent-component-name -> normalized type
 }
 
 type plannedState struct {
@@ -162,12 +163,16 @@ func (a *Agent) loadPlannedState(planPath string) (*plannedState, error) {
 
 	for name, comp := range byName {
 		for _, dep := range comp.rec.Dependencies {
+			if err := validateDepType(dep.Type); err != nil {
+				return nil, fmt.Errorf("component %s dependency %q: %w", name, dep.Name, err)
+			}
+			depType := normalizeDepType(dep.Type)
 			depCompName, ok := metaToCompName[dep.Name]
 			if !ok {
-				if isHardDependency(dep.Type) {
-					return nil, fmt.Errorf("component %s has hard dependency %q not present in plan", name, dep.Name)
+				if isPresenceMandatory(dep.Type) {
+					return nil, fmt.Errorf("component %s has mandatory (%s) dependency %q not present in plan", name, depType, dep.Name)
 				}
-				log.Printf("[agent] component=%s msg=soft dependency %q not present in plan (ignored)", name, dep.Name)
+				log.Printf("[agent] component=%s msg=optional (%s) dependency %q not present in plan (ignored)", name, depType, dep.Name)
 				continue
 			}
 			depComp := byName[depCompName]
@@ -176,13 +181,17 @@ func (a *Agent) loadPlannedState(planPath string) (*plannedState, error) {
 				return nil, fmt.Errorf("component %s dependency %q has invalid version constraint %q: %w", name, dep.Name, dep.Version, derr)
 			}
 			if !satisfied {
-				if isHardDependency(dep.Type) {
-					return nil, fmt.Errorf("component %s hard dependency %q constraint %q not satisfied by %s", name, dep.Name, dep.Version, depComp.rec.Metadata.Version)
+				if isPresenceMandatory(dep.Type) {
+					return nil, fmt.Errorf("component %s mandatory (%s) dependency %q constraint %q not satisfied by %s", name, depType, dep.Name, dep.Version, depComp.rec.Metadata.Version)
 				}
-				log.Printf("[agent] component=%s msg=soft dependency %q constraint %q not satisfied by %s (ignored)", name, dep.Name, dep.Version, depComp.rec.Metadata.Version)
+				log.Printf("[agent] component=%s msg=optional (%s) dependency %q constraint %q not satisfied by %s (ignored)", name, depType, dep.Name, dep.Version, depComp.rec.Metadata.Version)
 				continue
 			}
 			comp.deps = append(comp.deps, depCompName)
+			if comp.depTypes == nil {
+				comp.depTypes = make(map[string]string)
+			}
+			comp.depTypes[depCompName] = depType
 			edges[depCompName] = append(edges[depCompName], name)
 			indeg[name]++
 		}
@@ -198,6 +207,13 @@ func (a *Agent) loadPlannedState(planPath string) (*plannedState, error) {
 		comp := byName[it.Name]
 		deps := append([]string(nil), comp.deps...)
 		sort.Strings(deps)
+		var depTypes map[string]string
+		if len(comp.depTypes) > 0 {
+			depTypes = make(map[string]string, len(comp.depTypes))
+			for k, v := range comp.depTypes {
+				depTypes[k] = v
+			}
+		}
 		planMap = append(planMap, state.PlanComponent{
 			Name:          it.Name,
 			RecipePath:    it.RecipePath,
@@ -206,6 +222,7 @@ func (a *Agent) loadPlannedState(planPath string) (*plannedState, error) {
 			RecipeID:      comp.recipeID,
 			RecipeDigest:  comp.recipeDigest,
 			Deps:          deps,
+			DepTypes:      depTypes,
 		})
 	}
 
@@ -455,9 +472,47 @@ func parseRecipeStoreRef(ref string) (name, version string) {
 	return name, version
 }
 
-func isHardDependency(depType string) bool {
-	t := strings.ToLower(strings.TrimSpace(depType))
-	return t == "" || t == "hard"
+// normalizeDepType lowercases and trims a dependency type, defaulting the
+// empty string to "hard" for backward compatibility.
+func normalizeDepType(t string) string {
+	s := strings.ToLower(strings.TrimSpace(t))
+	if s == "" {
+		return "hard"
+	}
+	return s
+}
+
+// validateDepType rejects values outside the supported set up front so plans
+// with typos in `type` do not silently fall through to a different semantic.
+func validateDepType(t string) error {
+	switch normalizeDepType(t) {
+	case "hard", "soft", "ordering":
+		return nil
+	default:
+		return fmt.Errorf("invalid dependency type %q (allowed: hard, soft, ordering)", t)
+	}
+}
+
+// isPresenceMandatory reports whether the dependency must be present in the
+// plan for the plan to be valid. Mandatory: hard and ordering. Optional: soft.
+func isPresenceMandatory(t string) bool {
+	switch normalizeDepType(t) {
+	case "hard", "ordering":
+		return true
+	default:
+		return false
+	}
+}
+
+// shouldCascadeRestart reports whether restarting the dependency should also
+// restart the dependent. Cascading: hard and soft. Non-cascading: ordering.
+func shouldCascadeRestart(t string) bool {
+	switch normalizeDepType(t) {
+	case "hard", "soft":
+		return true
+	default:
+		return false
+	}
 }
 
 func dependencyVersionSatisfied(constraint, actual string) (bool, error) {

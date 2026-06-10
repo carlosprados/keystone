@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/carlosprados/keystone/internal/artifact"
@@ -114,13 +115,35 @@ func New(opts Options) *Agent {
 		a.planPath = snap.Plan.Path
 		a.planStatus = snap.Plan.Status
 		a.planErr = snap.Plan.Error
-		for _, ci := range snap.Components {
-			a.comps.Upsert(ci)
-		}
 		a.planComps = snap.PlanComponents
 
-		// Resume plan if it was running or failed
-		if a.planPath != "" && (a.planStatus == "running" || a.planStatus == "failed") {
+		resume := a.planPath != "" && shouldResumeLastPlan(a.planStatus)
+
+		// Variant B recovery: when the previous agent run did not exit via
+		// Close() (SIGKILL, segfault, OOM kill), its child processes are
+		// reparented to PID 1 and continue running, but the new agent has
+		// no runner handles for them. Reap any orphans recorded in the
+		// snapshot before reconcile reads the in-memory state, then reset
+		// the persisted "running" state so the resume re-applies from
+		// scratch (the snapshot's component states are informational
+		// post-crash, not authoritative).
+		if resume {
+			if reaped := reapOrphanedComponents(snap.Components); reaped > 0 {
+				log.Printf("[agent] reaped %d orphan component process(es) from previous run", reaped)
+			}
+		}
+		for _, ci := range snap.Components {
+			if resume {
+				ci.State = "stopped"
+				ci.PID = 0
+			}
+			a.comps.Upsert(ci)
+		}
+
+		if resume {
+			if strings.EqualFold(strings.TrimSpace(a.planStatus), "applying") {
+				log.Printf("[agent] previous apply was interrupted (status=applying); recovering by re-applying from scratch")
+			}
 			go func() {
 				log.Printf("[agent] resuming last plan: %s", a.planPath)
 				if err := a.ApplyPlan(a.planPath, false); err != nil {
@@ -269,10 +292,14 @@ func (a *Agent) applyPlan(planPath string) error {
 	metaToComp := map[string]string{}
 	compRecipes := map[string]*recipe.Recipe{}
 	for _, it := range p.Components {
-		r, _, digest, err := a.resolveRecipeRef(it.RecipePath)
+		r, resolvedPath, digest, err := a.resolveRecipeRef(it.RecipePath)
 		if err != nil {
 			return fmt.Errorf("failed to load recipe for %s (path: %s): %w", it.Name, it.RecipePath, err)
 		}
+		// Mirror plan-driven recipes into the local recipe store so that
+		// GET /v1/recipes reflects what is actually supervised. Errors are
+		// non-fatal: a failed store write must not block the install.
+		a.mirrorRecipeToStore(it.Name, r.Metadata.Name, r.Metadata.Version, resolvedPath)
 		loadedList = append(loadedList, loaded{
 			item:   it,
 			rec:    r,
@@ -284,15 +311,20 @@ func (a *Agent) applyPlan(planPath string) error {
 	}
 	// Second pass: compute deps among plan components using recipe dependencies
 	for _, l := range loadedList {
-		// compute dep component names
+		// compute dep component names and per-edge type
 		var depNames []string
+		var depTypes map[string]string
 		for _, d := range l.rec.Dependencies {
+			if err := validateDepType(d.Type); err != nil {
+				return fmt.Errorf("component %s dependency %q: %w", l.item.Name, d.Name, err)
+			}
+			depType := normalizeDepType(d.Type)
 			compName, ok := metaToComp[d.Name]
 			if !ok {
-				if isHardDependency(d.Type) {
-					return fmt.Errorf("component %s has hard dependency %q not present in plan", l.item.Name, d.Name)
+				if isPresenceMandatory(d.Type) {
+					return fmt.Errorf("component %s has mandatory (%s) dependency %q not present in plan", l.item.Name, depType, d.Name)
 				}
-				log.Printf("[agent] component=%s msg=soft dependency %q not present in plan (ignored)", l.item.Name, d.Name)
+				log.Printf("[agent] component=%s msg=optional (%s) dependency %q not present in plan (ignored)", l.item.Name, depType, d.Name)
 				continue
 			}
 			depRec := compRecipes[compName]
@@ -301,13 +333,17 @@ func (a *Agent) applyPlan(planPath string) error {
 				return fmt.Errorf("component %s dependency %q has invalid version constraint %q: %w", l.item.Name, d.Name, d.Version, derr)
 			}
 			if !satisfied {
-				if isHardDependency(d.Type) {
-					return fmt.Errorf("component %s hard dependency %q constraint %q not satisfied by %s", l.item.Name, d.Name, d.Version, depRec.Metadata.Version)
+				if isPresenceMandatory(d.Type) {
+					return fmt.Errorf("component %s mandatory (%s) dependency %q constraint %q not satisfied by %s", l.item.Name, depType, d.Name, d.Version, depRec.Metadata.Version)
 				}
-				log.Printf("[agent] component=%s msg=soft dependency %q constraint %q not satisfied by %s (ignored)", l.item.Name, d.Name, d.Version, depRec.Metadata.Version)
+				log.Printf("[agent] component=%s msg=optional (%s) dependency %q constraint %q not satisfied by %s (ignored)", l.item.Name, depType, d.Name, d.Version, depRec.Metadata.Version)
 				continue
 			}
 			depNames = append(depNames, compName)
+			if depTypes == nil {
+				depTypes = make(map[string]string)
+			}
+			depTypes[compName] = depType
 		}
 		planMap = append(planMap, state.PlanComponent{
 			Name:          l.item.Name,
@@ -317,6 +353,7 @@ func (a *Agent) applyPlan(planPath string) error {
 			RecipeID:      l.id,
 			RecipeDigest:  l.digest,
 			Deps:          depNames,
+			DepTypes:      depTypes,
 		})
 	}
 	// Build supervisor components now using computed deps
@@ -1246,6 +1283,111 @@ func (a *Agent) stopComponent(name string) {
 	log.Printf("agent: stopComponent done name=%s", name)
 }
 
+// reapOrphanedComponents signals every PID recorded in the supplied component
+// list that still looks like an orphan from the previous agent run, then
+// returns how many PIDs were signalled.
+//
+// "Orphan" here is a process whose parent is PID 1 (init) — the signature of
+// a process whose original parent died without reaping it (typically: previous
+// keystone agent killed by SIGKILL / crashed). For each such PID the helper
+// sends SIGTERM, waits up to ~2 s for the process to exit, and escalates to
+// SIGKILL if it is still alive. Processes whose parent is not init are left
+// untouched: that PID has likely been reused by something unrelated.
+//
+// This is required because Variant B of the boot-resume bug: after a crash,
+// children survive as init-owned orphans the new agent has no handle to. The
+// snapshot's "running" state is informational at that point, not
+// authoritative — reapOrphanedComponents removes the orphans so the resumed
+// plan starts fresh without port/file collisions.
+func reapOrphanedComponents(comps []store.ComponentInfo) int {
+	reaped := 0
+	for _, ci := range comps {
+		if ci.PID <= 0 {
+			continue
+		}
+		if !processIsInitOrphan(ci.PID) {
+			continue
+		}
+		log.Printf("[agent] reaping orphan from previous run: component=%s pid=%d", ci.Name, ci.PID)
+		_ = syscall.Kill(ci.PID, syscall.SIGTERM)
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if !processExists(ci.PID) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if processExists(ci.PID) {
+			_ = syscall.Kill(ci.PID, syscall.SIGKILL)
+		}
+		reaped++
+	}
+	return reaped
+}
+
+// processExists reports whether a process with this PID is reachable from the
+// current process (sig 0 doesn't deliver anything, it just probes existence
+// and permission).
+func processExists(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	return syscall.Kill(pid, 0) == nil
+}
+
+// processIsInitOrphan reports whether the process with PID is currently
+// parented by PID 1 (init) on Linux. Returns false for any read/parse error
+// or when the parent is not init; the conservative default is to leave the
+// PID alone in those cases.
+func processIsInitOrphan(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(line, "PPid:"); ok {
+			return strings.TrimSpace(rest) == "1"
+		}
+	}
+	return false
+}
+
+// shouldResumeLastPlan decides whether the agent should re-apply the last
+// persisted plan at startup based on the persisted plan status.
+//
+// The agent resumes for any status that represents an active or interrupted
+// deployment, including the previously-buggy "applying" case (the apply was
+// killed mid-flight; without resuming, the plan stays silently unsupervised).
+// It refuses to resume only when the operator explicitly stopped the plan or
+// when the last persisted state was a dry-run that never installed anything.
+func shouldResumeLastPlan(planStatus string) bool {
+	switch strings.ToLower(strings.TrimSpace(planStatus)) {
+	case "stopped", "dry-run":
+		return false
+	default:
+		return true
+	}
+}
+
+// mirrorRecipeToStore copies the recipe file at resolvedPath into the
+// local recipe store under (name, version). Used by applyPlan to keep
+// GET /v1/recipes in sync with what is actually supervised. Errors are
+// non-fatal: a failed read or write must not block the install (e.g.
+// read-only mount, racing API call); they are logged and swallowed.
+func (a *Agent) mirrorRecipeToStore(compName, recipeName, recipeVersion, resolvedPath string) {
+	content, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		log.Printf("[agent] component=%s msg=failed to read recipe content for store sync (path=%s): %v", compName, resolvedPath, err)
+		return
+	}
+	if err := a.recipes.Save(recipeName, recipeVersion, string(content), true); err != nil {
+		log.Printf("[agent] component=%s msg=failed to sync recipe %s:%s to store: %v", compName, recipeName, recipeVersion, err)
+	}
+}
+
 // AddRecipe saves a recipe to the local store.
 func (a *Agent) AddRecipe(content string, force bool) (string, string, error) {
 	// Parse basic metadata to get name and version
@@ -1284,8 +1426,13 @@ func (a *Agent) ListRecipes() ([]string, error) {
 	return a.recipes.List()
 }
 
-// planDependentsTopological returns dependents of 'name' in topological order (closest first -> farthest last).
-func (a *Agent) planDependentsTopological(name string) []string {
+// planDependentsTopological returns dependents of 'name' in topological order
+// (closest first -> farthest last). When cascadingOnly is true, only edges
+// whose declared type implies a restart cascade ("hard", "soft") are followed;
+// "ordering" edges and any unknown/missing type defaulting to a cascade
+// behaviour different from hard/soft are skipped. An empty/missing dep type
+// in DepTypes is treated as "hard" for backward compatibility.
+func (a *Agent) planDependentsTopological(name string, cascadingOnly bool) []string {
 	// Build graph: dep -> comp
 	edges := map[string][]string{}
 	indeg := map[string]int{}
@@ -1295,6 +1442,12 @@ func (a *Agent) planDependentsTopological(name string) []string {
 	}
 	for _, pc := range a.planComps {
 		for _, d := range pc.Deps {
+			if cascadingOnly {
+				t := pc.DepTypes[d]
+				if !shouldCascadeRestart(t) {
+					continue
+				}
+			}
 			edges[d] = append(edges[d], pc.Name)
 			indeg[pc.Name]++
 		}
@@ -1387,16 +1540,49 @@ func topoOrder(edges map[string][]string, indeg map[string]int) []string {
 }
 
 // ApplyPlanContent saves the raw plan TOML to a local file and applies it.
+//
+// The canonical "last applied" file (runtime/plans/applied.toml) is touched
+// only after a successful real apply. The candidate plan is first staged to a
+// sibling .staging file: a dry-run runs the reconcile against the staged file
+// and discards it, while a failed real apply leaves applied.toml intact so
+// that the next resume (and the in-flight rollback inside applyPlan, which
+// reads `oldPlanPath = a.planPath`) still sees the previously-known-good plan
+// instead of the rejected candidate.
 func (a *Agent) ApplyPlanContent(content string, dry bool) error {
 	dir := filepath.Join("runtime", "plans")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "applied.toml")
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	finalPath := filepath.Join(dir, "applied.toml")
+	stagedPath := finalPath + ".staging"
+
+	if err := os.WriteFile(stagedPath, []byte(content), 0o644); err != nil {
 		return err
 	}
-	return a.ApplyPlan(path, dry)
+
+	if err := a.ApplyPlan(stagedPath, dry); err != nil {
+		_ = os.Remove(stagedPath)
+		return err
+	}
+	if dry {
+		_ = os.Remove(stagedPath)
+		return nil
+	}
+
+	// Promote the staged file onto the canonical applied.toml. The rename
+	// is atomic on POSIX filesystems for files in the same directory.
+	if err := os.Rename(stagedPath, finalPath); err != nil {
+		_ = os.Remove(stagedPath)
+		return fmt.Errorf("apply: promote staged plan to %s: %w", finalPath, err)
+	}
+	// Re-point the in-memory plan path at the canonical location so the
+	// snapshot (and any future resume) does not reference the staged path
+	// that no longer exists.
+	a.mu.Lock()
+	a.planPath = finalPath
+	a.mu.Unlock()
+	a.persistSnapshot()
+	return nil
 }
 
 // Helpers for synchronous restart
