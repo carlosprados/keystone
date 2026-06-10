@@ -202,8 +202,8 @@ task build
 
 Notes:
 
-- The example recipe uses the built-in `keystoneserver` binary.
-- Artifact management and detached signatures are supported but optional for this simple example.
+- The example recipe uses the built-in `keystoneserver` binary and declares no downloadable artifacts, so it runs as-is.
+- When a recipe **does** declare `[[artifacts]]`, integrity verification is mandatory by default: each artifact needs a `sha256` and a detached signature (`sig_uri`) chaining to `KEYSTONE_TRUST_BUNDLE`. For local experiments with unsigned artifacts, pass `--insecure-skip-verify` (or `KEYSTONE_INSECURE_SKIP_VERIFY=true`).
 - ProcessRunner applies basic `RLIMIT_NOFILE`; cgroups integration is a safe no-op placeholder for now.
 
 ## Quick Usage
@@ -226,8 +226,9 @@ Notes:
 
 ### Signed Artifacts
 
+- Signature verification is **mandatory by default** for any declared artifact: a `sha256`, a `sig_uri`, and a configured `KEYSTONE_TRUST_BUNDLE` are all required, on both apply and restart. Missing any of them aborts the install (fail-closed). Use `--insecure-skip-verify` only for dev/demo.
 - Provide a trust bundle (PEM) via `KEYSTONE_TRUST_BUNDLE` and a leaf certificate via `KEYSTONE_LEAF_CERT`, or include `cert_uri` in the recipe.
-- Add `sig_uri` to each artifact entry in the recipe to enable signature verification.
+- Add `sig_uri` to each artifact entry in the recipe.
 - Signature format: detached signature over SHA-256 of the artifact, produced with OpenSSL (`openssl dgst -sha256 -sign ...`).
 - See `configs/trust/README.md` for a quick, dev-friendly CA and signing walkthrough.
 
@@ -325,6 +326,7 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | Variable                              | Description                                                            |
 | ------------------------------------- | ---------------------------------------------------------------------- |
 | `KEYSTONE_API_TOKEN`                  | Bearer token required for the HTTP API. Mandatory to bind a non-loopback address. |
+| `KEYSTONE_INSECURE_SKIP_VERIFY`       | `true` disables mandatory artifact integrity (sha256 + signature). Dev/demo only. |
 | `KEYSTONE_MAX_REQUEST_BYTES`          | Max HTTP request body size in bytes (default: 4 MiB).                  |
 | `KEYSTONE_MAX_EXTRACT_BYTES`          | Max total uncompressed size per archive extraction (default: 2 GiB).   |
 | `KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES` | Max size of `runtime/artifacts` (default: 2GiB).                       |

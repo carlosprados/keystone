@@ -32,6 +32,9 @@ import (
 // Options defines basic runtime configuration for the agent.
 type Options struct {
 	HTTPAddr string
+	// InsecureSkipVerify disables the mandatory artifact integrity policy
+	// (sha256 + signature). Intended for local development/demo only.
+	InsecureSkipVerify bool
 }
 
 // Agent is the top-level runtime handle for Keystone.
@@ -67,8 +70,9 @@ type Agent struct {
 	artifactDownloadTimeout time.Duration
 	dryRun                  bool
 	// trust
-	trustPool *x509.CertPool
-	trustPath string
+	trustPool          *x509.CertPool
+	trustPath          string
+	insecureSkipVerify bool
 	// recipes
 	recipes *store.RecipeStore
 }
@@ -151,6 +155,10 @@ func New(opts Options) *Agent {
 				}
 			}()
 		}
+	}
+	a.insecureSkipVerify = opts.InsecureSkipVerify
+	if a.insecureSkipVerify {
+		log.Printf("[agent] WARNING: artifact integrity verification is DISABLED (--insecure-skip-verify); downloaded artifacts are NOT authenticated. Do not use in production.")
 	}
 	// Load trust bundle if provided via env KEYSTONE_TRUST_BUNDLE
 	if tb := os.Getenv("KEYSTONE_TRUST_BUNDLE"); tb != "" {
@@ -405,47 +413,8 @@ func (a *Agent) applyPlan(planPath string) error {
 			}
 			// Download and verify artifacts
 			for _, adef := range r.Artifacts {
-				httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
-				path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
-				if err != nil {
+				if err := a.ensureAndVerifyArtifact(artDir, workDir, adef); err != nil {
 					return err
-				}
-				// Signature verification if configured
-				if adef.SigURI != "" && a.trustPool != nil {
-					sigPath, _, err := artifact.Ensure(artDir, adef.SigURI, "", a.artifactDownloadTimeout, httpOpts)
-					if err != nil {
-						return fmt.Errorf("sig download: %w", err)
-					}
-					// Cert can come from recipe or env KEYSTONE_LEAF_CERT
-					certPath := os.Getenv("KEYSTONE_LEAF_CERT")
-					if adef.CertURI != "" {
-						cp, _, err := artifact.Ensure(artDir, adef.CertURI, "", a.artifactDownloadTimeout, httpOpts)
-						if err != nil {
-							return fmt.Errorf("cert download: %w", err)
-						}
-						certPath = cp
-					}
-					if certPath == "" {
-						return fmt.Errorf("no certificate specified for signature verification")
-					}
-					if err := security.VerifyDetached(path, sigPath, certPath, a.trustPool); err != nil {
-						return fmt.Errorf("signature verify failed for %s: %w", filepath.Base(path), err)
-					}
-				}
-				if adef.Unpack {
-					marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
-					if _, err := os.Stat(marker); os.IsNotExist(err) {
-						if err := artifact.Unpack(path, workDir); err != nil {
-							return err
-						}
-						_ = os.MkdirAll(filepath.Dir(marker), 0o755)
-						_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
-					}
-				} else {
-					// Stage non-archive artifacts into workDir as files.
-					if err := stageArtifactToWorkDir(path, workDir); err != nil {
-						return err
-					}
 				}
 			}
 			// If not unpacked, ensure working dir exists
@@ -768,6 +737,72 @@ func (a *Agent) applyPlan(planPath string) error {
 
 // stageArtifactToWorkDir copies a downloaded artifact into the component workDir
 // using the artifact basename. Existing files are overwritten.
+// ensureAndVerifyArtifact downloads an artifact, enforces the integrity policy,
+// verifies its detached signature, and unpacks or stages it into workDir. It is
+// the single verification path shared by plan apply and component restart.
+//
+// Policy (fail-closed): unless insecureSkipVerify is set, the artifact MUST
+// carry a non-empty sha256 AND a sig_uri, and a trust bundle MUST be configured;
+// any of these missing is a hard error. With insecureSkipVerify (dev/demo) the
+// requirements are dropped, but a signature is still verified when one and a
+// trust pool happen to be present.
+func (a *Agent) ensureAndVerifyArtifact(artDir, workDir string, adef recipe.Artifact) error {
+	httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
+
+	if !a.insecureSkipVerify {
+		if strings.TrimSpace(adef.SHA256) == "" {
+			return fmt.Errorf("artifact %q rejected: sha256 is required (use --insecure-skip-verify for dev)", adef.URI)
+		}
+		if adef.SigURI == "" {
+			return fmt.Errorf("artifact %q rejected: sig_uri is required (use --insecure-skip-verify for dev)", adef.URI)
+		}
+		if a.trustPool == nil {
+			return fmt.Errorf("artifact %q rejected: no trust bundle configured; set KEYSTONE_TRUST_BUNDLE (or --insecure-skip-verify for dev)", adef.URI)
+		}
+	}
+
+	path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
+	if err != nil {
+		return err
+	}
+
+	// Verify the detached signature whenever one is available. In secure mode
+	// the policy above guarantees this block runs.
+	if adef.SigURI != "" && a.trustPool != nil {
+		sigPath, _, err := artifact.Ensure(artDir, adef.SigURI, "", a.artifactDownloadTimeout, httpOpts)
+		if err != nil {
+			return fmt.Errorf("sig download: %w", err)
+		}
+		certPath := os.Getenv("KEYSTONE_LEAF_CERT")
+		if adef.CertURI != "" {
+			cp, _, err := artifact.Ensure(artDir, adef.CertURI, "", a.artifactDownloadTimeout, httpOpts)
+			if err != nil {
+				return fmt.Errorf("cert download: %w", err)
+			}
+			certPath = cp
+		}
+		if certPath == "" {
+			return fmt.Errorf("no certificate specified for signature verification")
+		}
+		if err := security.VerifyDetached(path, sigPath, certPath, a.trustPool); err != nil {
+			return fmt.Errorf("signature verify failed for %s: %w", filepath.Base(path), err)
+		}
+	}
+
+	if adef.Unpack {
+		marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
+		if _, err := os.Stat(marker); os.IsNotExist(err) {
+			if err := artifact.Unpack(path, workDir); err != nil {
+				return err
+			}
+			_ = os.MkdirAll(filepath.Dir(marker), 0o755)
+			_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+		}
+		return nil
+	}
+	return stageArtifactToWorkDir(path, workDir)
+}
+
 func stageArtifactToWorkDir(srcPath, workDir string) error {
 	st, err := os.Stat(srcPath)
 	if err != nil {
@@ -1062,27 +1097,11 @@ func (a *Agent) restartFromPlan(name string) error {
 
 	workDir := fmt.Sprintf("runtime/components/%s/%s", r.Metadata.Name, r.Metadata.Version)
 	artDir := fmt.Sprintf("runtime/artifacts/%s/%s", r.Metadata.Name, r.Metadata.Version)
-	// Ensure artifacts and (optional) unpack
+	// Ensure artifacts with the same integrity policy as apply (sha256 +
+	// signature, fail-closed unless --insecure-skip-verify), then unpack/stage.
 	for _, adef := range r.Artifacts {
-		httpOpts := artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
-		path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
-		if err != nil {
+		if err := a.ensureAndVerifyArtifact(artDir, workDir, adef); err != nil {
 			return err
-		}
-		if adef.Unpack {
-			marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(path))
-			if _, err := os.Stat(marker); os.IsNotExist(err) {
-				if err := artifact.Unpack(path, workDir); err != nil {
-					return err
-				}
-				_ = os.MkdirAll(filepath.Dir(marker), 0o755)
-				_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
-			}
-		} else {
-			// Keep restart behavior aligned with apply: stage files to workDir.
-			if err := stageArtifactToWorkDir(path, workDir); err != nil {
-				return err
-			}
 		}
 	}
 	if _, err := os.Stat(workDir); os.IsNotExist(err) {
