@@ -150,7 +150,7 @@ func NewContainerRunner(cfg ContainerRunnerConfig) (*ContainerRunner, error) {
 	if pluginDirs == "" {
 		r.cniPluginDir = []string{"/opt/cni/bin", "/usr/lib/cni"}
 	} else {
-		for _, p := range strings.Split(pluginDirs, ":") {
+		for p := range strings.SplitSeq(pluginDirs, ":") {
 			p = strings.TrimSpace(p)
 			if p != "" {
 				r.cniPluginDir = append(r.cniPluginDir, p)
