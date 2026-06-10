@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,6 +39,21 @@ func (m *mockHandler) AddRecipe(content string, force bool) (string, string, err
 func (m *mockHandler) DeleteRecipe(name, version string) error { return nil }
 func (m *mockHandler) ListRecipes() ([]string, error)          { return []string{}, nil }
 func (m *mockHandler) GetHealth() *adapter.HealthStatus        { return m.health }
+
+func TestAdapter_RejectsOversizedBody(t *testing.T) {
+	t.Setenv("KEYSTONE_MAX_REQUEST_BYTES", "16")
+	a := New(Config{Addr: ":0"}, &mockHandler{})
+	router := a.buildRouter()
+
+	big := strings.NewReader(strings.Repeat("A", 1024))
+	req := httptest.NewRequest("POST", "/v1/recipes", big)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized body: status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+}
 
 func TestAdapter_Name(t *testing.T) {
 	a := New(Config{Addr: ":0"}, &mockHandler{})

@@ -9,12 +9,20 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/carlosprados/keystone/internal/adapter"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+// maxRequestBody bounds the size of a request body the API will read into
+// memory (recipes and plans are small TOML/JSON documents). It defends against
+// memory-exhaustion DoS via an oversized POST. Override with
+// KEYSTONE_MAX_REQUEST_BYTES.
+const defaultMaxRequestBody int64 = 4 << 20 // 4 MiB
 
 // Adapter implements the HTTP REST API for the agent.
 type Adapter struct {
@@ -41,6 +49,29 @@ func (a *Adapter) Name() string {
 	return "http"
 }
 
+func maxRequestBody() int64 {
+	if v := os.Getenv("KEYSTONE_MAX_REQUEST_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxRequestBody
+}
+
+// readLimitedBody reads the request body capped at maxRequestBody. It replaces
+// r.Body with a MaxBytesReader so an oversized upload is rejected instead of
+// being buffered fully into memory. On overflow or read error it writes a 413
+// and returns ok=false; callers must return immediately.
+func readLimitedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody())
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "request body too large or unreadable", http.StatusRequestEntityTooLarge)
+		return nil, false
+	}
+	return body, true
+}
+
 // Start initializes the HTTP server and begins listening.
 func (a *Adapter) Start(ctx context.Context) error {
 	mux := a.buildRouter()
@@ -48,6 +79,15 @@ func (a *Adapter) Start(ctx context.Context) error {
 	a.server = &http.Server{
 		Addr:    a.addr,
 		Handler: mux,
+		// Bound the request-read phase to defeat slowloris-style attacks that
+		// hold connections open by trickling headers/body. WriteTimeout is
+		// deliberately left unset: handlePlanApply runs the apply (downloads +
+		// install hooks) synchronously and may legitimately take minutes before
+		// the response is written; a write deadline would abort it mid-install.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
 	}
 
 	log.Printf("[http] starting HTTP adapter on %s", a.addr)
@@ -140,9 +180,8 @@ func (a *Adapter) handleRecipes(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		force := r.URL.Query().Get("force") == "true"
-		content, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		content, ok := readLimitedBody(w, r)
+		if !ok {
 			return
 		}
 		name, version, err := a.handler.AddRecipe(string(content), force)
@@ -273,9 +312,8 @@ func (a *Adapter) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	body, ok := readLimitedBody(w, r)
+	if !ok {
 		return
 	}
 
