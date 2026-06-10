@@ -7,9 +7,10 @@
 *.dll
 *.so
 *.dylib
-keystone
-keystonectl
-keystoneserver
+# Built binaries at the repo root (anchored so they don't match cmd/keystone/ etc.)
+/keystone
+/keystonectl
+/keystoneserver
 
 # Test binary, built with `go test -c`
 *.test
