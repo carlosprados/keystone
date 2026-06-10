@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"sync"
 	"time"
@@ -195,9 +196,7 @@ func BuildGraph(comps []*Component) *Graph {
 // TopoLayers returns ordered layers where each layer can start in parallel.
 func (g *Graph) TopoLayers() ([][]string, error) {
 	in := make(map[string]int, len(g.InDeg))
-	for k, v := range g.InDeg {
-		in[k] = v
-	}
+	maps.Copy(in, g.InDeg)
 	var q []string
 	for n, d := range in {
 		if d == 0 {

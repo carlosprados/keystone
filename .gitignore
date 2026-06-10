@@ -42,3 +42,6 @@ runtime
 
 #OS Files
 .DS_Store
+
+# tmux session layout (local dev convenience)
+.tmuxp.yaml
