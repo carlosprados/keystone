@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/carlosprados/keystone/internal/validate"
@@ -27,8 +28,11 @@ func Load(path string) (*Plan, error) {
 		return nil, err
 	}
 	var m map[string]any
-	if err := toml.Unmarshal(b, &m); err == nil {
-		_ = validate.ValidatePlanMap(m) // best-effort
+	if err := toml.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	if err := validate.ValidatePlanMap(m); err != nil {
+		return nil, fmt.Errorf("invalid plan: %w", err)
 	}
 	return &p, nil
 }

@@ -15,29 +15,32 @@ func Load(path string) (*Recipe, error) {
 	if err != nil {
 		return nil, err
 	}
-	var r Recipe
-	if err := toml.Unmarshal(b, &r); err != nil {
-		return nil, err
-	}
-	if err := validateMetadata(&r); err != nil {
-		return nil, err
-	}
-	// Also validate generically with JSON Schema
-	var generic map[string]any
-	if err := toml.Unmarshal(b, &generic); err == nil {
-		_ = validate.ValidateRecipeMap(generic) // best-effort
-	}
-	return &r, nil
+	return parseAndValidate(b)
 }
 
 // Unmarshal parses a TOML recipe from bytes.
 func Unmarshal(b []byte) (*Recipe, error) {
+	return parseAndValidate(b)
+}
+
+// parseAndValidate decodes a recipe and enforces both the path-safety of its
+// metadata and the JSON-Schema contract. Schema errors are now returned (no
+// longer best-effort/discarded), so malformed recipes are rejected before they
+// can drive process/container execution.
+func parseAndValidate(b []byte) (*Recipe, error) {
 	var r Recipe
 	if err := toml.Unmarshal(b, &r); err != nil {
 		return nil, err
 	}
 	if err := validateMetadata(&r); err != nil {
 		return nil, err
+	}
+	var generic map[string]any
+	if err := toml.Unmarshal(b, &generic); err != nil {
+		return nil, err
+	}
+	if err := validate.ValidateRecipeMap(generic); err != nil {
+		return nil, fmt.Errorf("invalid recipe: %w", err)
 	}
 	return &r, nil
 }
