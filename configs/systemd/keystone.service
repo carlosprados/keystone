@@ -4,8 +4,17 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
-ExecStart=/opt/keystone/bin/keystone-agent --http=:8080
+# The agent does not implement sd_notify; use a plain process type.
+Type=simple
+
+# Security-relevant configuration is loaded from an environment file, e.g.:
+#   KEYSTONE_API_TOKEN=<random token>          # required for a non-loopback bind
+#   KEYSTONE_TRUST_BUNDLE=/etc/keystone/ca.pem  # CA for artifact/recipe signatures
+#   KEYSTONE_LEAF_CERT=/etc/keystone/leaf.pem
+# Binding 0.0.0.0 without KEYSTONE_API_TOKEN makes the agent refuse to start.
+EnvironmentFile=/etc/keystone/keystone.env
+
+ExecStart=/opt/keystone/bin/keystone --http 0.0.0.0:8080
 Restart=on-failure
 RestartSec=3
 User=keystone
@@ -21,4 +30,3 @@ LimitNOFILE=65535
 
 [Install]
 WantedBy=multi-user.target
-

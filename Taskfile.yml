@@ -35,6 +35,31 @@ tasks:
     cmds:
       - air
 
+  demo:
+    desc: Run the built-in mock 3-component demo stack (db -> cache -> api)
+    cmds:
+      - go run {{.LDFLAGS}} ./cmd/keystone --demo --http 127.0.0.1:8080 --insecure-skip-verify
+
+  sign:
+    desc: "Generate a dev CA (once) and sign a file (usage: task sign FILE=path/to/recipe.toml)"
+    cmds:
+      - |
+        if [ -z "{{.FILE}}" ]; then
+          echo "Usage: task sign FILE=path/to/recipe.toml"
+          exit 1
+        fi
+        ./scripts/dev-sign.sh {{.FILE}}
+
+  demo-signed:
+    desc: "Secure demo: sign the example recipe with a dev CA and run the agent verifying it"
+    cmds:
+      - ./scripts/dev-sign.sh configs/examples/com.keystone.server.recipe.toml
+      - task: build
+      - |
+        echo "Trust material ready. In another shell run the agent securely:"
+        echo "  KEYSTONE_TRUST_BUNDLE=configs/trust/ca.pem KEYSTONE_LEAF_CERT=configs/trust/leaf.pem ./keystone --http 127.0.0.1:8080"
+        echo "then: ./keystonectl apply configs/examples/plan.toml"
+
   ctl:
     desc: Build the keystonectl binary
     cmds:
