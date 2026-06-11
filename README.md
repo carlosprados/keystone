@@ -10,9 +10,9 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 
 ## Highlights
 
-- **Lightweight**: idle CPU ~0%, ~23 MB RAM baseline, 21 MB binary
+- **Lightweight**: idle CPU ~0%, ~23 MB RAM baseline, ~22 MB binary
 - **Solid**: atomic deployments, checkpoints, rollback, exponential backoff
-- **Secure**: mTLS, artifact signatures (ECDSA/RSA), checksums
+- **Secure by default**: loopback API with bearer-token auth, mandatory recipe & artifact signatures (ECDSA/RSA), fail-closed verification — see [docs/security.md](docs/security.md)
 - **Portable**: Linux x86/ARM, single binary, no mandatory Docker/CRI
 - **Connected**: HTTP REST, NATS (+ JetStream), MQTT adapters
 - **Operable**: structured logs, Prometheus metrics, health endpoints, persistence
@@ -27,6 +27,17 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 | **Setup**        | Heavy Bootstrap       | **Single Binary**         |
 | **Control Plane**| AWS IoT Core only     | **HTTP, NATS, MQTT**      |
 | **Offline Mode** | Limited               | **Full (JetStream jobs)** |
+
+## Documentation
+
+| Document | What it covers |
+|----------|----------------|
+| [docs/security.md](docs/security.md) | **Security model**: threat model, secure-by-default controls, auth, signing, the `--insecure-skip-verify` escape hatch, config reference |
+| [docs/adapters.md](docs/adapters.md) | Control-plane adapters: HTTP (auth), NATS (+ JetStream), MQTT — comparison and configuration |
+| [docs/containers.md](docs/containers.md) | Container recipe syntax and examples |
+| [docs/containerrunner-design.md](docs/containerrunner-design.md) | containerd integration design notes |
+| [configs/trust/README.md](configs/trust/README.md) | CA setup and signing recipes/artifacts |
+| [KeyStone.md](KeyStone.md) | Original architecture proposal and delivery plan |
 
 ## Quick Look: How it Works
 
@@ -137,11 +148,22 @@ curl -s localhost:8080/healthz | jq
 
 You should see a JSON response with status and uptime.
 
-Run the built-in demo stack (db -> cache -> api):
+Run the built-in mock demo stack (db -> cache -> api):
 
 ```bash
-go run ./cmd/keystone --demo
+task demo            # or: go run ./cmd/keystone --demo --insecure-skip-verify
 ```
+
+The mock demo uses synthetic components (no recipes or artifacts). To see the
+**real, secure flow** — a signed recipe verified before it runs — use the
+signing helper:
+
+```bash
+# Generates a dev CA and signs the example recipe, then tells you how to run it.
+task demo-signed
+```
+
+See [docs/security.md](docs/security.md) for the full signing model.
 
 Scrape metrics (Prometheus format):
 
@@ -478,11 +500,14 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 ### All CLI Flags
 
 <details>
-<summary>HTTP Adapter Flags</summary>
+<summary>Core & HTTP Adapter Flags</summary>
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--http` | `:8080` | HTTP listen address (empty to disable) |
+| `--http` | `127.0.0.1:8080` | HTTP listen address (empty to disable) |
+| `--api-token` | (empty) | Bearer token for the API (or `KEYSTONE_API_TOKEN`); required for a non-loopback bind |
+| `--insecure-skip-verify` | `false` | Disable mandatory artifact/recipe verification — dev/demo only (or `KEYSTONE_INSECURE_SKIP_VERIFY=true`) |
+| `--demo` | `false` | Run the built-in mock 3-component stack (db → cache → api) |
 
 </details>
 
