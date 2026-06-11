@@ -16,8 +16,8 @@ Keystone uses a pluggable adapter architecture for control plane communication. 
 |---------|------|------|------|
 | **Transport** | HTTP/1.1 | TCP/WebSocket | TCP/WebSocket |
 | **Pattern** | Request/Response | Pub/Sub + Request/Reply | Pub/Sub |
-| **TLS Support** | Planned | Yes (mTLS) | Yes (mTLS) |
-| **Authentication** | None (use reverse proxy) | NKey, Creds, Token, User/Pass | User/Pass, Certificates |
+| **TLS Support** | Terminate at proxy | Yes (mTLS) | Yes (mTLS) |
+| **Authentication** | Bearer token (required off-loopback) | NKey, Creds, Token, User/Pass | User/Pass, Certificates |
 | **Persistence** | N/A | JetStream | Broker-dependent |
 | **Offline Queuing** | No | Yes (JetStream) | Broker-dependent |
 | **Event Streaming** | No | Yes | Yes |
@@ -32,21 +32,39 @@ The HTTP adapter exposes a REST API for local management and integration with mo
 ### Configuration
 
 ```bash
-# Default: enabled on port 8080
-./keystone --http :8080
+# Default: enabled on loopback only
+./keystone --http 127.0.0.1:8080
 
 # Disable HTTP adapter
 ./keystone --http ""
 
-# Custom port
-./keystone --http :9090
+# Reachable off-host: a token is REQUIRED, or the agent refuses to start
+export KEYSTONE_API_TOKEN="$(openssl rand -hex 32)"
+./keystone --http 0.0.0.0:8080
 ```
+
+### Authentication
+
+The API can apply plans and run lifecycle hooks (arbitrary code), so it is a
+privileged surface:
+
+- Binds `127.0.0.1:8080` by default. Binding any non-loopback address requires
+  a token (`--api-token` / `KEYSTONE_API_TOKEN`); without one the agent refuses
+  to start.
+- When a token is set, every endpoint except `/healthz` requires
+  `Authorization: Bearer <token>` (constant-time compare). `keystonectl` sends
+  it from `--token` / `KEYSTONE_API_TOKEN`.
+- `POST /v1/plan/apply` accepts plan **content** only; the legacy `planPath`
+  field is rejected (`400`).
+- No built-in transport TLS yet — terminate TLS at a reverse proxy. See
+  [security.md](security.md).
 
 ### CLI Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--http` | `:8080` | HTTP listen address (empty to disable) |
+| `--http` | `127.0.0.1:8080` | HTTP listen address (empty to disable) |
+| `--api-token` | _empty_ | Bearer token (or `KEYSTONE_API_TOKEN`); required for non-loopback bind |
 
 ### API Endpoints
 
@@ -110,10 +128,9 @@ curl -s localhost:8080/healthz | jq
 # List components
 curl -s localhost:8080/v1/components | jq
 
-# Apply a plan
-curl -X POST localhost:8080/v1/plan/apply \
-  -H 'Content-Type: application/json' \
-  -d '{"planPath": "configs/examples/plan.toml"}'
+# Apply a plan (upload content; planPath is no longer accepted)
+curl -X POST localhost:8080/v1/plan/apply --data-binary @configs/examples/plan.toml
+# With a token configured, add: -H "Authorization: Bearer $KEYSTONE_API_TOKEN"
 
 # Restart a component
 curl -X POST localhost:8080/v1/components/myapp:restart

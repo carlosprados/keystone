@@ -104,9 +104,11 @@ All agent flags are discoverable via `./keystone --help`. Environment variables 
 ## Key Documentation
 
 - `README.md` — Features, quick start, all CLI flags, environment variables
-- `docs/adapters.md` — Adapter comparison, NATS/MQTT configuration details
+- `docs/security.md` — Security model: secure-by-default posture, auth, signing, `--insecure-skip-verify`, config reference
+- `docs/adapters.md` — Adapter comparison, HTTP auth, NATS/MQTT configuration details
 - `docs/containers.md` — Container recipe syntax and examples
 - `docs/containerrunner-design.md` — Containerd integration design decisions
 - `KeyStone.md` — Original architecture proposal and delivery plan
 - `configs/examples/` — Example plans and recipes
-- `configs/trust/README.md` — CA and artifact signing walkthrough
+- `configs/trust/README.md` — CA setup and recipe/artifact signing walkthrough
+- `scripts/dev-sign.sh` — Dev helper: generate a throwaway CA and sign recipes/artifacts
