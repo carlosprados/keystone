@@ -14,9 +14,18 @@ import (
 	"github.com/carlosprados/keystone/internal/version"
 )
 
+// apiToken is sent as a bearer token on every request when set (via the
+// --token flag or KEYSTONE_API_TOKEN), matching the agent's HTTP auth.
+var apiToken string
+
 func main() {
 	addr := flag.String("addr", "http://127.0.0.1:8080", "Keystone agent base URL")
+	token := flag.String("token", "", "Bearer token for the agent API (or KEYSTONE_API_TOKEN)")
 	flag.Parse()
+	apiToken = *token
+	if apiToken == "" {
+		apiToken = os.Getenv("KEYSTONE_API_TOKEN")
+	}
 	if flag.NArg() < 1 {
 		usage()
 		os.Exit(2)
@@ -37,7 +46,7 @@ func main() {
 			os.Exit(2)
 		}
 		plan := flag.Arg(1)
-		doPOSTJSON(*addr+"/v1/plan/apply", map[string]any{"planPath": plan, "dry": true})
+		doUploadPlan(*addr+"/v1/plan/apply", plan, true)
 	case "apply":
 		if flag.NArg() < 2 {
 			fmt.Fprintln(os.Stderr, "missing plan path")
@@ -116,8 +125,17 @@ func usage() {
 	fmt.Println("  sha256 <path>            Calculate SHA256 hash of a file")
 }
 
+// setAuth attaches the bearer token to a request when one is configured.
+func setAuth(req *http.Request) {
+	if apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+apiToken)
+	}
+}
+
 func doGET(url string) {
-	resp, err := http.Get(url)
+	req, _ := http.NewRequest("GET", url, nil)
+	setAuth(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -141,23 +159,7 @@ func doGET(url string) {
 
 func doPOST(url string) {
 	req, _ := http.NewRequest("POST", url, nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		io.Copy(os.Stderr, resp.Body)
-		os.Exit(1)
-	}
-	fmt.Println("OK")
-}
-
-func doPOSTJSON(url string, body any) {
-	b, _ := json.Marshal(body)
-	req, _ := http.NewRequest("POST", url, strings.NewReader(string(b)))
-	req.Header.Set("Content-Type", "application/json")
+	setAuth(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -185,6 +187,7 @@ func doUploadRecipe(addr, path string, force bool) {
 	}
 
 	req, _ := http.NewRequest("POST", u, f)
+	setAuth(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -230,6 +233,7 @@ func doUploadPlan(addr, path string, dry bool) {
 	}
 
 	req, _ := http.NewRequest("POST", u, f)
+	setAuth(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

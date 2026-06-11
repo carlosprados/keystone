@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -175,6 +176,58 @@ func VerifySHA256(path, expected string) error {
 }
 
 // Unpack extracts a tar.gz or zip file to targetDir. Best-effort detection by extension.
+// defaultMaxExtractBytes caps the total uncompressed size written by a single
+// archive extraction to defeat decompression bombs (a tiny archive that
+// expands to fill the disk). Override with KEYSTONE_MAX_EXTRACT_BYTES.
+const defaultMaxExtractBytes int64 = 2 << 30 // 2 GiB
+
+func maxExtractBytes() int64 {
+	if v := os.Getenv("KEYSTONE_MAX_EXTRACT_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxExtractBytes
+}
+
+// safeJoin joins targetDir and an archive-supplied entry name, then verifies
+// the cleaned result stays within targetDir. This defeats "zip slip" path
+// traversal: an entry named "../../etc/cron.d/x" (or an absolute path) is
+// rejected instead of escaping the extraction directory.
+func safeJoin(targetDir, name string) (string, error) {
+	dst := filepath.Join(targetDir, name)
+	cleanDir := filepath.Clean(targetDir)
+	rel, err := filepath.Rel(cleanDir, dst)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("illegal archive entry %q: escapes extraction directory", name)
+	}
+	return dst, nil
+}
+
+// safeMode masks archive-supplied permission bits down to a safe subset,
+// stripping setuid/setgid/sticky and any group/other write bit so a malicious
+// archive cannot drop a setuid binary or world-writable file.
+func safeMode(m os.FileMode) os.FileMode { return m & 0o755 }
+
+// copyWithBudget copies src into dst while decrementing *budget by the number
+// of bytes written. It errors if the copy would exceed the remaining budget,
+// bounding total extracted size against decompression bombs.
+func copyWithBudget(dst io.Writer, src io.Reader, budget *int64) error {
+	if *budget < 0 {
+		return errors.New("archive exceeds maximum extraction size")
+	}
+	// Read at most budget+1 bytes; if we get budget+1, the limit was exceeded.
+	n, err := io.Copy(dst, io.LimitReader(src, *budget+1))
+	*budget -= n
+	if err != nil {
+		return err
+	}
+	if *budget < 0 {
+		return errors.New("archive exceeds maximum extraction size")
+	}
+	return nil
+}
+
 func Unpack(archivePath, targetDir string) error {
 	// Fast-path by extension
 	if strings.HasSuffix(archivePath, ".tar.gz") || strings.HasSuffix(archivePath, ".tgz") {
@@ -236,6 +289,7 @@ func untarGz(archivePath, targetDir string) error {
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
+	budget := maxExtractBytes()
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -244,27 +298,30 @@ func untarGz(archivePath, targetDir string) error {
 		if err != nil {
 			return err
 		}
-		dstPath := filepath.Join(targetDir, hdr.Name)
+		dstPath, err := safeJoin(targetDir, hdr.Name)
+		if err != nil {
+			return err
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(dstPath, os.FileMode(hdr.Mode)); err != nil {
+			if err := os.MkdirAll(dstPath, safeMode(os.FileMode(hdr.Mode))); err != nil {
 				return err
 			}
 		case tar.TypeReg:
 			if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
 				return err
 			}
-			out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode))
+			out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, safeMode(os.FileMode(hdr.Mode)))
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(out, tr); err != nil {
+			if err := copyWithBudget(out, tr, &budget); err != nil {
 				out.Close()
 				return err
 			}
 			out.Close()
 		default:
-			// skip other types for MVP
+			// skip other types (symlinks, devices, etc.) for safety
 		}
 	}
 	return nil
@@ -279,10 +336,14 @@ func unzip(archivePath, targetDir string) error {
 		return err
 	}
 	defer r.Close()
+	budget := maxExtractBytes()
 	for _, f := range r.File {
-		dstPath := filepath.Join(targetDir, f.Name)
+		dstPath, err := safeJoin(targetDir, f.Name)
+		if err != nil {
+			return err
+		}
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(dstPath, f.Mode()); err != nil {
+			if err := os.MkdirAll(dstPath, safeMode(f.Mode())); err != nil {
 				return err
 			}
 			continue
@@ -294,12 +355,12 @@ func unzip(archivePath, targetDir string) error {
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, f.Mode())
+		out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, safeMode(f.Mode()))
 		if err != nil {
 			rc.Close()
 			return err
 		}
-		if _, err := io.Copy(out, rc); err != nil {
+		if err := copyWithBudget(out, rc, &budget); err != nil {
 			rc.Close()
 			out.Close()
 			return err

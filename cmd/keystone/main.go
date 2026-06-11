@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,7 +26,9 @@ func main() {
 	config.LoadDotEnvDefault()
 
 	// HTTP adapter flags
-	httpAddr := flag.String("http", ":8080", "HTTP listen address (empty to disable)")
+	httpAddr := flag.String("http", "127.0.0.1:8080", "HTTP listen address (empty to disable)")
+	apiToken := flag.String("api-token", "", "Bearer token required for the HTTP API (or KEYSTONE_API_TOKEN); required to bind a non-loopback address")
+	insecureSkipVerify := flag.Bool("insecure-skip-verify", false, "Disable mandatory artifact integrity checks (sha256 + signature). Dev/demo only (or KEYSTONE_INSECURE_SKIP_VERIFY=true)")
 
 	// NATS adapter flags
 	natsURL := flag.String("nats-url", "", "NATS server URL (empty to disable NATS adapter)")
@@ -152,14 +155,19 @@ func main() {
 	defer stop()
 
 	// Create agent
-	a := agent.New(agent.Options{HTTPAddr: *httpAddr})
+	skipVerify := *insecureSkipVerify || strings.EqualFold(os.Getenv("KEYSTONE_INSECURE_SKIP_VERIFY"), "true")
+	a := agent.New(agent.Options{HTTPAddr: *httpAddr, InsecureSkipVerify: skipVerify})
 
 	// Create adapter registry
 	registry := adapter.NewRegistry()
 
 	// Register HTTP adapter (enabled by default)
 	if *httpAddr != "" {
-		httpCfg := httpadapter.Config{Addr: *httpAddr}
+		token := *apiToken
+		if token == "" {
+			token = os.Getenv("KEYSTONE_API_TOKEN")
+		}
+		httpCfg := httpadapter.Config{Addr: *httpAddr, Token: token}
 		httpAdapter := httpadapter.New(httpCfg, a)
 		registry.Register(httpAdapter)
 		log.Printf("[main] HTTP adapter configured on %s", *httpAddr)

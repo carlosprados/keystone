@@ -120,7 +120,7 @@ See everything running at a glance:
 ## Quick Start
 
 ```bash
-go run ./cmd/keystone --http :8080
+go run ./cmd/keystone --http 127.0.0.1:8080
 ```
 
 For development with live reload (requires [air](https://github.com/air-verse/air)):
@@ -192,9 +192,11 @@ recipe = "configs/examples/com.keystone.server.recipe.toml"
 Apply it:
 
 ```bash
-# 1. Start the agent (now remote-first)
+# 1. Start the agent (now remote-first).
+#    --insecure-skip-verify is needed here because the example recipe is
+#    unsigned; drop it once your recipes/artifacts are signed (see below).
 task build
-./keystone --http :8080
+./keystone --http 127.0.0.1:8080 --insecure-skip-verify
 
 # 2. Apply the plan remotely using the CLI
 ./keystonectl apply configs/examples/plan.toml
@@ -202,14 +204,14 @@ task build
 
 Notes:
 
-- The example recipe uses the built-in `keystoneserver` binary.
-- Artifact management and detached signatures are supported but optional for this simple example.
+- The example recipe uses the built-in `keystoneserver` binary and declares no downloadable artifacts.
+- **Recipes loaded from a file must be signed by default** (see "Signed Recipes and Artifacts"). Recipes pushed through the authenticated API (`keystonectl upload-recipe`) are trusted by that authentication and are not re-verified. For local experiments with unsigned files, run the agent with `--insecure-skip-verify` (or `KEYSTONE_INSECURE_SKIP_VERIFY=true`).
 - ProcessRunner applies basic `RLIMIT_NOFILE`; cgroups integration is a safe no-op placeholder for now.
 
 ## Quick Usage
 
 - Start agent:
-  - `./keystone --http :8080`
+  - `./keystone --http 127.0.0.1:8080`
 - Apply plan:
   - `./keystonectl apply configs/examples/plan.toml`
 - Health and discovery:
@@ -224,10 +226,20 @@ Notes:
 - Metrics (Prometheus):
   - `curl -s localhost:8080/metrics | head`
 
-### Signed Artifacts
+### Signed Recipes and Artifacts
+
+Verification is **mandatory by default** and fails closed; `--insecure-skip-verify` (or `KEYSTONE_INSECURE_SKIP_VERIFY=true`) relaxes all of it for dev/demo only.
+
+**Recipes** loaded from a filesystem path must carry a detached signature before any lifecycle hook (install/run/shutdown) runs:
+
+- Place a sibling `<recipe>.sig` next to the recipe, and a cert as `<recipe>.crt` or via `KEYSTONE_LEAF_CERT`, chaining to `KEYSTONE_TRUST_BUNDLE`.
+- Sign with OpenSSL: `openssl dgst -sha256 -sign signer.key -out com.example.app.recipe.toml.sig com.example.app.recipe.toml`.
+- Recipes uploaded through the authenticated HTTP API are trusted by that authentication and are not re-verified.
+
+**Artifacts** declared in a recipe each require a `sha256`, a `sig_uri`, and a configured trust bundle, on both apply and restart:
 
 - Provide a trust bundle (PEM) via `KEYSTONE_TRUST_BUNDLE` and a leaf certificate via `KEYSTONE_LEAF_CERT`, or include `cert_uri` in the recipe.
-- Add `sig_uri` to each artifact entry in the recipe to enable signature verification.
+- Add `sig_uri` to each artifact entry in the recipe.
 - Signature format: detached signature over SHA-256 of the artifact, produced with OpenSSL (`openssl dgst -sha256 -sign ...`).
 - See `configs/trust/README.md` for a quick, dev-friendly CA and signing walkthrough.
 
@@ -304,12 +316,30 @@ The GitHub Action will automatically build the binaries for multiple architectur
 
 ## Configuration
 
+### API Security
+
+The HTTP API can apply plans and run lifecycle hooks, so it is treated as a
+privileged surface:
+
+- It binds to `127.0.0.1:8080` by default. Binding a non-loopback address
+  (e.g. `--http 0.0.0.0:8080`) **requires** a token via `--api-token` or
+  `KEYSTONE_API_TOKEN`; otherwise the agent refuses to start.
+- When a token is set, every endpoint except `/healthz` requires
+  `Authorization: Bearer <token>`. `keystonectl` sends it automatically from
+  `--token` or `KEYSTONE_API_TOKEN`.
+- The API accepts plans as uploaded content only; the legacy `planPath` field
+  (loading an arbitrary server-side file) is rejected.
+
 ### Environment Variables
 
 Keystone supports loading environment variables from a `.env` file in the current working directory.
 
 | Variable                              | Description                                                            |
 | ------------------------------------- | ---------------------------------------------------------------------- |
+| `KEYSTONE_API_TOKEN`                  | Bearer token required for the HTTP API. Mandatory to bind a non-loopback address. |
+| `KEYSTONE_INSECURE_SKIP_VERIFY`       | `true` disables mandatory artifact integrity (sha256 + signature). Dev/demo only. |
+| `KEYSTONE_MAX_REQUEST_BYTES`          | Max HTTP request body size in bytes (default: 4 MiB).                  |
+| `KEYSTONE_MAX_EXTRACT_BYTES`          | Max total uncompressed size per archive extraction (default: 2 GiB).   |
 | `KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES` | Max size of `runtime/artifacts` (default: 2GiB).                       |
 | `KEYSTONE_ARTIFACT_DOWNLOAD_TIMEOUT`  | Artifact download timeout (default: 30m). Supports "5m", "1h", etc.    |
 | `KEYSTONE_TRUST_BUNDLE`               | Path to CA trust bundle (PEM) for signature verification.              |
@@ -370,7 +400,7 @@ The HTTP adapter exposes a REST API for local management:
 
 ```bash
 # Default: enabled on port 8080
-./keystone --http :8080
+./keystone --http 127.0.0.1:8080
 
 # Disable HTTP (use only messaging adapters)
 ./keystone --http "" --nats-url nats://server:4222 --nats-device-id edge-001
@@ -391,12 +421,12 @@ Enable NATS for asynchronous fleet management with optional JetStream persistenc
 
 ```bash
 # Basic NATS
-./keystone --http :8080 \
+./keystone --http 127.0.0.1:8080 \
   --nats-url nats://control-plane:4222 \
   --nats-device-id edge-001
 
 # With mTLS and JetStream
-./keystone --http :8080 \
+./keystone --http 127.0.0.1:8080 \
   --nats-url nats://control-plane:4222 \
   --nats-device-id edge-001 \
   --nats-tls-cert /etc/keystone/certs/client.crt \
@@ -418,12 +448,12 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 
 ```bash
 # Basic MQTT
-./keystone --http :8080 \
+./keystone --http 127.0.0.1:8080 \
   --mqtt-broker tcp://broker:1883 \
   --mqtt-device-id edge-001
 
 # With TLS and auth
-./keystone --http :8080 \
+./keystone --http 127.0.0.1:8080 \
   --mqtt-broker ssl://broker:8883 \
   --mqtt-device-id edge-001 \
   --mqtt-tls-ca /etc/keystone/certs/ca.crt \
@@ -440,7 +470,7 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 
 ```bash
 # HTTP + NATS + MQTT simultaneously
-./keystone --http :8080 \
+./keystone --http 127.0.0.1:8080 \
   --nats-url nats://nats.internal:4222 --nats-device-id edge-001 \
   --mqtt-broker tcp://mqtt.internal:1883 --mqtt-device-id edge-001
 ```

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,6 +39,93 @@ func (m *mockHandler) AddRecipe(content string, force bool) (string, string, err
 func (m *mockHandler) DeleteRecipe(name, version string) error { return nil }
 func (m *mockHandler) ListRecipes() ([]string, error)          { return []string{}, nil }
 func (m *mockHandler) GetHealth() *adapter.HealthStatus        { return m.health }
+
+func TestIsLoopbackAddr(t *testing.T) {
+	loopback := []string{"127.0.0.1:8080", "localhost:8080", "[::1]:8080"}
+	for _, a := range loopback {
+		if !isLoopbackAddr(a) {
+			t.Errorf("isLoopbackAddr(%q) = false, want true", a)
+		}
+	}
+	notLoopback := []string{":8080", "0.0.0.0:8080", "192.168.1.10:8080", "[::]:8080"}
+	for _, a := range notLoopback {
+		if isLoopbackAddr(a) {
+			t.Errorf("isLoopbackAddr(%q) = true, want false", a)
+		}
+	}
+}
+
+func TestStartRefusesNonLoopbackWithoutToken(t *testing.T) {
+	a := New(Config{Addr: "0.0.0.0:0"}, &mockHandler{})
+	if err := a.Start(context.Background()); err == nil {
+		_ = a.Stop(context.Background())
+		t.Fatal("Start on non-loopback without token succeeded, want error")
+	}
+}
+
+func TestAuthMiddleware(t *testing.T) {
+	a := New(Config{Addr: "0.0.0.0:0", Token: "s3cret"}, &mockHandler{})
+	handler := a.withAuth(a.buildRouter())
+
+	// No token -> 401 on a protected route.
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/components", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("no token: status = %d, want 401", rec.Code)
+	}
+
+	// Wrong token -> 401.
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/v1/components", nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong token: status = %d, want 401", rec.Code)
+	}
+
+	// Correct token -> allowed (200).
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/v1/components", nil)
+	req.Header.Set("Authorization", "Bearer s3cret")
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("correct token: status = %d, want 200", rec.Code)
+	}
+
+	// /healthz is exempt even without a token.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if rec.Code == http.StatusUnauthorized {
+		t.Error("/healthz should be exempt from auth")
+	}
+}
+
+func TestPlanApplyRejectsPlanPath(t *testing.T) {
+	a := New(Config{Addr: ":0"}, &mockHandler{})
+	router := a.buildRouter()
+
+	body := strings.NewReader(`{"planPath":"/etc/secret-plan.toml","dry":true}`)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/plan/apply", body))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("planPath body: status = %d, want 400", rec.Code)
+	}
+}
+
+func TestAdapter_RejectsOversizedBody(t *testing.T) {
+	t.Setenv("KEYSTONE_MAX_REQUEST_BYTES", "16")
+	a := New(Config{Addr: ":0"}, &mockHandler{})
+	router := a.buildRouter()
+
+	big := strings.NewReader(strings.Repeat("A", 1024))
+	req := httptest.NewRequest("POST", "/v1/recipes", big)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized body: status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+}
 
 func TestAdapter_Name(t *testing.T) {
 	a := New(Config{Addr: ":0"}, &mockHandler{})
@@ -132,7 +220,7 @@ func TestAdapter_StartStop(t *testing.T) {
 	handler := &mockHandler{
 		health: &adapter.HealthStatus{Status: "ok"},
 	}
-	a := New(Config{Addr: ":18080"}, handler)
+	a := New(Config{Addr: "127.0.0.1:18080"}, handler)
 
 	ctx := context.Background()
 	if err := a.Start(ctx); err != nil {

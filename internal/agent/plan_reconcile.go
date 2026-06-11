@@ -441,12 +441,19 @@ func recipeIdentity(r *recipe.Recipe) string {
 func (a *Agent) resolveRecipeRef(recipeRef string) (*recipe.Recipe, string, string, error) {
 	resolvedPath := recipeRef
 	r, err := recipe.Load(recipeRef)
-	if err != nil {
+	if err == nil {
+		// Loaded from a filesystem path: enforce the recipe document signature
+		// before it can drive any lifecycle hook.
+		if verr := a.verifyRecipeFileSignature(recipeRef); verr != nil {
+			return nil, "", "", verr
+		}
+	} else {
 		name, version := parseRecipeStoreRef(recipeRef)
 		path, serr := a.recipes.GetPath(name, version)
 		if serr != nil {
 			return nil, "", "", err
 		}
+		// From the store: trusted via the authenticated API, not re-verified.
 		resolvedPath = path
 		r, err = recipe.Load(path)
 		if err != nil {

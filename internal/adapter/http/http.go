@@ -4,11 +4,15 @@ package http
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,24 +20,71 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// maxRequestBody bounds the size of a request body the API will read into
+// memory (recipes and plans are small TOML/JSON documents). It defends against
+// memory-exhaustion DoS via an oversized POST. Override with
+// KEYSTONE_MAX_REQUEST_BYTES.
+const defaultMaxRequestBody int64 = 4 << 20 // 4 MiB
+
 // Adapter implements the HTTP REST API for the agent.
 type Adapter struct {
 	addr    string
+	token   string
 	handler adapter.CommandHandler
 	server  *http.Server
 }
 
 // Config holds the configuration for the HTTP adapter.
 type Config struct {
-	Addr string // Listen address (e.g., ":8080")
+	Addr  string // Listen address (e.g., "127.0.0.1:8080")
+	Token string // Bearer token required for the API; empty = no auth (loopback only)
 }
 
 // New creates a new HTTP adapter.
 func New(cfg Config, handler adapter.CommandHandler) *Adapter {
 	return &Adapter{
 		addr:    cfg.Addr,
+		token:   cfg.Token,
 		handler: handler,
 	}
+}
+
+// isLoopbackAddr reports whether the listen address binds only the loopback
+// interface. An empty host (e.g. ":8080") binds all interfaces and is therefore
+// NOT loopback.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// withAuth wraps a handler to require a bearer token when one is configured.
+// /healthz is always exempt so liveness probes work without credentials. The
+// token comparison is constant-time to avoid leaking it through timing.
+func (a *Adapter) withAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.token == "" || r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		const prefix = "Bearer "
+		got := strings.TrimPrefix(r.Header.Get("Authorization"), prefix)
+		if subtle.ConstantTimeCompare([]byte(got), []byte(a.token)) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Name returns the adapter identifier.
@@ -41,13 +92,53 @@ func (a *Adapter) Name() string {
 	return "http"
 }
 
+func maxRequestBody() int64 {
+	if v := os.Getenv("KEYSTONE_MAX_REQUEST_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxRequestBody
+}
+
+// readLimitedBody reads the request body capped at maxRequestBody. It replaces
+// r.Body with a MaxBytesReader so an oversized upload is rejected instead of
+// being buffered fully into memory. On overflow or read error it writes a 413
+// and returns ok=false; callers must return immediately.
+func readLimitedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody())
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "request body too large or unreadable", http.StatusRequestEntityTooLarge)
+		return nil, false
+	}
+	return body, true
+}
+
 // Start initializes the HTTP server and begins listening.
 func (a *Adapter) Start(ctx context.Context) error {
+	// Fail closed: never expose an unauthenticated API beyond loopback. The API
+	// can apply plans and run lifecycle hooks (i.e. arbitrary code), so binding
+	// it to a reachable interface without a token is a remote-code-execution
+	// hole.
+	if a.token == "" && !isLoopbackAddr(a.addr) {
+		return fmt.Errorf("refusing to start HTTP API on non-loopback address %q without authentication: set KEYSTONE_API_TOKEN or bind to 127.0.0.1", a.addr)
+	}
+
 	mux := a.buildRouter()
 
 	a.server = &http.Server{
 		Addr:    a.addr,
-		Handler: mux,
+		Handler: a.withAuth(mux),
+		// Bound the request-read phase to defeat slowloris-style attacks that
+		// hold connections open by trickling headers/body. WriteTimeout is
+		// deliberately left unset: handlePlanApply runs the apply (downloads +
+		// install hooks) synchronously and may legitimately take minutes before
+		// the response is written; a write deadline would abort it mid-install.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
 	}
 
 	log.Printf("[http] starting HTTP adapter on %s", a.addr)
@@ -140,9 +231,8 @@ func (a *Adapter) handleRecipes(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodPost:
 		force := r.URL.Query().Get("force") == "true"
-		content, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		content, ok := readLimitedBody(w, r)
+		if !ok {
 			return
 		}
 		name, version, err := a.handler.AddRecipe(string(content), force)
@@ -273,29 +363,24 @@ func (a *Adapter) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	body, ok := readLimitedBody(w, r)
+	if !ok {
 		return
 	}
 
 	dry := r.URL.Query().Get("dry") == "true"
 
-	// Try to parse as JSON first (legacy format)
-	var req struct {
+	// Reject the legacy {"planPath": ...} form: letting a remote caller choose
+	// an arbitrary filesystem path to load and execute is a local-file-inclusion
+	// vector. Plans must be supplied as content over the wire.
+	var legacy struct {
 		PlanPath string `json:"planPath"`
-		Dry      bool   `json:"dry"`
 	}
-	if json.Unmarshal(body, &req) == nil && req.PlanPath != "" {
-		if err := a.handler.ApplyPlan(req.PlanPath, req.Dry || dry); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.WriteHeader(http.StatusAccepted)
+	if json.Unmarshal(body, &legacy) == nil && legacy.PlanPath != "" {
+		http.Error(w, "planPath is no longer accepted; upload plan content instead", http.StatusBadRequest)
 		return
 	}
 
-	// Fallback to raw TOML content
 	if err := a.handler.ApplyPlanContent(string(body), dry); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -1,13 +1,21 @@
 package validate
 
 import (
+	"encoding/json"
 	"io"
 
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
-// ValidateJSON validates an object (already converted to JSON) with the given schema.
+// ValidateJSON validates an object against the given schema. The object is
+// first round-tripped through JSON so that types produced by the TOML decoder
+// (int64, time.Time, ...) become the JSON-native types the schema validator
+// expects (float64, string, ...); otherwise validation would spuriously fail.
 func ValidateJSON(obj any, schemaSrc string) error {
+	normalized, err := toJSONNative(obj)
+	if err != nil {
+		return err
+	}
 	c := jsonschema.NewCompiler()
 	if err := c.AddResource("mem://schema.json", bytesReader(schemaSrc)); err != nil {
 		return err
@@ -16,7 +24,19 @@ func ValidateJSON(obj any, schemaSrc string) error {
 	if err != nil {
 		return err
 	}
-	return sch.Validate(obj)
+	return sch.Validate(normalized)
+}
+
+func toJSONNative(obj any) (any, error) {
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return nil, err
+	}
+	var out any
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ValidateRecipeMap validates a generic map with a minimal recipe schema.
@@ -62,14 +82,21 @@ const recipeSchema = `{
         "install":{"type":"object"},
         "run":{
           "type":"object",
-          "required":["exec"],
           "properties":{
+            "type":{"type":"string","enum":["process","container"]},
             "exec":{
               "type":"object",
               "required":["command"],
               "properties":{
                 "command":{"type":"string"},
                 "args":{"type":"array","items":{"type":"string"}}
+              }
+            },
+            "container":{
+              "type":"object",
+              "required":["image"],
+              "properties":{
+                "image":{"type":"string"}
               }
             },
             "restart_policy":{"type":"string","enum":["never","on-failure","always"]}
