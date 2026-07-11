@@ -22,6 +22,13 @@ type ApplyRequest struct {
 	// Used when PlanPath is empty.
 	Content string `json:"content,omitempty"`
 
+	// Recipes are recipe TOML documents to store (add-recipe with force) BEFORE
+	// the plan is reconciled, in the same apply. This lets a controller ship a
+	// plan and the recipes it references atomically in one message, removing the
+	// add-recipe→apply ordering race (no need for a separate cmd/add-recipe or a
+	// sleep between the two). Empty = apply expects the recipes to already exist.
+	Recipes []string `json:"recipes,omitempty"`
+
 	// Dry indicates a dry-run (no actual execution).
 	Dry bool `json:"dry,omitempty"`
 }
