@@ -91,6 +91,13 @@ tasks:
     cmds:
       - hugo server
 
+  docs:check:
+    desc: Build the docs and run the layout and diagram checks
+    cmds:
+      - cd site && hugo --gc --minify
+      - python3 site/scripts/check-layout.py
+      - python3 site/scripts/check-diagrams.py
+
   test:
     desc: Run all tests
     cmds:
