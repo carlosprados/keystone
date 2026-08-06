@@ -49,6 +49,7 @@ Two trust boundaries matter:
 | Recipe integrity | File-loaded recipes require a detached signature before any hook | secure (fail-closed) |
 | Archive extraction | Zip-slip containment, setuid/world-write mode stripping, size cap | secure |
 | Recipe name/version | Allowlist validator, no path traversal | secure |
+| Process privileges | `[lifecycle.run.security]`: user/group, `no_new_privileges`, capability allow-list | inherits the agent unless declared |
 | Schema | Recipe/plan JSON Schema enforced (not best-effort) | secure |
 | Dev escape | `--insecure-skip-verify` / `KEYSTONE_INSECURE_SKIP_VERIFY=true` | off |
 
@@ -217,6 +218,76 @@ remotely-reachable API is authenticated. Review and adjust before production.
 
 ---
 
+## Process privileges
+
+By default a process component inherits everything from the agent: same uid, same
+capabilities, `NoNewPrivs=0`. When the agent runs as root — which it usually must,
+to install services — so does every component. A recipe closes that with:
+
+```toml
+[lifecycle.run.security]
+user = "svc:svc"                                # "user", "uid", "user:group" or "uid:gid"
+no_new_privileges = true                        # PR_SET_NO_NEW_PRIVS
+capabilities = ["CAP_NET_BIND_SERVICE"]         # allow-list; [] means none at all
+```
+
+This is the equivalent of `User=`, `NoNewPrivileges=` and `AmbientCapabilities=`
+in a systemd unit, and the names are the same, so an existing unit can be copied
+across.
+
+**Applies to process components only.** Containers are confined through
+`[lifecycle.run.container]`; declaring `[lifecycle.run.security]` on a container
+component is an error, as is setting `container.user` / `container.privileged` on
+a process component. A restriction is never accepted and ignored.
+
+### How it is enforced
+
+Dropping the capability bounding set and setting `PR_SET_NO_NEW_PRIVS` are
+per-process and irreversible, so they cannot be done in the agent — it would
+confine the agent itself and everything it later starts. Instead the agent
+re-executes its own binary as a shim (`keystone --privdrop-exec …`), which
+reduces its privileges, **verifies the result**, and only then `exec`s the
+component. The `exec` keeps the same PID, so supervision, metrics and
+`GET /v1/components` are unaffected.
+
+Order matters and follows systemd's: keep capabilities across the uid change,
+close the bounding set (while `CAP_SETPCAP` is still effective), switch group and
+user, narrow the capability sets, raise the survivors into the *ambient* set so
+they survive `exec`, set `no_new_privileges`, verify, exec.
+
+### Fail-closed
+
+If any requested restriction cannot be applied, the component does **not** start:
+the shim exits non-zero and the failure is reported like any other start failure.
+An unconfined process is never the fallback. Verification is done against the
+kernel — `getuid`, `capget`, `PR_CAP_AMBIENT_IS_SET`, `PR_GET_NO_NEW_PRIVS` — not
+against the fact that the syscalls returned 0.
+
+Two cases are worth knowing:
+
+- **Asking for a capability the agent does not hold** fails: a process can only
+  ever narrow its own capabilities. Run the agent with that capability, or drop it
+  from the recipe.
+- **A non-root agent cannot narrow the bounding set** (`PR_CAPBSET_DROP` needs
+  `CAP_SETPCAP`). With `no_new_privileges = true` this is logged and accepted,
+  because the bounding set can only be exploited by an `execve` that grants
+  privileges, which is precisely what `no_new_privileges` forbids. Without
+  `no_new_privileges` the hole is real and the component is refused.
+
+### Verifying it on a device
+
+```console
+$ grep -E 'Uid|Gid|CapEff|CapBnd|CapAmb|NoNewPrivs' /proc/<pid>/status
+Uid:	65534	65534	65534	65534
+Gid:	65534	65534	65534	65534
+CapEff:	0000000000000400      # CAP_NET_BIND_SERVICE only
+CapBnd:	0000000000000400
+CapAmb:	0000000000000400
+NoNewPrivs:	1
+```
+
+---
+
 ## Known limitations
 
 Honest list of what is **not** yet covered (tracked as follow-ups):
@@ -225,9 +296,9 @@ Honest list of what is **not** yet covered (tracked as follow-ups):
   only. NATS/MQTT still accept it; they are disabled by default and rely on
   broker ACLs.
 - **Release signing:** released binaries are not yet signed (no cosign/SBOM).
-- **Workload privilege dropping:** spawned processes inherit the agent's
-  privileges; there is no per-component uid/gid drop yet, and `privileged`
-  containers / host mounts are not gated by policy.
+- **Container confinement:** `privileged` containers and host mounts are not
+  gated by policy. Process components can now be confined (see *Process
+  privileges* below), containers only through `[lifecycle.run.container]`.
 - **Child environment:** recipe-supplied env is not stripped of `LD_PRELOAD` /
   `LD_LIBRARY_PATH` for process workloads.
 - **State snapshot integrity:** `runtime/state` is not integrity-protected.
