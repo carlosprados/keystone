@@ -53,6 +53,21 @@ func (s *MemoryStore) Upsert(ci ComponentInfo) {
 	s.mu.Unlock()
 }
 
+// Replace stores ci verbatim, skipping the field-level merge Upsert performs.
+//
+// Upsert reads a zero field as "keep whatever was there", which makes it
+// impossible to clear one: writing PID 0 for a component whose process is gone
+// resurrects the dead PID instead. Callers that own the complete record and
+// need a field back at its zero value use Replace.
+func (s *MemoryStore) Replace(ci ComponentInfo) {
+	s.mu.Lock()
+	if ci.LastHealth == "" {
+		ci.LastHealth = "unknown"
+	}
+	s.items[ci.Name] = ci
+	s.mu.Unlock()
+}
+
 func (s *MemoryStore) List() []ComponentInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
