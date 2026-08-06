@@ -101,6 +101,13 @@ jobs:
                     | sed -E 's|href="/keystone/||; s|"$||' | sort -u)
           exit $missing
 
+      - name: Layout is sound
+        # Catches what the Hugo build cannot: a duplicated page title, a sidebar
+        # footer that did not render (or rendered on top of the menu), a chapter
+        # missing from the navigation, an unrendered shortcode. All of these
+        # compile perfectly and only show up to a reader.
+        run: python3 site/scripts/check-layout.py
+
       - name: Diagrams render legibly
         # A diagram wider than the content column is scaled down by the browser and
         # its text shrinks with it. This renders each one and fails if the effective
