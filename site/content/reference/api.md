@@ -47,8 +47,17 @@ anything not running. The guarantees these fields carry are in
 ## GET /v1/plan/status
 
 ```json
-{ "path": "plan.toml", "status": "running", "error": "" }
+{
+  "planPath": "plan.toml",
+  "status": "running",
+  "components": [
+    { "name": "api", "state": "running", "restarts": 0, "last_health": "healthy", "pid": 40219 }
+  ]
+}
 ```
+
+`error` is present only when the last operation failed. Note that this endpoint
+carries the component list too, so a fleet poller needs one request, not two.
 
 ## GET /v1/plan/graph
 
@@ -112,9 +121,22 @@ Stops one component. Its dependents are **not** stopped.
 | `dry` | `true` | Report what would be restarted, change nothing |
 
 ```json
-{ "name": "api", "restarted": ["api", "dashboard"], "pid": 41002, "waited": "1.2s" }
+{
+  "component": "api",
+  "pid": 41002,
+  "dependents": { "dashboard": 41055 },
+  "wait": "pid",
+  "timeout": "30s"
+}
 ```
 
-Dependents are restarted according to each edge's
+`dependents` maps each cascaded component to its new PID, so one call tells you
+everything that moved. Dependents are restarted according to each edge's
 [dependency type](../../concepts/dependencies/) — `hard` and `soft` cascade,
 `ordering` does not.
+
+With `dry=true` the shape is different — the plan, not the result:
+
+```json
+{ "stopOrder": ["dashboard", "api"], "startOrder": ["api", "dashboard"] }
+```
