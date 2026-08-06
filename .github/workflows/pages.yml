@@ -108,10 +108,23 @@ jobs:
         # compile perfectly and only show up to a reader.
         run: python3 site/scripts/check-layout.py
 
+      # Only on pull requests. This one drives a headless Chromium, so it is the
+      # slowest thing here by far; keeping it off the publish path means a merge or
+      # a release tag goes live in about a minute instead of waiting on a browser.
+      # A diagram cannot reach main without passing it, which is the point.
+      - name: Cache the mermaid renderer
+        if: github.event_name == 'pull_request'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/puppeteer
+          key: mermaid-cli-${{ runner.os }}-v1
+
       - name: Diagrams render legibly
-        # A diagram wider than the content column is scaled down by the browser and
-        # its text shrinks with it. This renders each one and fails if the effective
-        # font size would be too small to read.
+        if: github.event_name == 'pull_request'
+        # Renders every diagram in one browser launch and fails if any would show
+        # text below the legible threshold once scaled into the content column.
         run: python3 site/scripts/check-diagrams.py
 
       - uses: actions/upload-pages-artifact@v3
