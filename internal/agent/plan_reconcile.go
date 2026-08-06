@@ -12,6 +12,7 @@ import (
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/carlosprados/keystone/internal/deploy"
 	"github.com/carlosprados/keystone/internal/recipe"
+	sysrt "github.com/carlosprados/keystone/internal/runtime"
 	"github.com/carlosprados/keystone/internal/state"
 )
 
@@ -297,11 +298,10 @@ func (a *Agent) buildReconcileActions(oldPlan []state.PlanComponent, desired *pl
 		}
 	}
 
-	// Components left untouched must currently satisfy readiness.
+	// Components left untouched must currently be alive and supervised.
 	for name := range noTouch {
 		comp := desired.byName[name]
-		requireHealth := strings.TrimSpace(comp.rec.Lifecycle.Run.Health.Check) != ""
-		if a.componentIsReady(name, requireHealth) {
+		if a.componentIsReusable(name, reuseRequiresHealth(comp.rec)) {
 			continue
 		}
 		startTargets[name] = true
@@ -420,7 +420,30 @@ func (a *Agent) componentChanged(old state.PlanComponent, desired *plannedCompon
 	return oldDigest != newDigest
 }
 
-func (a *Agent) componentIsReady(name string, requireHealth bool) bool {
+// reuseRequiresHealth reports whether reusing a component must also see it
+// reported healthy: only components that declare a health check ever get a
+// health verdict, so requiring one from the rest would restart them forever.
+func reuseRequiresHealth(r *recipe.Recipe) bool {
+	return strings.TrimSpace(r.Lifecycle.Run.Health.Check) != ""
+}
+
+// componentIsReusable reports whether the component named name can be kept
+// running as-is across a reconcile (classified no_touch) instead of being
+// restarted.
+//
+// The cached state in a.comps is not enough on its own: it records the last
+// observed transition, so a component can read running/healthy while the
+// process is already gone. Adopting one of those freezes the API on a lie and
+// leaves the component with nobody watching it, because a reused component
+// gets no new RunManaged call — whatever health probe and restart policy it
+// has must already be attached. Hence reuse additionally requires:
+//
+//   - a live supervision loop for it, and
+//   - a live OS process, when the component runs as a process (PID > 0).
+//
+// Container components report PID 0 and cannot be probed by PID here; for
+// those the supervision-loop check is the only liveness signal.
+func (a *Agent) componentIsReusable(name string, requireHealth bool) bool {
 	ci, ok := a.comps.Get(name)
 	if !ok {
 		return false
@@ -428,8 +451,16 @@ func (a *Agent) componentIsReady(name string, requireHealth bool) bool {
 	if ci.State != "running" {
 		return false
 	}
-	if requireHealth {
-		return ci.LastHealth == "healthy"
+	if requireHealth && ci.LastHealth != "healthy" {
+		return false
+	}
+	if !a.isSupervised(name) {
+		log.Printf("[agent] component=%s msg=state reads running but no supervision loop is attached; will restart instead of reusing", name)
+		return false
+	}
+	if ci.PID > 0 && !sysrt.IsProcessRunning(ci.PID) {
+		log.Printf("[agent] component=%s pid=%d msg=state reads running but the process is gone; will restart instead of reusing", name, ci.PID)
+		return false
 	}
 	return true
 }
