@@ -53,3 +53,7 @@ configs/examples/*.sig
 
 # tmux session layout (local dev convenience)
 .tmuxp.yaml
+# Hugo documentation site (site/): build output and module cache
+/site/public/
+/site/resources/
+/site/.hugo_build.lock

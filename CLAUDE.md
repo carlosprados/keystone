@@ -105,6 +105,7 @@ All agent flags are discoverable via `./keystone --help`. Environment variables 
 
 - `README.md` — Features, quick start, all CLI flags, environment variables
 - `docs/security.md` — Security model: secure-by-default posture, auth, signing, `--insecure-skip-verify`, config reference
+- `docs/component-state.md` — Component states, liveness guarantees of `/v1/components`, reuse rules on re-apply
 - `docs/adapters.md` — Adapter comparison, HTTP auth, NATS/MQTT configuration details
 - `docs/containers.md` — Container recipe syntax and examples
 - `docs/containerrunner-design.md` — Containerd integration design decisions

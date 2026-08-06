@@ -245,6 +245,10 @@ func StartStack(parent context.Context, comps []*Component) error {
 	if err != nil {
 		return err
 	}
+	// started is written by every component goroutine of a layer, so it needs a
+	// mutex: any plan with two components in the same layer would otherwise be
+	// a concurrent map write.
+	var startedMu sync.Mutex
 	started := make(map[string]*Component)
 
 	for i, layer := range layers {
@@ -269,7 +273,9 @@ func StartStack(parent context.Context, comps []*Component) error {
 					errCh <- fmt.Errorf("%s start: %w", c.Name, err)
 					return
 				}
+				startedMu.Lock()
 				started[c.Name] = c
+				startedMu.Unlock()
 			}(comp)
 		}
 		wg.Wait()
@@ -282,7 +288,10 @@ func StartStack(parent context.Context, comps []*Component) error {
 			stopCtx, stopCancel := context.WithTimeout(parent, 30*time.Second)
 			for j := i; j >= 0; j-- {
 				for _, n := range layers[j] {
-					if s, ok := started[n]; ok {
+					startedMu.Lock()
+					s, ok := started[n]
+					startedMu.Unlock()
+					if ok {
 						_ = s.Stop(stopCtx)
 					}
 				}

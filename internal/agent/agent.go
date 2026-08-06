@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,6 +52,11 @@ type Agent struct {
 	handles         map[string]runner.Handle // Process or container handles
 	runners         map[string]runner.Runner // Runner instances (for containers that need cleanup)
 	cancels         map[string]context.CancelFunc
+	// supervised tracks components with a live RunManaged loop attached. A
+	// component missing from this map is not being watched by anybody: its
+	// health probe and restart policy are gone even if the process happens to
+	// be alive, so a reconcile must never adopt it as "running".
+	supervised map[string]bool
 	// applySkipStart marks components that should be kept running as-is during
 	// the current reconcile apply pass.
 	applySkipStart map[string]bool
@@ -63,6 +69,9 @@ type Agent struct {
 	planErr    string
 	// persistence
 	stateDir string
+	// lastSnapshot fingerprints the last snapshot actually written, so an idle
+	// agent stops rewriting the same file twice a second.
+	lastSnapshot string
 	// plan mapping
 	planComps []state.PlanComponent
 	// cache budget
@@ -94,6 +103,7 @@ func New(opts Options) *Agent {
 		handles:        make(map[string]runner.Handle),
 		runners:        make(map[string]runner.Runner),
 		cancels:        make(map[string]context.CancelFunc),
+		supervised:     make(map[string]bool),
 		applySkipStart: make(map[string]bool),
 		stateDir:       filepath.Join("runtime", "state"),
 		ctx:            ctx,
@@ -170,18 +180,70 @@ func New(opts Options) *Agent {
 			log.Printf("[agent] failed to load trust bundle: %v", err)
 		}
 	}
-	// Periodic snapshots
+	a.startStatePoller()
+	return a
+}
+
+// startStatePoller runs the single loop that keeps the component store, the
+// state metrics and the persisted snapshot in step with the handles the agent
+// actually holds.
+//
+// It is started once, from New. Starting one per apply leaked a goroutine per
+// apply, each iterating the component list of a plan that may no longer be the
+// current one.
+func (a *Agent) startStatePoller() {
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
+		t := time.NewTicker(500 * time.Millisecond)
+		defer t.Stop()
+		for range t.C {
 			if a.closed.Load() {
 				return
 			}
+			a.refreshComponentStates()
 			a.persistSnapshot()
 		}
 	}()
-	return a
+}
+
+// refreshComponentStates reconciles the reported state of every known component
+// with the agent's own bookkeeping, and republishes the state metrics.
+//
+// A component counts as running only if the agent holds a handle for it *and*
+// the process behind that handle is alive. The handle alone is not enough: a
+// stop path that signals the process without deregistering its handle (a failed
+// apply unwinding a layer, for instance) would otherwise keep the component
+// reported running with a dead PID.
+func (a *Agent) refreshComponentStates() {
+	for _, ci := range a.comps.List() {
+		a.mu.RLock()
+		_, hasHandle := a.handles[ci.Name]
+		a.mu.RUnlock()
+
+		running := hasHandle
+		if hasHandle && ci.PID > 0 && !sysrt.IsProcessRunning(ci.PID) {
+			running = false
+		}
+
+		// Keep "failed" state if it was set by a terminal exit.
+		st := ci.State
+		if st != "failed" {
+			st = "stopped"
+			if running {
+				st = "running"
+			}
+			ci.State = st
+			// Never keep advertising a PID with nothing behind it: it may
+			// already have been recycled by an unrelated process.
+			if ci.PID > 0 && !running {
+				ci.PID = 0
+				ci.LastHealth = "unknown"
+			}
+			a.comps.Replace(ci)
+		}
+
+		metrics.ObserveComponentState(ci.Name, st)
+		metrics.ObserveComponentStateWithHealth(ci.Name, st, ci.LastHealth)
+	}
 }
 
 // Close releases agent resources and signals all operations to stop.
@@ -368,6 +430,18 @@ func (a *Agent) applyPlan(planPath string) error {
 	// readiness channels per component (closed when process/container actually starts)
 	compReady := make(map[string]chan struct{})
 	compStartErr := make(map[string]chan error)
+	// Components reconcile decided to keep running as-is. Reconcile decided
+	// from cached state, so each one is re-checked against real liveness once
+	// the whole plan is built (see "Confirm every reuse decision" below);
+	// skipStart points at the flag the lifecycle hooks read, so a revoked
+	// decision turns into a normal install+start.
+	type reuseCandidate struct {
+		name          string
+		comp          *supervisor.Component
+		requireHealth bool
+		skipStart     *bool
+	}
+	var reuseCandidates []reuseCandidate
 	for _, l := range loadedList {
 		// find deps for this comp
 		var depNames []string
@@ -472,6 +546,9 @@ func (a *Agent) applyPlan(planPath string) error {
 
 			// Determine run type and validate
 			runType := r.Lifecycle.Run.Type
+			if err := validateRunSecurity(r); err != nil {
+				return fmt.Errorf("component %s: %w", it.Name, err)
+			}
 			if runType == "" || runType == "process" {
 				// Validate command availability for processes
 				cmdPath := r.Lifecycle.Run.Exec.Command
@@ -521,7 +598,11 @@ func (a *Agent) applyPlan(planPath string) error {
 				ctx2, cancel := context.WithCancel(ctx)
 				a.mu.Lock()
 				a.cancels[it.Name] = cancel
+				a.supervised[it.Name] = true
 				a.mu.Unlock()
+				// Once RunManaged returns, this component has no health loop
+				// and no restart policy attached any more.
+				defer a.clearSupervised(it.Name)
 
 				_ = compRunner.RunManaged(ctx2, it.Name, opts, hc, rp, maxRetries,
 					func(h runner.Handle) {
@@ -574,23 +655,16 @@ func (a *Agent) applyPlan(planPath string) error {
 						}
 					},
 					func(err error) {
-						if err != nil {
-							log.Printf("[agent] component=%s terminal failure: %v", it.Name, err)
-							signalStartErr(err)
-							a.mu.Lock()
-							ci, ok := a.comps.Get(it.Name)
-							if ok {
-								ci.State = "failed"
-								a.comps.Upsert(ci)
-							}
-							delete(a.handles, it.Name)
-							// Release runner resources for terminal components.
-							if runnerCleanup != nil {
-								runnerCleanup()
-								delete(a.runners, it.Name)
-							}
-							a.mu.Unlock()
+						// An exit the runner will not retry is a startup
+						// failure too when readiness was never reached, even
+						// if the exit code was 0. signalStartErr is a no-op
+						// once the component signalled ready.
+						startErr := err
+						if startErr == nil {
+							startErr = fmt.Errorf("process exited cleanly before becoming ready")
 						}
+						signalStartErr(startErr)
+						a.handleComponentExit(it.Name, err, runnerCleanup)
 					},
 				)
 			}()
@@ -598,37 +672,33 @@ func (a *Agent) applyPlan(planPath string) error {
 		}
 		stopFn := func(ctx context.Context) error {
 			if skipStart {
+				// Reused instance: it was already running before this apply, so
+				// a rollback of this apply must leave it alone.
 				return nil
 			}
-			a.mu.RLock()
-			h := a.handles[it.Name]
-			compRunner := a.runners[it.Name]
-			a.mu.RUnlock()
-			if h == nil {
-				return nil
-			}
-			// Use the stored runner if available, otherwise create appropriate one
-			if compRunner != nil {
-				return compRunner.Stop(ctx, h, 10*time.Second)
-			}
-			// Fallback: create a new runner based on handle type
-			if _, ok := h.(*runner.ProcessHandle); ok {
-				return runner.NewProcessRunner().Stop(ctx, h, 10*time.Second)
-			}
-			// For containers without stored runner, try CLI runner
-			clir, err := runner.NewCLIRunner()
-			if err != nil {
-				return fmt.Errorf("no runner available for container: %w", err)
-			}
-			return clir.Stop(ctx, h, 10*time.Second)
+			// StartStack calls this when a layer fails, to unwind what it
+			// started. Delegate to the one teardown path that also drops the
+			// handle, the runner and the supervision marker, and records the
+			// state: stopping the process alone would leave a dead handle
+			// behind, which still reads as "running" to the API and to the
+			// next reconcile.
+			a.stopComponent(it.Name)
+			return nil
 		}
 		// Create component with readiness channel and register it
 		readyCh := make(chan struct{})
 		startErrCh := make(chan error, 1)
 		c := supervisor.NewComponent(it.Name, depNames, installFn, startFn, stopFn)
 		if skipStart {
-			c.MarkRunningForReuse()
-			log.Printf("[agent] component=%s msg=reusing existing running instance (no restart)", it.Name)
+			// Deliberately not marked as running yet: the install/start hooks
+			// above read skipStart when StartStack runs, so the decision can
+			// still be revoked below if the component turns out to be dead.
+			reuseCandidates = append(reuseCandidates, reuseCandidate{
+				name:          it.Name,
+				comp:          c,
+				requireHealth: reuseRequiresHealth(r),
+				skipStart:     &skipStart,
+			})
 		}
 		c.ReadyCh = readyCh
 		c.ReadyErrCh = startErrCh
@@ -662,47 +732,42 @@ func (a *Agent) applyPlan(planPath string) error {
 		return nil
 	}
 
+	// Confirm every reuse decision as late as possible, before any state is
+	// rewritten below. Reconcile classified these components from cached
+	// state; if one has died since (or lost its supervision loop), adopting it
+	// would advertise it as running with nobody watching it.
+	reused := make(map[string]bool, len(reuseCandidates))
+	for _, rc := range reuseCandidates {
+		if a.componentIsReusable(rc.name, rc.requireHealth) {
+			rc.comp.MarkRunningForReuse()
+			reused[rc.name] = true
+			log.Printf("[agent] component=%s msg=reusing existing running instance (no restart)", rc.name)
+			continue
+		}
+		log.Printf("[agent] component=%s msg=reuse revoked, starting a fresh instance", rc.name)
+		// Tear down whatever is left of the previous instance (managed loop,
+		// handle, surviving process) before starting a new one: otherwise the
+		// old loop treats the takeover as a failure and both loops end up
+		// restarting the same component against each other.
+		a.stopComponent(rc.name)
+		*rc.skipStart = false
+	}
+
 	// Update store initially with recipe/version metadata for API visibility.
 	for _, l := range loadedList {
-		a.comps.Upsert(store.ComponentInfo{
+		ci := store.ComponentInfo{
 			Name:    l.item.Name,
 			State:   string(supervisor.StateNone),
 			Recipe:  l.item.RecipePath,
 			Version: l.rec.Metadata.Version,
-		})
-	}
-	// Poll states to store and component-state metric
-	go func() {
-		t := time.NewTicker(500 * time.Millisecond)
-		defer t.Stop()
-		for range t.C {
-			if a.closed.Load() {
-				return
-			}
-			for _, c := range comps {
-				// Derive running/stopped from presence of a managed handle.
-				a.mu.RLock()
-				_, running := a.handles[c.Name]
-				a.mu.RUnlock()
-				ci, _ := a.comps.Get(c.Name)
-
-				// Keep "failed" state if it was set by terminal error
-				st := ci.State
-				if st != "failed" {
-					st = "stopped"
-					if running {
-						st = "running"
-					}
-					a.comps.Upsert(store.ComponentInfo{Name: c.Name, State: st})
-				}
-
-				metrics.ObserveComponentState(c.Name, st)
-				metrics.ObserveComponentStateWithHealth(c.Name, st, ci.LastHealth)
-			}
-			a.persistSnapshot()
 		}
-	}()
-
+		if reused[l.item.Name] {
+			// Confirmed running and kept as-is: an empty state tells Upsert to
+			// preserve it instead of reporting the component back to "none".
+			ci.State = ""
+		}
+		a.comps.Upsert(ci)
+	}
 	err = supervisor.StartStack(a.Context(), comps)
 	a.mu.Lock()
 	if err != nil {
@@ -943,6 +1008,40 @@ func (a *Agent) createRunner(r *recipe.Recipe) (runner.Runner, func(), error) {
 }
 
 // buildRunnerOptions builds runner.Options from a recipe.
+// recipeSecurity maps the recipe's security block to the runner's.
+func recipeSecurity(r *recipe.Recipe) runner.Security {
+	sec := r.Lifecycle.Run.Security
+	return runner.Security{
+		User:            sec.User,
+		NoNewPrivileges: sec.NoNewPrivileges,
+		Capabilities:    sec.Capabilities,
+	}
+}
+
+// validateRunSecurity rejects privilege settings that the runner for this
+// component type cannot honour.
+//
+// The rule is that a restriction an operator writes in a recipe either takes
+// effect or is refused: silently accepting one and running the workload
+// unconfined is how you end up believing a service is sandboxed when it is not.
+func validateRunSecurity(r *recipe.Recipe) error {
+	runType := r.Lifecycle.Run.Type
+	container := r.Lifecycle.Run.Container
+	sec := recipeSecurity(r)
+
+	if runType == "" || runType == "process" {
+		if container.User != "" || container.Privileged {
+			return fmt.Errorf("run.container.user/privileged only apply to container components and would be ignored here; use [lifecycle.run.security] for a process component")
+		}
+		return sec.Validate()
+	}
+
+	if !sec.IsZero() {
+		return fmt.Errorf("[lifecycle.run.security] only applies to process components; confine a container through [lifecycle.run.container] (user, privileged) instead")
+	}
+	return nil
+}
+
 func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Options {
 	runType := r.Lifecycle.Run.Type
 	if runType == "" || runType == "process" {
@@ -958,6 +1057,7 @@ func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Op
 			Env:        env,
 			WorkingDir: workDir,
 			NoFile:     r.Resources.OpenFiles,
+			Security:   recipeSecurity(r),
 		}
 	}
 
@@ -1071,6 +1171,11 @@ func (a *Agent) persistSnapshot() {
 	a.snapMu.Lock()
 	defer a.snapMu.Unlock()
 
+	comps := a.comps.List()
+	// List() walks a map, so sort for a stable snapshot file (and a stable
+	// fingerprint below).
+	sort.Slice(comps, func(i, j int) bool { return comps[i].Name < comps[j].Name })
+
 	snap := state.Snapshot{
 		Plan: state.PlanStatus{
 			Path:    a.planPath,
@@ -1078,9 +1183,20 @@ func (a *Agent) persistSnapshot() {
 			Error:   a.planErr,
 			Updated: time.Now(),
 		},
-		Components:     a.comps.List(),
+		Components:     comps,
 		PlanComponents: a.planComps,
 	}
+
+	// The state poller calls this twice a second and state.Save rewrites and
+	// renames the file every time; skip the write when nothing observable
+	// changed. Updated is deliberately excluded from the fingerprint, or every
+	// tick would look like a change.
+	fingerprint := fmt.Sprintf("%s|%s|%s|%v|%v", a.planPath, a.planStatus, a.planErr, comps, a.planComps)
+	if fingerprint == a.lastSnapshot {
+		return
+	}
+	a.lastSnapshot = fingerprint
+
 	if err := state.Save(a.stateDir, snap); err != nil {
 		log.Printf("[agent] warning: failed to persist state: %v", err)
 	}
@@ -1172,6 +1288,9 @@ func (a *Agent) restartFromPlan(name string) error {
 
 	// Determine run type and validate
 	runType := r.Lifecycle.Run.Type
+	if err := validateRunSecurity(r); err != nil {
+		return fmt.Errorf("component %s: %w", name, err)
+	}
 	if runType == "" || runType == "process" {
 		if cmd := r.Lifecycle.Run.Exec.Command; strings.HasPrefix(cmd, "./") {
 			abs := filepath.Join(workDir, strings.TrimPrefix(cmd, "./"))
@@ -1199,10 +1318,12 @@ func (a *Agent) restartFromPlan(name string) error {
 		ctx2, cancel := context.WithCancel(a.Context())
 		a.mu.Lock()
 		a.cancels[name] = cancel
+		a.supervised[name] = true
 		if compRunner != nil {
 			a.runners[name] = compRunner
 		}
 		a.mu.Unlock()
+		defer a.clearSupervised(name)
 
 		_ = compRunner.RunManaged(ctx2, name, opts, hc, rp, maxRetries,
 			func(h runner.Handle) {
@@ -1244,21 +1365,7 @@ func (a *Agent) restartFromPlan(name string) error {
 				metrics.SetHealthy(name, ok)
 			},
 			func(err error) {
-				if err != nil {
-					log.Printf("[agent] component=%s terminal failure on restart: %v", name, err)
-					a.mu.Lock()
-					ci, ok := a.comps.Get(name)
-					if ok {
-						ci.State = "failed"
-						a.comps.Upsert(ci)
-					}
-					delete(a.handles, name)
-					if runnerCleanup != nil {
-						runnerCleanup()
-						delete(a.runners, name)
-					}
-					a.mu.Unlock()
-				}
+				a.handleComponentExit(name, err, runnerCleanup)
 			},
 		)
 		// Enforce artifact cache budget after (re)start
@@ -1267,12 +1374,72 @@ func (a *Agent) restartFromPlan(name string) error {
 	return nil
 }
 
+// markSupervised records that a RunManaged loop is now attached to name.
+func (a *Agent) markSupervised(name string) {
+	a.mu.Lock()
+	a.supervised[name] = true
+	a.mu.Unlock()
+}
+
+// clearSupervised records that the RunManaged loop for name has returned, so
+// nothing is watching the component any more.
+func (a *Agent) clearSupervised(name string) {
+	a.mu.Lock()
+	delete(a.supervised, name)
+	a.mu.Unlock()
+}
+
+// isSupervised reports whether a RunManaged loop is currently attached to name.
+func (a *Agent) isSupervised(name string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.supervised[name]
+}
+
+// handleComponentExit records in the component store a terminal exit that the
+// runner will not restart, and releases the resources tied to that instance.
+//
+// It runs for every such exit, not only for failures: a process that exits 0
+// under restart_policy="on-failure" is just as gone as one that crashed. If
+// only the error path updated the store, a clean exit would leave the
+// component reported running/healthy with a dead PID forever — a lie for
+// GET /v1/components and bait for a later reconcile looking for components to
+// reuse.
+func (a *Agent) handleComponentExit(name string, exitErr error, runnerCleanup func()) {
+	newState := "stopped"
+	if exitErr != nil {
+		newState = "failed"
+		log.Printf("[agent] component=%s terminal failure: %v", name, exitErr)
+	} else {
+		log.Printf("[agent] component=%s msg=exited cleanly and will not be restarted (state=stopped)", name)
+	}
+	a.mu.Lock()
+	if ci, ok := a.comps.Get(name); ok {
+		ci.State = newState
+		ci.PID = 0
+		ci.LastHealth = "unknown"
+		// Replace, not Upsert: Upsert would read PID 0 as "keep the old PID".
+		a.comps.Replace(ci)
+	}
+	delete(a.handles, name)
+	// Release runner resources for terminal components.
+	if runnerCleanup != nil {
+		runnerCleanup()
+		delete(a.runners, name)
+	}
+	a.mu.Unlock()
+	metrics.SetHealthy(name, false)
+}
+
 // stopComponent cancels managed loop and stops process/container, updating store.
 func (a *Agent) stopComponent(name string) {
 	log.Printf("agent: stopComponent start name=%s", name)
 	// Grab references under lock, but perform blocking ops outside the lock
 	a.mu.Lock()
 	cancel := a.cancels[name]
+	// Drop the supervision marker up front: the managed loop is about to be
+	// cancelled, and until it returns nothing is watching this component.
+	delete(a.supervised, name)
 	var h runner.Handle
 	var compRunner runner.Runner
 	if cancel != nil {
@@ -1330,7 +1497,14 @@ func (a *Agent) stopComponent(name string) {
 		ci = store.ComponentInfo{Name: name}
 	}
 	ci.State = "stopped"
-	a.comps.Upsert(ci)
+	ci.LastHealth = "unknown"
+	// Keep the PID only while the process is somehow still around, so a stop
+	// that did not fully take effect can still be reaped later; otherwise stop
+	// advertising a PID that no longer exists.
+	if ci.PID > 0 && !sysrt.IsProcessRunning(ci.PID) {
+		ci.PID = 0
+	}
+	a.comps.Replace(ci)
 	// Best-effort lifecycle shutdown hook for this component.
 	shCtx, shCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := a.runComponentShutdownScript(shCtx, name); err != nil {
@@ -1369,27 +1543,17 @@ func reapOrphanedComponents(comps []store.ComponentInfo) int {
 		_ = syscall.Kill(ci.PID, syscall.SIGTERM)
 		deadline := time.Now().Add(2 * time.Second)
 		for time.Now().Before(deadline) {
-			if !processExists(ci.PID) {
+			if !sysrt.IsProcessRunning(ci.PID) {
 				break
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		if processExists(ci.PID) {
+		if sysrt.IsProcessRunning(ci.PID) {
 			_ = syscall.Kill(ci.PID, syscall.SIGKILL)
 		}
 		reaped++
 	}
 	return reaped
-}
-
-// processExists reports whether a process with this PID is reachable from the
-// current process (sig 0 doesn't deliver anything, it just probes existence
-// and permission).
-func processExists(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	return syscall.Kill(pid, 0) == nil
 }
 
 // processIsInitOrphan reports whether the process with PID is currently

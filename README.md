@@ -30,9 +30,14 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 
 ## Documentation
 
+📖 **[Full documentation site](https://carlosprados.github.io/keystone/)** — concepts,
+internals, security model and reference, written to be read start to finish. The
+source lives in [`site/`](site/).
+
 | Document | What it covers |
 |----------|----------------|
 | [docs/security.md](docs/security.md) | **Security model**: threat model, secure-by-default controls, auth, signing, the `--insecure-skip-verify` escape hatch, config reference |
+| [docs/component-state.md](docs/component-state.md) | Component states, liveness guarantees of `GET /v1/components`, and when a re-apply reuses a running component |
 | [docs/adapters.md](docs/adapters.md) | Control-plane adapters: HTTP (auth), NATS (+ JetStream), MQTT — comparison and configuration |
 | [docs/containers.md](docs/containers.md) | Container recipe syntax and examples |
 | [docs/containerrunner-design.md](docs/containerrunner-design.md) | containerd integration design notes |

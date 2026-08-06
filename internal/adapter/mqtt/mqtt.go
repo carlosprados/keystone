@@ -309,7 +309,17 @@ func (a *Adapter) handleApply(client pahomqtt.Client, msg pahomqtt.Message) {
 		return
 	}
 
-	log.Printf("[mqtt] cmd/apply planPath=%s dry=%v", req.PlanPath, req.Dry)
+	log.Printf("[mqtt] cmd/apply planPath=%s recipes=%d dry=%v", req.PlanPath, len(req.Recipes), req.Dry)
+
+	// Store any inline recipes BEFORE reconciling the plan, so a plan and the
+	// recipes it references arrive atomically in one apply (no add-recipe→apply
+	// race). force=true: the controller is the source of truth for the version.
+	for i, rec := range req.Recipes {
+		if _, _, rerr := a.handler.AddRecipe(rec, true); rerr != nil {
+			a.respond(a.topics.RespApply, req.CorrelationID, NewErrorResponse(req.CorrelationID, fmt.Errorf("inline recipe %d: %w", i, rerr)))
+			return
+		}
+	}
 
 	var err error
 	if req.PlanPath != "" {
