@@ -7,22 +7,6 @@ import (
 	"github.com/carlosprados/keystone/internal/store"
 )
 
-func TestProcessExists(t *testing.T) {
-	if !processExists(os.Getpid()) {
-		t.Errorf("processExists(self) returned false; the test process exists")
-	}
-	for _, bad := range []int{0, -1, -42} {
-		if processExists(bad) {
-			t.Errorf("processExists(%d) returned true; non-positive PIDs are never valid", bad)
-		}
-	}
-	// 99999999 is well above PID_MAX on Linux (4194303 default) so the lookup
-	// must fail with ESRCH.
-	if processExists(99999999) {
-		t.Errorf("processExists(99999999) returned true; that PID cannot exist")
-	}
-}
-
 func TestProcessIsInitOrphan(t *testing.T) {
 	// The Go test runner is our parent; we are not parented by init.
 	if processIsInitOrphan(os.Getpid()) {

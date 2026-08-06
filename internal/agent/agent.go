@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,6 +69,9 @@ type Agent struct {
 	planErr    string
 	// persistence
 	stateDir string
+	// lastSnapshot fingerprints the last snapshot actually written, so an idle
+	// agent stops rewriting the same file twice a second.
+	lastSnapshot string
 	// plan mapping
 	planComps []state.PlanComponent
 	// cache budget
@@ -176,18 +180,70 @@ func New(opts Options) *Agent {
 			log.Printf("[agent] failed to load trust bundle: %v", err)
 		}
 	}
-	// Periodic snapshots
+	a.startStatePoller()
+	return a
+}
+
+// startStatePoller runs the single loop that keeps the component store, the
+// state metrics and the persisted snapshot in step with the handles the agent
+// actually holds.
+//
+// It is started once, from New. Starting one per apply leaked a goroutine per
+// apply, each iterating the component list of a plan that may no longer be the
+// current one.
+func (a *Agent) startStatePoller() {
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
+		t := time.NewTicker(500 * time.Millisecond)
+		defer t.Stop()
+		for range t.C {
 			if a.closed.Load() {
 				return
 			}
+			a.refreshComponentStates()
 			a.persistSnapshot()
 		}
 	}()
-	return a
+}
+
+// refreshComponentStates reconciles the reported state of every known component
+// with the agent's own bookkeeping, and republishes the state metrics.
+//
+// A component counts as running only if the agent holds a handle for it *and*
+// the process behind that handle is alive. The handle alone is not enough: a
+// stop path that signals the process without deregistering its handle (a failed
+// apply unwinding a layer, for instance) would otherwise keep the component
+// reported running with a dead PID.
+func (a *Agent) refreshComponentStates() {
+	for _, ci := range a.comps.List() {
+		a.mu.RLock()
+		_, hasHandle := a.handles[ci.Name]
+		a.mu.RUnlock()
+
+		running := hasHandle
+		if hasHandle && ci.PID > 0 && !sysrt.IsProcessRunning(ci.PID) {
+			running = false
+		}
+
+		// Keep "failed" state if it was set by a terminal exit.
+		st := ci.State
+		if st != "failed" {
+			st = "stopped"
+			if running {
+				st = "running"
+			}
+			ci.State = st
+			// Never keep advertising a PID with nothing behind it: it may
+			// already have been recycled by an unrelated process.
+			if ci.PID > 0 && !running {
+				ci.PID = 0
+				ci.LastHealth = "unknown"
+			}
+			a.comps.Replace(ci)
+		}
+
+		metrics.ObserveComponentState(ci.Name, st)
+		metrics.ObserveComponentStateWithHealth(ci.Name, st, ci.LastHealth)
+	}
 }
 
 // Close releases agent resources and signals all operations to stop.
@@ -613,29 +669,18 @@ func (a *Agent) applyPlan(planPath string) error {
 		}
 		stopFn := func(ctx context.Context) error {
 			if skipStart {
+				// Reused instance: it was already running before this apply, so
+				// a rollback of this apply must leave it alone.
 				return nil
 			}
-			a.mu.RLock()
-			h := a.handles[it.Name]
-			compRunner := a.runners[it.Name]
-			a.mu.RUnlock()
-			if h == nil {
-				return nil
-			}
-			// Use the stored runner if available, otherwise create appropriate one
-			if compRunner != nil {
-				return compRunner.Stop(ctx, h, 10*time.Second)
-			}
-			// Fallback: create a new runner based on handle type
-			if _, ok := h.(*runner.ProcessHandle); ok {
-				return runner.NewProcessRunner().Stop(ctx, h, 10*time.Second)
-			}
-			// For containers without stored runner, try CLI runner
-			clir, err := runner.NewCLIRunner()
-			if err != nil {
-				return fmt.Errorf("no runner available for container: %w", err)
-			}
-			return clir.Stop(ctx, h, 10*time.Second)
+			// StartStack calls this when a layer fails, to unwind what it
+			// started. Delegate to the one teardown path that also drops the
+			// handle, the runner and the supervision marker, and records the
+			// state: stopping the process alone would leave a dead handle
+			// behind, which still reads as "running" to the API and to the
+			// next reconcile.
+			a.stopComponent(it.Name)
+			return nil
 		}
 		// Create component with readiness channel and register it
 		readyCh := make(chan struct{})
@@ -720,49 +765,6 @@ func (a *Agent) applyPlan(planPath string) error {
 		}
 		a.comps.Upsert(ci)
 	}
-	// Poll states to store and component-state metric
-	go func() {
-		t := time.NewTicker(500 * time.Millisecond)
-		defer t.Stop()
-		for range t.C {
-			if a.closed.Load() {
-				return
-			}
-			for _, c := range comps {
-				// Derive running/stopped from presence of a managed handle.
-				a.mu.RLock()
-				_, running := a.handles[c.Name]
-				a.mu.RUnlock()
-				ci, known := a.comps.Get(c.Name)
-				if !known {
-					continue
-				}
-
-				// Keep "failed" state if it was set by terminal error
-				st := ci.State
-				if st != "failed" {
-					st = "stopped"
-					if running {
-						st = "running"
-					}
-					ci.State = st
-					// Never keep advertising a PID that is gone: with no
-					// managed handle and no live process, the recorded PID
-					// belongs to nothing (and may already be recycled).
-					if ci.PID > 0 && !running && !sysrt.IsProcessRunning(ci.PID) {
-						ci.PID = 0
-						ci.LastHealth = "unknown"
-					}
-					a.comps.Replace(ci)
-				}
-
-				metrics.ObserveComponentState(c.Name, st)
-				metrics.ObserveComponentStateWithHealth(c.Name, st, ci.LastHealth)
-			}
-			a.persistSnapshot()
-		}
-	}()
-
 	err = supervisor.StartStack(a.Context(), comps)
 	a.mu.Lock()
 	if err != nil {
@@ -1131,6 +1133,11 @@ func (a *Agent) persistSnapshot() {
 	a.snapMu.Lock()
 	defer a.snapMu.Unlock()
 
+	comps := a.comps.List()
+	// List() walks a map, so sort for a stable snapshot file (and a stable
+	// fingerprint below).
+	sort.Slice(comps, func(i, j int) bool { return comps[i].Name < comps[j].Name })
+
 	snap := state.Snapshot{
 		Plan: state.PlanStatus{
 			Path:    a.planPath,
@@ -1138,9 +1145,20 @@ func (a *Agent) persistSnapshot() {
 			Error:   a.planErr,
 			Updated: time.Now(),
 		},
-		Components:     a.comps.List(),
+		Components:     comps,
 		PlanComponents: a.planComps,
 	}
+
+	// The state poller calls this twice a second and state.Save rewrites and
+	// renames the file every time; skip the write when nothing observable
+	// changed. Updated is deliberately excluded from the fingerprint, or every
+	// tick would look like a change.
+	fingerprint := fmt.Sprintf("%s|%s|%s|%v|%v", a.planPath, a.planStatus, a.planErr, comps, a.planComps)
+	if fingerprint == a.lastSnapshot {
+		return
+	}
+	a.lastSnapshot = fingerprint
+
 	if err := state.Save(a.stateDir, snap); err != nil {
 		log.Printf("[agent] warning: failed to persist state: %v", err)
 	}
@@ -1484,27 +1502,17 @@ func reapOrphanedComponents(comps []store.ComponentInfo) int {
 		_ = syscall.Kill(ci.PID, syscall.SIGTERM)
 		deadline := time.Now().Add(2 * time.Second)
 		for time.Now().Before(deadline) {
-			if !processExists(ci.PID) {
+			if !sysrt.IsProcessRunning(ci.PID) {
 				break
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		if processExists(ci.PID) {
+		if sysrt.IsProcessRunning(ci.PID) {
 			_ = syscall.Kill(ci.PID, syscall.SIGKILL)
 		}
 		reaped++
 	}
 	return reaped
-}
-
-// processExists reports whether a process with this PID is reachable from the
-// current process (sig 0 doesn't deliver anything, it just probes existence
-// and permission).
-func processExists(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	return syscall.Kill(pid, 0) == nil
 }
 
 // processIsInitOrphan reports whether the process with PID is currently

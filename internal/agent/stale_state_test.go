@@ -247,6 +247,48 @@ func TestHandleComponentExit_EndsSupervision(t *testing.T) {
 	}
 }
 
+// TestRefreshComponentStates covers the state poller: holding a handle is not
+// proof of life. A stop path that signals the process without deregistering its
+// handle (a failed apply unwinding a layer) used to leave the component
+// reported running with a dead PID.
+func TestRefreshComponentStates(t *testing.T) {
+	a := newStateAgent()
+	a.comps.Upsert(store.ComponentInfo{Name: "alive", State: "running", LastHealth: "healthy", PID: os.Getpid()})
+	a.comps.Upsert(store.ComponentInfo{Name: "stale", State: "running", LastHealth: "healthy", PID: deadPID})
+	a.comps.Upsert(store.ComponentInfo{Name: "gone", State: "running", LastHealth: "healthy", PID: deadPID})
+	a.comps.Upsert(store.ComponentInfo{Name: "broken", State: "failed", LastHealth: "unhealthy", PID: deadPID})
+	// "alive" and "stale" are both still registered; only one has a live process.
+	a.handles["alive"] = &runner.ProcessHandle{}
+	a.handles["stale"] = &runner.ProcessHandle{}
+	// "gone" lost its handle, the usual case after a terminal exit.
+
+	a.refreshComponentStates()
+
+	for _, c := range []struct {
+		name      string
+		wantState string
+		wantPID   int
+		reason    string
+	}{
+		{"alive", "running", os.Getpid(), "handle plus a live process is the definition of running"},
+		{"stale", "stopped", 0, "the handle is stale: nothing is behind that PID"},
+		{"gone", "stopped", 0, "no handle and no process"},
+		{"broken", "failed", deadPID, "a terminal failure is not downgraded by the poller"},
+	} {
+		ci, ok := a.comps.Get(c.name)
+		if !ok {
+			t.Errorf("%s: missing from the store", c.name)
+			continue
+		}
+		if ci.State != c.wantState {
+			t.Errorf("%s: State=%q, want %q (%s)", c.name, ci.State, c.wantState, c.reason)
+		}
+		if ci.PID != c.wantPID {
+			t.Errorf("%s: PID=%d, want %d (%s)", c.name, ci.PID, c.wantPID, c.reason)
+		}
+	}
+}
+
 func TestMemoryStoreReplaceClearsPID(t *testing.T) {
 	s := store.NewMemoryStore()
 	s.Upsert(store.ComponentInfo{Name: "c", State: "running", PID: 4242, LastHealth: "healthy"})

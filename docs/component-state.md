@@ -7,14 +7,21 @@ it.
 
 ## States
 
+These are the states `GET /v1/components` reports:
+
 | State | Meaning |
 |-------|---------|
 | `none` | Known from the plan, nothing installed or started yet |
-| `installing` | Install hook / artifact download in progress |
 | `stopped` | Not running. Either never started, stopped on request, or exited on its own with code 0 and no restart policy that applies |
 | `running` | A managed instance is alive and supervised |
 | `failed` | Terminal failure: crashed with no applicable restart policy, or exhausted `max_retries` |
-| `stopping` | Stop in progress |
+
+The supervisor also has transient lifecycle states — `installing`, `starting`,
+`stopping` — which show up in the agent log as
+`[supervisor] component=<name> state=<state>`. They are not published to the API
+for plan components: an apply moves a component from `none` straight to
+`running` (or `failed`) as far as `/v1/components` is concerned. The one
+exception is the `--demo` stack, which publishes raw supervisor states.
 
 `last_health` is `healthy` / `unhealthy` / `unknown`. Only components that
 declare `[lifecycle.run.health]` ever get a verdict; the rest stay `unknown`
@@ -33,6 +40,8 @@ forever, and that is not a problem.
   last known good state.
 - `last_health` is reset to `unknown` when a component exits: a component that
   is gone cannot still be healthy.
+- A failed apply unwinds through the same teardown as an explicit stop, so a
+  component the agent gave up on does not linger as `running`.
 
 Container components report `pid = 0` (there is no host PID to probe), so for
 those the supervision loop is the only liveness signal.
