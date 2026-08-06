@@ -53,8 +53,8 @@ protections that matter when the archive comes off the network:
 
 - **Zip-slip containment** — entries that escape the target directory are refused.
 - **Mode stripping** — setuid, setgid and world-writable bits are removed.
-- **Size cap** — `KEYSTONE_MAX_EXTRACT_BYTES` bounds the decompressed size, so a
-  small archive cannot fill the disk.
+- **Size cap** — `KEYSTONE_MAX_EXTRACT_BYTES` (2 GiB by default) bounds the
+  decompressed size, so a small archive cannot fill the disk.
 
 ## The cache
 
