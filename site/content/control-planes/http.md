@@ -57,13 +57,15 @@ The same API with less typing:
 
 ```bash
 keystonectl status
+keystonectl components
 keystonectl apply plan.toml
-keystonectl restart api --wait health
-keystonectl stop api
+keystonectl restart api
+keystonectl stop api          # one component
+keystonectl stop-plan         # everything
 ```
 
 It reads `KEYSTONE_API_TOKEN` from the environment and takes `--addr` for a remote
-agent.
+agent. See [the CLI reference](../../reference/cli/) for every subcommand.
 
 ## Bruno collection
 

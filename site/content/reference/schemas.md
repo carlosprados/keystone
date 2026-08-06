@@ -101,7 +101,7 @@ That is the entire plan schema. Everything else is in the recipe.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `check` | string | — | `http://…`, `tcp://…`, `cmd:…` |
+| `check` | string | — | `http://…` or `https://…` (2xx only), `tcp://…`, `cmd:…` |
 | `interval` | duration | `10s` | |
 | `timeout` | duration | `3s` | |
 | `failure_threshold` | int | `3` | |

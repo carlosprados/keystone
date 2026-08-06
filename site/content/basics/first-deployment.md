@@ -157,8 +157,10 @@ Everything above works through `keystonectl` too:
 
 ```bash
 keystonectl status
+keystonectl components
 keystonectl apply plan.toml
 keystonectl restart clock
+keystonectl stop-plan
 ```
 
 ## What to read next

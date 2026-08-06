@@ -129,7 +129,7 @@ See [Containers](../../internals/runners/) for how the runtime is chosen.
 
 ```toml
 [lifecycle.run.health]
-check = "http://127.0.0.1:8080/healthz"   # http:// | tcp:// | cmd:…
+check = "http://127.0.0.1:8080/healthz"   # http:// | https:// | tcp:// | cmd:…
 interval = "10s"
 timeout = "2s"
 failure_threshold = 3

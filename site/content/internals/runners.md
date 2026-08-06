@@ -58,10 +58,14 @@ anything — so their liveness signal is the supervision loop. See the caveat in
 Three forms, all with `interval`, `timeout` and `failure_threshold`:
 
 ```toml
-check = "http://127.0.0.1:8080/healthz"   # 2xx/3xx is healthy
+check = "http://127.0.0.1:8080/healthz"   # 2xx is healthy — a redirect is not
+check = "https://127.0.0.1:8443/healthz"  # same, over TLS
 check = "tcp://127.0.0.1:5432"            # a successful connect is healthy
 check = "cmd:/usr/local/bin/check.sh"     # exit 0 is healthy
 ```
+
+The HTTP probe accepts **200–299 only**. A health endpoint that redirects reads as
+unhealthy, which catches a surprising number of misconfigured reverse proxies.
 
 Health interacts with the restart policy:
 
