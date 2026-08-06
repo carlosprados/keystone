@@ -4,8 +4,6 @@ weight = 34
 description = "Downloading, verifying and caching, on a network that drops."
 +++
 
-# Artifacts
-
 An artifact is a file a component needs before it can run: a binary, a tarball, a
 config bundle. Getting them onto an edge device is its own problem — the link is
 slow, expensive and unreliable.
@@ -13,16 +11,16 @@ slow, expensive and unreliable.
 ## The download path
 
 ```mermaid
-flowchart LR
-    A["artifact declared<br/>in the recipe"] --> B{"already in<br/>the cache?"}
-    B -- yes --> V["verify"]
-    B -- no --> D["download<br/><small>resume + retry with backoff</small>"]
+flowchart TB
+    A["artifact in the recipe"] --> B{"in the cache?"}
+    B -- "no" --> D["download<br/>resume + retry"]
+    B -- "yes" --> V["verify"]
     D --> V
     V --> S{"sha256 matches?"}
-    S -- no --> X["fail the apply"]
-    S -- yes --> G{"signature valid?"}
-    G -- no --> X
-    G -- yes --> U["unpack if requested"]
+    S -- "no" --> X["fail the apply"]
+    S -- "yes" --> G{"signature valid?"}
+    G -- "no" --> X
+    G -- "yes" --> U["unpack if requested"]
     U --> W["component workdir"]
 ```
 

@@ -4,8 +4,6 @@ weight = 43
 description = "Why the agent refuses to listen on 0.0.0.0 without a token."
 +++
 
-# API authentication
-
 The HTTP API can apply plans and run arbitrary install hooks. It is, in effect, a
 remote shell. It is treated accordingly.
 
@@ -34,6 +32,18 @@ an unauthenticated control plane reachable from the factory LAN — is
 indistinguishable from working correctly until someone finds it.
 
 ## Using the token
+
+```mermaid
+flowchart TB
+    R["request arrives"] --> A{"is a token<br/>configured?"}
+    A -- "no" --> P["serve it<br/>loopback only"]
+    A -- "yes" --> B{"path is /healthz?"}
+    B -- "yes" --> P
+    B -- "no" --> C{"bearer token matches?<br/>constant-time"}
+    C -- "no" --> U["401 Unauthorized"]
+    C -- "yes" --> P
+```
+
 
 ```bash
 curl -H "Authorization: Bearer $KEYSTONE_API_TOKEN" \

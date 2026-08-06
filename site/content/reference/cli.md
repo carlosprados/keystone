@@ -4,8 +4,6 @@ weight = 71
 description = "Every flag of the agent, and the keystonectl commands."
 +++
 
-# Command-line flags
-
 ## keystone
 
 The authoritative list is always `keystone --help` on the binary you are running.

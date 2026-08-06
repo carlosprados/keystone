@@ -4,8 +4,6 @@ weight = 41
 description = "What is locked down out of the box, and the one escape hatch."
 +++
 
-# Secure by default
-
 The defaults assume a hostile network and an unattended device. Nothing needs to be
 switched on to be safe; things need to be switched *off* to be convenient.
 
@@ -43,6 +41,16 @@ fails**. It never degrades to the insecure path with a warning.
   rather than running it unconfined.
 
 Warnings get ignored; failures get fixed.
+
+```mermaid
+flowchart TB
+    A["a control cannot be applied"] --> B{"fail, or continue<br/>with a warning?"}
+    B -- "warning" --> W["a workload runs unverified<br/>and nobody notices"]
+    B -- "fail" --> F["the component does not start<br/>and someone fixes it"]
+```
+
+Keystone always takes the right-hand branch.
+
 
 ## The one escape hatch
 

@@ -7,6 +7,13 @@ theme = ["github.com/McShelby/hugo-theme-relearn"]
 # Relearn renders the tree from the content directory; keep URLs stable.
 enableGitInfo = true
 [params]
+  # Passed straight to mermaid.initialize by the theme. The CSS lifts mermaid's
+  # small default label sizes: legibility on a documentation page matters more
+  # than mermaid's compactness.
+  mermaidInitialize = "{\"themeCSS\": \"/* Mermaid hardcodes 12px for edge labels and 10px for state-diagram labels, which is fine print on a documentation page. */ .edgeLabel, .edgeLabel p, .edgeLabel span, .edgeLabels div { font-size: 15px !important; } .stateLabel, .stateGroup text, .state-note text, .stateGroup .divider + text { font-size: 15px !important; } .messageText, .loopText, .noteText, .labelText { font-size: 15px !important; }\"}"
+  # Overridden by HUGO_PARAMS_VERSION in CI: the tag on a release build, or
+  # git describe on a main build. Shown in the page footer.
+  version = "development"
   editURL = "https://github.com/carlosprados/keystone/edit/develop/site/content/"
   themeVariant = ["auto", "relearn-light", "relearn-dark", "neon"]
   disableLandingPageButton = true

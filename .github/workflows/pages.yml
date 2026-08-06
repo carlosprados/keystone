@@ -4,18 +4,26 @@ name: docs
 #
 # Deploys from main only: the site documents features as released, and publishing
 # from develop would describe flags that a downloaded binary does not have yet.
-# Pull requests build the site without deploying, so a broken page is caught before
-# it is merged. Use the manual trigger to publish out of band.
+#
+# Triggers, and why:
+#   - push to main      every merge, so the published docs never lag the branch
+#                       they describe. The build is ~40s and deploying an
+#                       unchanged site is a no-op, which is cheaper than
+#                       maintaining a path filter that silently skips a needed
+#                       rebuild (a change to a Go response type regenerates the
+#                       OpenAPI document, which lives under site/).
+#   - tag v*            cutting a release republishes the docs for that release.
+#   - pull request      builds without deploying, and fails on a broken link.
+#   - manual dispatch   publish out of band.
 on:
   push:
     branches: [main]
-    paths:
-      - 'site/**'
-      - '.github/workflows/pages.yml'
+    tags: ['v*']
   pull_request:
     paths:
       - 'site/**'
       - '.github/workflows/pages.yml'
+      - 'internal/adapter/http/routes.go'
   workflow_dispatch:
 
 permissions:
@@ -58,10 +66,20 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
 
+      - name: Work out the version being documented
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build
         working-directory: site
         env:
           HUGO_ENVIRONMENT: production
+          HUGO_PARAMS_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           # On a PR there is no Pages base URL; the relative one is enough to
           # prove the site builds.
@@ -82,6 +100,12 @@ jobs:
           done < <(grep -rhoE 'href="/keystone/[a-z0-9/-]*/"' public --include='*.html' \
                     | sed -E 's|href="/keystone/||; s|"$||' | sort -u)
           exit $missing
+
+      - name: Diagrams render legibly
+        # A diagram wider than the content column is scaled down by the browser and
+        # its text shrinks with it. This renders each one and fails if the effective
+        # font size would be too small to read.
+        run: python3 site/scripts/check-diagrams.py
 
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name != 'pull_request'

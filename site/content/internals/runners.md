@@ -4,8 +4,6 @@ weight = 33
 description = "How processes and containers are actually started, watched and stopped."
 +++
 
-# Runners
-
 A runner is the thing that makes a workload exist. Two implementations, one
 interface.
 
@@ -55,6 +53,26 @@ anything — so their liveness signal is the supervision loop. See the caveat in
 
 ## Health probes
 
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AG as Agent
+    participant RU as RunManaged
+    participant P as Process
+
+    AG->>RU: start supervising
+    RU->>P: spawn
+    RU->>AG: onStart(pid)
+    loop every interval
+        RU->>P: health probe
+        RU->>AG: onHealth(ok) when it changes
+    end
+    P--xRU: exits
+    RU->>RU: restart policy applies?
+    RU->>AG: onExit(err) when it will not restart
+```
+
+
 Three forms, all with `interval`, `timeout` and `failure_threshold`:
 
 ```toml
@@ -76,6 +94,19 @@ Health interacts with the restart policy:
   yours.
 
 ## Restart policy and backoff
+
+```mermaid
+flowchart TB
+    E["the workload exits"] --> P{"policy?"}
+    P -- "never" --> STOP["report and stop"]
+    P -- "on-failure" --> Q{"exit code 0?"}
+    Q -- "yes" --> STOP
+    Q -- "no" --> R{"retries left?"}
+    P -- "always" --> R
+    R -- "yes" --> BACK["wait, backoff, restart"]
+    R -- "no" --> FAIL["failed"]
+```
+
 
 ```
 attempt 1 → 1s   attempt 2 → 2s   attempt 3 → 4s   …   capped at 60s

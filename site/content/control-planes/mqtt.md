@@ -4,8 +4,6 @@ weight = 53
 description = "Topics, QoS, and last-will for presence."
 +++
 
-# MQTT
-
 The classic IoT transport, and usually the one already deployed. Works with any
 MQTT 3.1.1 broker — Mosquitto, EMQX, HiveMQ, AWS IoT Core, Azure IoT Hub.
 
@@ -14,6 +12,15 @@ keystone --mqtt-broker tls://broker.acme.com:8883 --mqtt-device-id edge-001
 ```
 
 ## Topics
+
+```mermaid
+flowchart LR
+    ROOT["keystone/{deviceId}"] --> CMD["cmd/*"]
+    ROOT --> RESP["resp/*"]
+    ROOT --> EV["events/state, events/health"]
+    ROOT --> ST["status: online / offline"]
+```
+
 
 Everything under `keystone/{deviceId}/`:
 

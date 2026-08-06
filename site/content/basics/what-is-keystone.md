@@ -4,8 +4,6 @@ weight = 11
 description = "The problem it solves, and what it deliberately is not."
 +++
 
-# What is Keystone?
-
 Keystone is an **agent**: a small program that runs on a device and takes care of
 the other programs on that device.
 

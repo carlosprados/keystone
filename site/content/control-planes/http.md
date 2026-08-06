@@ -4,8 +4,6 @@ weight = 51
 description = "The REST API, endpoint by endpoint."
 +++
 
-# HTTP
-
 On by default, bound to `127.0.0.1:8080`. Disable it with `--http ""`.
 
 See [API authentication](../../security/api-auth/) before exposing it off-device —

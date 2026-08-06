@@ -75,6 +75,22 @@ tasks:
     cmds:
       - go vet ./...
 
+  openapi:
+    desc: Regenerate the OpenAPI document from the agent's route table
+    cmds:
+      - go run ./cmd/openapi-gen -o site/content/reference/api/openapi.yaml
+
+  openapi:check:
+    desc: Fail if the checked-in OpenAPI document is out of date
+    cmds:
+      - go run ./cmd/openapi-gen -check -o site/content/reference/api/openapi.yaml
+
+  docs:
+    desc: Serve the documentation site locally (needs Hugo extended)
+    dir: site
+    cmds:
+      - hugo server
+
   test:
     desc: Run all tests
     cmds:

@@ -4,8 +4,6 @@ title = "Keystone"
 description = "A lightweight edge orchestration agent. Processes first, containers when needed."
 +++
 
-# Keystone
-
 **A small program that keeps other programs running on a machine far away.**
 
 That is the whole idea. You write down which programs a device should be running.
@@ -48,19 +46,18 @@ built for that:
 ## The shape of it in one picture
 
 ```mermaid
-flowchart LR
-    OP["You<br/><small>an operator, or a fleet manager</small>"]
-    subgraph DEV["One device"]
-        AG["keystone agent"]
-        C1["database<br/><small>process</small>"]
-        C2["cache<br/><small>process</small>"]
-        C3["api<br/><small>container</small>"]
-        AG --> C1
-        AG --> C2
-        AG --> C3
-    end
-    OP -- "here is the plan<br/>(HTTP / NATS / MQTT)" --> AG
-    AG -- "here is what is really running" --> OP
+flowchart TB
+    OP["You"]
+    AG["keystone agent"]
+    DB["database"]
+    CA["cache"]
+    API["api"]
+
+    OP -- "the plan" --> AG
+    AG -- "what is really running" --> OP
+    AG --> DB
+    AG --> CA
+    AG --> API
 ```
 
 You send a **plan**. The agent turns it into running **components**. It keeps

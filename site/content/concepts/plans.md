@@ -4,8 +4,6 @@ weight = 22
 description = "The device's desired state, and how applying one works."
 +++
 
-# Plans
-
 A plan is the list of components a device should be running. It is deliberately
 almost empty of logic — all the detail lives in the recipes.
 
@@ -50,23 +48,97 @@ status to `dry-run`, but installs and starts nothing.
 ## What an apply actually does
 
 ```mermaid
-flowchart TD
-    A["plan arrives"] --> B["load and validate<br/>every recipe"]
+flowchart TB
+    A["plan arrives"] --> B["load and validate recipes"]
     B --> C["verify recipe signatures"]
     C --> D["build the dependency graph"]
-    D --> E["compare with the running plan<br/><small>reconcile</small>"]
-    E --> F["stop what must go<br/><small>reverse dependency order</small>"]
-    F --> G["download + verify artifacts"]
+    D --> E["reconcile with the running plan"]
+    E --> F["stop what must go"]
+    F --> G["download and verify artifacts"]
     G --> H["run install hooks"]
-    H --> I["start layer by layer<br/><small>parallel within a layer</small>"]
-    I --> J{"did every layer<br/>come up?"}
-    J -- yes --> K["plan status: running"]
-    J -- no --> L["unwind, then roll back<br/>to the previous plan"]
+    H --> I["start layer by layer"]
+    I --> J{"every layer up?"}
+    J -- "yes" --> K["plan status: running"]
+    J -- "no" --> L["unwind, then roll back"]
 ```
 
 The reconcile step is what makes re-applying cheap: unchanged components that are
 alive and supervised are left completely alone. See
 [Reconcile and reuse](../reconcile-and-reuse/).
+
+## The same thing, as a conversation
+
+Who calls whom during a successful apply of a two-component plan:
+
+```mermaid
+sequenceDiagram
+    actor OP as Operator
+    participant AG as Agent
+    participant AR as Artifacts
+
+    OP->>AG: POST /v1/plan/apply
+    AG->>AG: parse plan, load recipes
+    AG->>AG: verify recipe signatures
+    Note over AG: before any hook runs
+    AG->>AG: reconcile against the running plan
+    AG->>AR: download and verify artifacts
+    AR-->>AG: ok
+    AG-->>OP: 202 Accepted
+```
+
+Signature verification happens **before** any hook, because an install hook is
+arbitrary shell — verifying afterwards would be theatre.
+
+Then the supervisor brings the components up, layer by layer:
+
+```mermaid
+sequenceDiagram
+    participant SU as Supervisor
+    participant AG as Agent
+    participant RU as Runner
+
+    SU->>AG: Install(database)
+    SU->>AG: Start(database)
+    AG->>RU: RunManaged(database)
+    RU-->>SU: ready
+    SU->>AG: Install + Start(api)
+    AG->>RU: RunManaged(api)
+    RU->>RU: health probe loop
+    RU-->>SU: ready when first healthy
+    SU-->>AG: all components running
+```
+
+`api` reports ready on its **first healthy probe**, not when its process appears,
+which is what makes layered ordering mean something.
+
+Two details the diagram makes obvious. Signature verification happens **before**
+any hook, because an install hook is arbitrary shell — verifying afterwards would
+be theatre. And `api` only reports ready on its **first healthy probe**, not when
+its process appears, which is what makes layered ordering mean something.
+
+## When it goes wrong
+
+```mermaid
+sequenceDiagram
+    participant SU as Supervisor
+    participant AG as Agent
+    participant RU as Runner
+
+    SU->>RU: start database
+    RU-->>SU: ready
+    SU->>RU: start api
+    RU--xSU: readiness timeout
+    Note over SU: layer failed
+    SU->>SU: cancel the shared context
+    SU->>AG: stop what started
+    AG->>RU: stop database
+    Note over AG: handle dropped, state recorded
+    AG->>AG: re-apply the previous plan
+```
+
+Step 8 is the one that used to be missing. Signalling the process without dropping
+its handle left a component that still read as `running`, which the rollback then
+adopted — the bug behind [#10](https://github.com/carlosprados/keystone/issues/10).
 
 ## Plan status
 
@@ -76,6 +148,17 @@ curl -s http://127.0.0.1:8080/v1/plan/status | jq
 
 The response carries `planPath`, `status`, the component list, and `error` when the
 last operation failed.
+
+```mermaid
+flowchart TB
+    I["idle"] --> A["applying"]
+    A -- "every layer up" --> R["running"]
+    A -- "a layer failed" --> F["failed"]
+    R -- "apply again" --> A
+    F -- "apply again" --> A
+    R -- "stop" --> S["stopped"]
+    S -- "apply again" --> A
+```
 
 | Status | Meaning |
 |---|---|

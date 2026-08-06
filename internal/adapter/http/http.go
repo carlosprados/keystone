@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/carlosprados/keystone/internal/adapter"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // maxRequestBody bounds the size of a request body the API will read into
@@ -169,34 +168,6 @@ func (a *Adapter) Stop(ctx context.Context) error {
 	}
 	log.Printf("[http] stopping HTTP adapter")
 	return a.server.Shutdown(ctx)
-}
-
-// buildRouter creates the HTTP router with all endpoints.
-func (a *Adapter) buildRouter() *http.ServeMux {
-	mux := http.NewServeMux()
-
-	// Health and metrics
-	mux.HandleFunc("/healthz", a.handleHealthz)
-	mux.Handle("/metrics", promhttp.Handler())
-
-	// Components
-	mux.HandleFunc("/v1/components", a.handleComponents)
-	mux.HandleFunc("/v1/components/", a.handleComponentAction)
-
-	// Recipes
-	mux.HandleFunc("/v1/recipes", a.handleRecipes)
-	mux.HandleFunc("/v1/recipes/", a.handleRecipeDelete)
-
-	// Plan
-	mux.HandleFunc("/v1/plan/status", a.handlePlanStatus)
-	mux.HandleFunc("/v1/plan/graph", a.handlePlanGraph)
-	mux.HandleFunc("/v1/plan/apply", a.handlePlanApply)
-	mux.HandleFunc("/v1/plan/stop", a.handlePlanStop)
-
-	// Root
-	mux.HandleFunc("/", a.handleRoot)
-
-	return mux
 }
 
 // handleRoot serves the landing page.

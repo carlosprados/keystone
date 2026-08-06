@@ -4,8 +4,6 @@ weight = 12
 description = "Recipe, plan, component, agent — everything else is detail."
 +++
 
-# The four words
-
 Learn these four and the rest of the documentation reads easily.
 
 ## Recipe
@@ -75,13 +73,13 @@ adapters — is a way of asking the agent to do something.
 ## How they fit together
 
 ```mermaid
-flowchart TD
-    P["plan.toml<br/><small>names + which recipe</small>"]
+flowchart TB
+    P["plan.toml"]
     R1["recipe: database"]
     R2["recipe: api"]
     A["agent"]
-    C1["component 'database'<br/><small>running, pid 4021</small>"]
-    C2["component 'api'<br/><small>running, pid 4088</small>"]
+    C1["component database"]
+    C2["component api"]
 
     P --> A
     R1 --> A
