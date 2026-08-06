@@ -20,7 +20,7 @@ anything else, so these can live there or in a systemd `EnvironmentFile`.
 | `KEYSTONE_LEAF_CERT` | — | Provisioned signing leaf certificate |
 | `KEYSTONE_INSECURE_SKIP_VERIFY` | `false` | Disables mandatory artifact integrity. Development only |
 | `KEYSTONE_MAX_REQUEST_BYTES` | 4 MiB | HTTP request body cap (413 on overflow) |
-| `KEYSTONE_MAX_EXTRACT_BYTES` | — | Cap on decompressed archive size |
+| `KEYSTONE_MAX_EXTRACT_BYTES` | 2 GiB | Cap on decompressed archive size, so a small archive cannot fill the disk |
 
 ## Artifacts
 
