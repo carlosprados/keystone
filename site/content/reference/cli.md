@@ -98,16 +98,34 @@ Flags always win over the equivalent environment variable.
 ## keystonectl
 
 ```bash
-keystonectl status                     # plan status and components
-keystonectl apply plan.toml            # upload and apply a plan
-keystonectl stop                       # stop the whole plan
-keystonectl stop <component>           # stop one component
-keystonectl restart <component>        # restart one, cascading per dependency type
-keystonectl restart <component> --wait health --timeout 60s
+keystonectl version                       # client version and commit
+keystonectl status                        # plan status
+keystonectl components                    # every component with state, PID, health
+keystonectl graph                         # dependency graph and start order
+
+keystonectl apply plan.toml               # upload and apply a plan
+keystonectl apply plan.toml --dry         # same, previewing only
+keystonectl apply-dry plan.toml           # ditto
+keystonectl stop-plan                     # stop every component
+
+keystonectl stop <component>              # stop one component
+keystonectl restart <component>           # restart one, cascading per dependency type
+keystonectl restart-dry <component>       # what a restart would touch
+
+keystonectl recipes                       # list the recipe store
+keystonectl upload-recipe api.toml        # add a recipe (--force to overwrite)
+keystonectl sha256 dist/api.tar.gz        # compute a digest for a recipe artifact
 ```
 
-`--addr` points at a remote agent; the token comes from `--token` or
-`KEYSTONE_API_TOKEN`.
+Note `stop-plan` (everything) versus `stop <component>` (one thing) — they are
+different commands, and the plural mistake is an outage.
+
+Two global flags: `--addr` (default `http://127.0.0.1:8080`) for a remote agent, and
+`--token`, which falls back to `KEYSTONE_API_TOKEN`.
+
+The CLI is a thin wrapper over the HTTP API, so the wait-for-health behaviour of
+`POST /v1/components/{name}:restart?wait=health` is available with curl but not yet
+exposed as a `keystonectl` flag.
 
 ## keystoneserver
 
