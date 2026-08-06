@@ -82,10 +82,33 @@ type ContainerResources struct {
 	PidsLimit  int64 `toml:"pids_limit"`  // Max number of PIDs
 }
 
+// SecurityConfig restricts the privileges of a process component. It is the
+// process-runner counterpart of a systemd unit's User=, NoNewPrivileges= and
+// AmbientCapabilities=, and it applies only to `type = "process"`; containers
+// are confined through [lifecycle.run.container] instead.
+//
+// Everything declared here is enforced or the component refuses to start: a
+// restriction that cannot be applied is an error, never a silent no-op.
+type SecurityConfig struct {
+	// User to run the process as: "user", "uid", "user:group" or "uid:gid".
+	// Empty means the agent's own user, which is usually root.
+	User string `toml:"user"`
+	// NoNewPrivileges forbids gaining privileges through execve, for this
+	// process and everything it starts. Irreversible once set.
+	NoNewPrivileges bool `toml:"no_new_privileges"`
+	// Capabilities is the allow-list of capabilities the process may ever hold,
+	// e.g. ["CAP_NET_BIND_SERVICE"]. Declaring the key — even as an empty list,
+	// which means "none at all" — drops everything else from the bounding set.
+	// Omitting it leaves capabilities untouched, so nil and [] differ on
+	// purpose.
+	Capabilities []string `toml:"capabilities"`
+}
+
 type LifecycleRun struct {
 	Type          string           `toml:"type"` // "process" (default) or "container"
 	Exec          LifecycleRunExec `toml:"exec"`
 	Container     ContainerConfig  `toml:"container"`
+	Security      SecurityConfig   `toml:"security"`
 	RestartPolicy string           `toml:"restart_policy"`
 	MaxRetries    int              `toml:"max_retries"`
 	Health        Health           `toml:"health"`

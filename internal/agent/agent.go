@@ -546,6 +546,9 @@ func (a *Agent) applyPlan(planPath string) error {
 
 			// Determine run type and validate
 			runType := r.Lifecycle.Run.Type
+			if err := validateRunSecurity(r); err != nil {
+				return fmt.Errorf("component %s: %w", it.Name, err)
+			}
 			if runType == "" || runType == "process" {
 				// Validate command availability for processes
 				cmdPath := r.Lifecycle.Run.Exec.Command
@@ -1005,6 +1008,40 @@ func (a *Agent) createRunner(r *recipe.Recipe) (runner.Runner, func(), error) {
 }
 
 // buildRunnerOptions builds runner.Options from a recipe.
+// recipeSecurity maps the recipe's security block to the runner's.
+func recipeSecurity(r *recipe.Recipe) runner.Security {
+	sec := r.Lifecycle.Run.Security
+	return runner.Security{
+		User:            sec.User,
+		NoNewPrivileges: sec.NoNewPrivileges,
+		Capabilities:    sec.Capabilities,
+	}
+}
+
+// validateRunSecurity rejects privilege settings that the runner for this
+// component type cannot honour.
+//
+// The rule is that a restriction an operator writes in a recipe either takes
+// effect or is refused: silently accepting one and running the workload
+// unconfined is how you end up believing a service is sandboxed when it is not.
+func validateRunSecurity(r *recipe.Recipe) error {
+	runType := r.Lifecycle.Run.Type
+	container := r.Lifecycle.Run.Container
+	sec := recipeSecurity(r)
+
+	if runType == "" || runType == "process" {
+		if container.User != "" || container.Privileged {
+			return fmt.Errorf("run.container.user/privileged only apply to container components and would be ignored here; use [lifecycle.run.security] for a process component")
+		}
+		return sec.Validate()
+	}
+
+	if !sec.IsZero() {
+		return fmt.Errorf("[lifecycle.run.security] only applies to process components; confine a container through [lifecycle.run.container] (user, privileged) instead")
+	}
+	return nil
+}
+
 func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Options {
 	runType := r.Lifecycle.Run.Type
 	if runType == "" || runType == "process" {
@@ -1020,6 +1057,7 @@ func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Op
 			Env:        env,
 			WorkingDir: workDir,
 			NoFile:     r.Resources.OpenFiles,
+			Security:   recipeSecurity(r),
 		}
 	}
 
@@ -1250,6 +1288,9 @@ func (a *Agent) restartFromPlan(name string) error {
 
 	// Determine run type and validate
 	runType := r.Lifecycle.Run.Type
+	if err := validateRunSecurity(r); err != nil {
+		return fmt.Errorf("component %s: %w", name, err)
+	}
 	if runType == "" || runType == "process" {
 		if cmd := r.Lifecycle.Run.Exec.Command; strings.HasPrefix(cmd, "./") {
 			abs := filepath.Join(workDir, strings.TrimPrefix(cmd, "./"))

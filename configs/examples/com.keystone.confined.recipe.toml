@@ -1,0 +1,23 @@
+# A process component confined the way a systemd unit would be: its own user,
+# no ability to gain privileges, and exactly one capability.
+#
+# Requires an agent with enough privilege to grant it (root, or holding
+# CAP_NET_BIND_SERVICE and CAP_SETPCAP itself). If a restriction cannot be
+# applied the component refuses to start — it never falls back to unconfined.
+
+[metadata]
+name = "com.keystone.confined"
+version = "1.0.0"
+description = "Example of a confined process component"
+
+[lifecycle.run]
+restart_policy = "on-failure"
+
+[lifecycle.run.security]
+user = "nobody:nogroup"
+no_new_privileges = true
+capabilities = ["CAP_NET_BIND_SERVICE"]
+
+[lifecycle.run.exec]
+command = "/bin/sleep"
+args = ["3600"]

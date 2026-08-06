@@ -18,10 +18,24 @@ import (
 	natsadapter "github.com/carlosprados/keystone/internal/adapter/nats"
 	"github.com/carlosprados/keystone/internal/agent"
 	"github.com/carlosprados/keystone/internal/config"
+	"github.com/carlosprados/keystone/internal/runner"
 	"github.com/carlosprados/keystone/internal/version"
 )
 
 func main() {
+	// The agent re-executes this binary as a privilege-dropping shim when a
+	// process component declares [lifecycle.run.security]. This has to be the
+	// very first thing main does: the shim must reduce its own privileges and
+	// exec the component, never start an agent.
+	if len(os.Args) > 1 && os.Args[1] == runner.PrivdropFlag {
+		if err := runner.RunPrivdropShim(os.Args[2:]); err != nil {
+			// Fail closed: never fall back to running the component unconfined.
+			fmt.Fprintf(os.Stderr, "keystone: %v\n", err)
+			os.Exit(1)
+		}
+		return // unreachable: RunPrivdropShim execs on success
+	}
+
 	// Load .env as early as possible so adapter configuration (flags/env) can use it.
 	config.LoadDotEnvDefault()
 

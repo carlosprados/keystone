@@ -59,6 +59,10 @@ type Options struct {
 	Command string
 	Args    []string
 	NoFile  uint64 // RLIMIT_NOFILE for processes
+	// Security restricts the privileges of a process component (user,
+	// no_new_privileges, capability allow-list). Enforced by ProcessRunner; a
+	// restriction that cannot be applied prevents the process from starting.
+	Security Security
 
 	// Container-specific fields
 	Image       string            // Container image (e.g., "docker.io/library/nginx:latest")

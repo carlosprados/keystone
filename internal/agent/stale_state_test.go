@@ -333,3 +333,62 @@ func singleComponentPlan(name, healthCheck string) (*plannedState, []state.PlanC
 	}
 	return planned, planned.planMap
 }
+
+// TestValidateRunSecurity is the "no silent no-op" contract: a privilege
+// restriction the runner for this component type cannot honour must be refused
+// when the plan is applied, never accepted and ignored.
+func TestValidateRunSecurity(t *testing.T) {
+	processRecipe := func(mutate func(*recipe.Recipe)) *recipe.Recipe {
+		r := &recipe.Recipe{}
+		r.Metadata.Name = "svc"
+		r.Lifecycle.Run.Exec.Command = "/bin/true"
+		mutate(r)
+		return r
+	}
+
+	t.Run("valid process security is accepted", func(t *testing.T) {
+		r := processRecipe(func(r *recipe.Recipe) {
+			r.Lifecycle.Run.Security.NoNewPrivileges = true
+			r.Lifecycle.Run.Security.Capabilities = []string{"CAP_NET_BIND_SERVICE"}
+		})
+		if err := validateRunSecurity(r); err != nil {
+			t.Errorf("valid security block rejected: %v", err)
+		}
+	})
+
+	t.Run("unknown capability is rejected", func(t *testing.T) {
+		r := processRecipe(func(r *recipe.Recipe) {
+			r.Lifecycle.Run.Security.Capabilities = []string{"CAP_NOT_A_THING"}
+		})
+		if err := validateRunSecurity(r); err == nil {
+			t.Error("a typo in a capability name must fail the apply")
+		}
+	})
+
+	t.Run("container-only privilege fields on a process component are rejected", func(t *testing.T) {
+		for _, mutate := range []func(*recipe.Recipe){
+			func(r *recipe.Recipe) { r.Lifecycle.Run.Container.User = "1000:1000" },
+			func(r *recipe.Recipe) { r.Lifecycle.Run.Container.Privileged = true },
+		} {
+			if err := validateRunSecurity(processRecipe(mutate)); err == nil {
+				t.Error("container.user/privileged on a process component must be refused, not ignored")
+			}
+		}
+	})
+
+	t.Run("process security on a container component is rejected", func(t *testing.T) {
+		r := &recipe.Recipe{}
+		r.Lifecycle.Run.Type = "container"
+		r.Lifecycle.Run.Container.Image = "docker.io/library/nginx:latest"
+		r.Lifecycle.Run.Security.NoNewPrivileges = true
+		if err := validateRunSecurity(r); err == nil {
+			t.Error("[lifecycle.run.security] on a container component must be refused")
+		}
+	})
+
+	t.Run("a recipe without any privilege settings is fine", func(t *testing.T) {
+		if err := validateRunSecurity(processRecipe(func(*recipe.Recipe) {})); err != nil {
+			t.Errorf("plain recipe rejected: %v", err)
+		}
+	})
+}

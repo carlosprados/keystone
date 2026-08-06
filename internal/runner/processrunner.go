@@ -113,7 +113,25 @@ func (r *ProcessRunner) Start(ctx context.Context, opts Options) (Handle, error)
 	if err := sysrt.ApplyRlimits(opts.NoFile); err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, opts.Command, opts.Args...)
+	command, args := opts.Command, opts.Args
+	if !opts.Security.IsZero() {
+		// Privilege restrictions have to be applied in the child, between fork
+		// and exec, so the process re-executes this binary as a shim that drops
+		// what was asked for, verifies it, and then execs the real command
+		// (keeping the same PID).
+		shimArgs, err := opts.Security.shimArgs(command, args)
+		if err != nil {
+			return nil, fmt.Errorf("component %s: %w", opts.Name, err)
+		}
+		self, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("component %s: cannot locate the keystone binary to drop privileges: %w", opts.Name, err)
+		}
+		log.Printf("[runner] component=%s security=%s msg=applying privilege restrictions", opts.Name, opts.Security.describe())
+		command, args = self, shimArgs
+	}
+
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Env = append(os.Environ(), opts.Env...)
 	if opts.WorkingDir != "" {
 		cmd.Dir = opts.WorkingDir
