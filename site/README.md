@@ -24,22 +24,21 @@ Pushes to `main` build and deploy, as do release tags. Pull requests build witho
 deploying. The workflow can also be run manually (**Actions → docs → Run workflow**)
 to publish out of band.
 
-Three checks guard the site, and they are deliberately not all on the same path:
+Checks are **local**, not CI. The workflow only runs Hugo — Relearn renders mermaid in
+the browser, so nothing on the server side needs one.
 
-| Check | Runs on | Why there |
-|---|---|---|
-| Broken internal links | every run | Milliseconds, pure shell |
-| `check-layout.py` | every run | Milliseconds, pure Python. Catches duplicated titles, a sidebar footer that did not render, a chapter missing from the navigation |
-| `check-diagrams.py` | **pull requests only** | Drives a headless Chromium, so it is the slow one. A diagram cannot reach `main` without passing it, but a merge or a release tag publishes without waiting on a browser |
+```bash
+task docs:check              # build, then layout + broken internal links (milliseconds)
+task docs:check:diagrams     # diagram legibility (headless Chromium, ~40s)
+```
 
-`check-diagrams.py` renders every diagram in a single mermaid-cli invocation — one
-browser launch for the whole site, about 40 seconds, rather than one launch per
-diagram, which took a quarter of an hour. If the batch fails it falls back to
-rendering one at a time so the offending page can be named.
+| Check | What it catches |
+|---|---|
+| `check-layout.py` | Duplicated page titles, a sidebar footer that did not render or landed over the menu, a chapter missing from the navigation, unrendered shortcodes, `ZgotmplZ`, broken internal links (absolute **and** relative — Hugo passes relative markdown links through untouched, which is the shape a typo takes) |
+| `check-diagrams.py` | A diagram wider than the content column, whose text the browser shrinks below legibility. Renders all of them in one mermaid-cli launch (~40s for the whole site) |
 
-It deploys from `main` on purpose: the site describes released behaviour, so
-publishing straight from `develop` would document flags that a downloaded binary
-does not have yet.
+Run both before pushing anything under `site/`. The trade-off is explicit: nothing stops
+a bad diagram or a duplicated title reaching `main` except running these.
 
 ## Updating the theme
 

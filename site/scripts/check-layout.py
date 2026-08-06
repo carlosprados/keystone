@@ -117,9 +117,76 @@ def check_page(path: pathlib.Path, html: str) -> list[str]:
     return problems
 
 
+def base_path(config_path: pathlib.Path) -> str:
+    """The path component of baseURL, which prefixes every internal link."""
+    if not config_path.is_file():
+        return ""
+    m = re.search(r'^baseURL\s*=\s*"([^"]+)"', config_path.read_text(), re.M)
+    if not m:
+        return ""
+    path = re.sub(r"^https?://[^/]+", "", m.group(1))
+    return "/" + path.strip("/") if path.strip("/") else ""
+
+
+# Assets, not pages: a link to one of these is fine and is not a page target.
+ASSET_SUFFIXES = (".css", ".js", ".png", ".svg", ".jpg", ".jpeg", ".gif", ".ico",
+                  ".woff", ".woff2", ".ttf", ".yaml", ".yml", ".json", ".xml",
+                  ".txt", ".zip", ".tar.gz", ".pdf", ".webmanifest")
+
+HREF = re.compile(r"""href=(?:"([^"]+)"|'([^']+)'|([^\s">]+))""")
+
+
+def check_links(root: pathlib.Path, prefix: str) -> list[str]:
+    """Internal links pointing at a page that was not built.
+
+    Hugo resolves relative links at build time without complaining, so a typo
+    becomes a link to a page that does not exist. Minified output drops the quotes
+    around attributes and writes targets as /prefix/path/index.html, which is why
+    this parses all three quoting forms and both path shapes.
+    """
+    targets: dict[str, str] = {}
+    for page in root.rglob("*.html"):
+        text = page.read_text(encoding="utf-8", errors="replace")
+        for m in HREF.finditer(text):
+            href = m.group(1) or m.group(2) or m.group(3) or ""
+            href = href.split("#")[0].split("?")[0]
+            if not href or "://" in href or href.startswith(("mailto:", "tel:", "data:")):
+                continue
+            if href.lower().endswith(ASSET_SUFFIXES):
+                continue
+            if href.startswith("/"):
+                targets.setdefault(href, str(page.relative_to(root)))
+            else:
+                # Hugo passes relative markdown links through untouched, which is
+                # exactly the shape a typo takes. Resolve against the page's own
+                # directory, the way a browser would.
+                resolved = (page.parent / href).resolve()
+                try:
+                    rel = resolved.relative_to(root.resolve())
+                except ValueError:
+                    continue          # escapes the site root; not ours to police
+                targets.setdefault("/" + str(rel), f"{page.relative_to(root)} (relative)")
+
+    problems = []
+    for target, seen_in in sorted(targets.items()):
+        rel = target
+        if prefix and rel.startswith(prefix + "/"):
+            rel = rel[len(prefix):]
+        rel = rel.strip("/")
+        if not rel:
+            rel = "index.html"
+        candidates = [root / rel, root / rel / "index.html", root / f"{rel}.html"]
+        if any(c.is_file() for c in candidates):
+            continue
+        problems.append(f"broken internal link {target} (linked from {seen_in})")
+    return problems
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--public", default="site/public")
+    ap.add_argument("--config", default="site/hugo.toml",
+                    help="used to learn the baseURL path that prefixes internal links")
     args = ap.parse_args()
 
     root = pathlib.Path(args.public)
@@ -135,6 +202,10 @@ def main() -> int:
         return 1
 
     failures = 0
+    for problem in check_links(root, base_path(pathlib.Path(args.config))):
+        print(f"::error::{problem}")
+        failures += 1
+
     for page in pages:
         problems = check_page(page, page.read_text(encoding="utf-8", errors="replace"))
         rel = page.relative_to(root)

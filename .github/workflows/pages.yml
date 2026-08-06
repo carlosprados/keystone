@@ -2,6 +2,11 @@ name: docs
 
 # Builds the documentation site in site/ and publishes it to GitHub Pages.
 #
+# This workflow only runs Hugo. Content checks — layout, broken links, diagram
+# legibility — are local tools, run with `task docs:check` and
+# `task docs:check:diagrams` before pushing. Relearn renders mermaid in the
+# browser, so nothing here needs one.
+#
 # Deploys from main only: the site documents features as released, and publishing
 # from develop would describe flags that a downloaded binary does not have yet.
 #
@@ -13,7 +18,8 @@ name: docs
 #                       rebuild (a change to a Go response type regenerates the
 #                       OpenAPI document, which lives under site/).
 #   - tag v*            cutting a release republishes the docs for that release.
-#   - pull request      builds without deploying, and fails on a broken link.
+#   - pull request      builds without deploying, so a broken site is caught
+#                       before it is merged.
 #   - manual dispatch   publish out of band.
 on:
   push:
@@ -85,47 +91,6 @@ jobs:
           # prove the site builds.
           hugo --gc --minify \
             ${{ steps.pages.outputs.base_url && format('--baseURL {0}', steps.pages.outputs.base_url) || '' }}
-
-      - name: Fail on broken internal links
-        working-directory: site
-        run: |
-          # Hugo resolves relative links at build time, so a typo becomes a link to
-          # a page that does not exist. Catch the obvious ones.
-          missing=0
-          while read -r target; do
-            [ -f "public/${target}index.html" ] || [ -f "public/${target%/}.html" ] || {
-              echo "::error::broken internal link target: ${target}"
-              missing=1
-            }
-          done < <(grep -rhoE 'href="/keystone/[a-z0-9/-]*/"' public --include='*.html' \
-                    | sed -E 's|href="/keystone/||; s|"$||' | sort -u)
-          exit $missing
-
-      - name: Layout is sound
-        # Catches what the Hugo build cannot: a duplicated page title, a sidebar
-        # footer that did not render (or rendered on top of the menu), a chapter
-        # missing from the navigation, an unrendered shortcode. All of these
-        # compile perfectly and only show up to a reader.
-        run: python3 site/scripts/check-layout.py
-
-      # Only on pull requests. This one drives a headless Chromium, so it is the
-      # slowest thing here by far; keeping it off the publish path means a merge or
-      # a release tag goes live in about a minute instead of waiting on a browser.
-      # A diagram cannot reach main without passing it, which is the point.
-      - name: Cache the mermaid renderer
-        if: github.event_name == 'pull_request'
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.npm
-            ~/.cache/puppeteer
-          key: mermaid-cli-${{ runner.os }}-v1
-
-      - name: Diagrams render legibly
-        if: github.event_name == 'pull_request'
-        # Renders every diagram in one browser launch and fails if any would show
-        # text below the legible threshold once scaled into the content column.
-        run: python3 site/scripts/check-diagrams.py
 
       - uses: actions/upload-pages-artifact@v3
         if: github.event_name != 'pull_request'
