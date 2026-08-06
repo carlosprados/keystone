@@ -92,3 +92,41 @@ func TestStartStack_Failure(t *testing.T) {
 	assert.Error(t, err)
 	assert.False(t, startedB, "B should not have started")
 }
+
+// TestStartStack_WideLayerFailureUnwinds exercises a layer with several
+// components starting in parallel, one of which fails. The successful siblings
+// must be stopped on the way out — and, under -race, this is what catches
+// concurrent writes to the bookkeeping of what has started.
+func TestStartStack_WideLayerFailureUnwinds(t *testing.T) {
+	var mu sync.Mutex
+	stopped := map[string]bool{}
+
+	stopFn := func(name string) func(context.Context) error {
+		return func(ctx context.Context) error {
+			mu.Lock()
+			stopped[name] = true
+			mu.Unlock()
+			return nil
+		}
+	}
+	okStart := func(context.Context) error { return nil }
+
+	// Four independent components: same layer, started concurrently.
+	comps := []*Component{
+		NewComponent("A", nil, nil, okStart, stopFn("A")),
+		NewComponent("B", nil, nil, okStart, stopFn("B")),
+		NewComponent("C", nil, nil, okStart, stopFn("C")),
+		NewComponent("D", nil, nil, func(ctx context.Context) error {
+			return assert.AnError
+		}, stopFn("D")),
+	}
+
+	err := StartStack(context.Background(), comps)
+	assert.Error(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, name := range []string{"A", "B", "C"} {
+		assert.True(t, stopped[name], "%s started successfully and must be stopped when the layer fails", name)
+	}
+}
