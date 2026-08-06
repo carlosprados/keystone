@@ -30,6 +30,10 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 
 ## Documentation
 
+📖 **[Full documentation site](https://carlosprados.github.io/keystone/)** — concepts,
+internals, security model and reference, written to be read start to finish. The
+source lives in [`site/`](site/).
+
 | Document | What it covers |
 |----------|----------------|
 | [docs/security.md](docs/security.md) | **Security model**: threat model, secure-by-default controls, auth, signing, the `--insecure-skip-verify` escape hatch, config reference |

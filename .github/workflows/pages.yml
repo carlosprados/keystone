@@ -1,0 +1,100 @@
+name: docs
+
+# Builds the documentation site in site/ and publishes it to GitHub Pages.
+#
+# Deploys from main only: the site documents features as released, and publishing
+# from develop would describe flags that a downloaded binary does not have yet.
+# Pull requests build the site without deploying, so a broken page is caught before
+# it is merged. Use the manual trigger to publish out of band.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  pull_request:
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; do not cancel a running one, so a queued push waits
+# rather than leaving Pages half-updated.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  HUGO_VERSION: '0.164.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # enableGitInfo needs history for last-modified dates
+
+      # The Relearn theme is a Hugo module, so the build needs Go to resolve it.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: site/go.sum
+
+      - name: Install Hugo (extended)
+        run: |
+          curl -sSL -o hugo.deb \
+            "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/hugo_extended_${HUGO_VERSION}_linux-amd64.deb"
+          sudo dpkg -i hugo.deb
+          hugo version
+
+      - name: Configure Pages
+        id: pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      - name: Build
+        working-directory: site
+        env:
+          HUGO_ENVIRONMENT: production
+        run: |
+          # On a PR there is no Pages base URL; the relative one is enough to
+          # prove the site builds.
+          hugo --gc --minify \
+            ${{ steps.pages.outputs.base_url && format('--baseURL {0}', steps.pages.outputs.base_url) || '' }}
+
+      - name: Fail on broken internal links
+        working-directory: site
+        run: |
+          # Hugo resolves relative links at build time, so a typo becomes a link to
+          # a page that does not exist. Catch the obvious ones.
+          missing=0
+          while read -r target; do
+            [ -f "public/${target}index.html" ] || [ -f "public/${target%/}.html" ] || {
+              echo "::error::broken internal link target: ${target}"
+              missing=1
+            }
+          done < <(grep -rhoE 'href="/keystone/[a-z0-9/-]*/"' public --include='*.html' \
+                    | sed -E 's|href="/keystone/||; s|"$||' | sort -u)
+          exit $missing
+
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: site/public
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

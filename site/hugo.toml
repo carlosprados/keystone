@@ -1,0 +1,44 @@
+baseURL = "https://carlosprados.github.io/keystone/"
+locale = "en"
+defaultContentLanguage = "en"
+title = "Keystone"
+theme = ["github.com/McShelby/hugo-theme-relearn"]
+
+# Relearn renders the tree from the content directory; keep URLs stable.
+enableGitInfo = true
+[params]
+  editURL = "https://github.com/carlosprados/keystone/edit/develop/site/content/"
+  themeVariant = ["auto", "relearn-light", "relearn-dark", "neon"]
+  disableLandingPageButton = true
+  alwaysopen = false
+  collapsibleMenu = true
+  showVisitedLinks = true
+  disableBreadcrumb = false
+  disableNextPrev = false
+  ordersectionsby = "weight"
+  titleSeparator = "|"
+
+[markup.goldmark.renderer]
+  unsafe = true
+[markup.highlight]
+  style = "github-dark"
+  noClasses = false
+  lineNumbersInTable = false
+[markup.tableOfContents]
+  startLevel = 2
+  endLevel = 3
+
+[menu]
+  [[menu.shortcuts]]
+    name = "<i class='fab fa-fw fa-github'></i> GitHub repo"
+    identifier = "ds"
+    url = "https://github.com/carlosprados/keystone"
+    weight = 10
+  [[menu.shortcuts]]
+    name = "<i class='fas fa-fw fa-tag'></i> Releases"
+    url = "https://github.com/carlosprados/keystone/releases"
+    weight = 20
+  [[menu.shortcuts]]
+    name = "<i class='fas fa-fw fa-bug'></i> Issues"
+    url = "https://github.com/carlosprados/keystone/issues"
+    weight = 30
