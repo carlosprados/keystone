@@ -74,6 +74,9 @@ alive and supervised are left completely alone. See
 curl -s http://127.0.0.1:8080/v1/plan/status | jq
 ```
 
+The response carries `planPath`, `status`, the component list, and `error` when the
+last operation failed.
+
 | Status | Meaning |
 |---|---|
 | `idle` | No plan has been applied |
