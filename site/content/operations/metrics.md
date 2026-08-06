@@ -4,8 +4,6 @@ weight = 61
 description = "What Keystone exports, and the alerts actually worth having."
 +++
 
-# Metrics and alerting
-
 Prometheus metrics on `GET /metrics`, no authentication required beyond whatever
 protects the rest of the HTTP adapter.
 

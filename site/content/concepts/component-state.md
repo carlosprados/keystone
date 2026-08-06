@@ -4,8 +4,6 @@ weight = 24
 description = "What each state means, and the liveness guarantees you can rely on."
 +++
 
-# Component state
-
 `GET /v1/components` is meant to be trustworthy enough to alert on. This page is
 the contract.
 
@@ -33,6 +31,20 @@ states.
 `last_health` is `healthy`, `unhealthy` or `unknown`. Only components that declare
 `[lifecycle.run.health]` ever get a verdict; the rest stay `unknown` forever, which
 is not a problem.
+
+```mermaid
+flowchart TB
+    N["none"] --> R["running"]
+    R --> S["stopped"]
+    R --> F["failed"]
+    S --> R
+    F --> R
+```
+
+`none` on a fresh apply, `running` once it is up and supervised, `stopped` on a clean
+exit or an explicit stop, `failed` when it crashed with no applicable restart policy
+or exhausted its retries. A restart or a new apply takes it back to `running`.
+
 
 ## The guarantees
 
@@ -72,6 +84,23 @@ reading cached state alone, and the runner's exit callback only updated the stor
 when the exit was an *error*. A clean exit therefore froze the record at
 `running/healthy` forever, which then made the corpse look like a valid candidate
 for reuse.
+
+Reading it as a sequence makes the trap obvious:
+
+```mermaid
+sequenceDiagram
+    participant RU as Runner
+    participant AG as Agent
+    participant ST as Store
+
+    RU->>RU: exits, code 0
+    RU->>AG: onExit(nil)
+    Note over AG: only errors were recorded
+    AG--xST: nothing written
+    Note over ST: still says running,<br/>healthy, pid 180072
+    Note over ST: a later apply sees that<br/>and adopts a dead component
+```
+
 
 Both are fixed
 ([#10](https://github.com/carlosprados/keystone/issues/10)), and the rules above

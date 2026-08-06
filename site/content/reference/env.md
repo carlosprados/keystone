@@ -4,8 +4,6 @@ weight = 72
 description = "Every KEYSTONE_* variable, grouped by what it affects."
 +++
 
-# Environment variables
-
 The agent loads a `.env` file from its working directory at startup, before
 anything else, so these can live there or in a systemd `EnvironmentFile`.
 

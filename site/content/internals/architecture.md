@@ -4,10 +4,33 @@ weight = 31
 description = "The three interfaces the whole design hangs from."
 +++
 
-# Architecture
-
 Keystone is small enough to hold in your head. Three interfaces carry the entire
 design.
+
+## Where it sits
+
+Before the internals, the outside view: who talks to a device, and what a device
+reaches for.
+
+```mermaid
+flowchart TB
+    FM["Fleet manager"]
+    BRK["Broker<br/>NATS or MQTT"]
+    KS["keystone agent"]
+    ART["Artifact store"]
+    PROM["Prometheus"]
+
+    FM -- "plan, commands" --> KS
+    KS -- "state, health" --> FM
+    FM -. "or via a broker" .-> BRK
+    BRK <-. "commands, events" .-> KS
+    KS -- "download, verify" --> ART
+    PROM -- "scrape /metrics" --> KS
+```
+
+Nothing in that picture is a cluster. Devices do not know about each other, and the
+agent has no opinion about which device should run what — that decision belongs to
+the fleet manager.
 
 ```mermaid
 flowchart TD
@@ -103,6 +126,55 @@ Agent.New(opts)
   → <-signal
   → Registry.StopAll(shutdownCtx, 10s)
 ```
+
+## The pieces, and who calls whom
+
+```mermaid
+flowchart TB
+    subgraph AD["internal/adapter"]
+        direction TB
+        H["http"]
+        N["nats"]
+        M["mqtt"]
+    end
+    REG["Registry"] --> AD
+    AD --> CH["CommandHandler"]
+    CH --> A["Agent"]
+```
+
+The agent is the only implementation of `CommandHandler`, which is why the three
+transports cannot drift apart in behaviour.
+
+```mermaid
+flowchart LR
+    A["Agent"] --> REC["plan_reconcile"]
+    A --> SUP["Supervisor"]
+    SUP --> G["Graph, TopoLayers"]
+    SUP --> FSM["Component FSM"]
+    FSM -. "hooks" .-> A
+```
+
+The dotted edge is the one worth noticing: the supervisor does not know what a
+component *is*. It calls hooks the agent supplied, which is why ordering logic and
+execution logic never tangle.
+
+```mermaid
+flowchart TB
+    A["Agent"] --> P["recipe, deploy"]
+    A --> ART["artifact"]
+    ART --> SEC["security"]
+    A --> STO["store"]
+    A --> STA["state"]
+    A --> MET["metrics"]
+```
+
+Parsing, downloading, verifying, remembering and reporting — each in its own
+package, each called only by the agent.
+
+
+The dotted edge is the one worth noticing: the supervisor does not know what a
+component *is*. It calls hooks the agent supplied, which is why ordering logic and
+execution logic never tangle.
 
 ## Package map
 

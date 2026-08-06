@@ -4,8 +4,6 @@ weight = 35
 description = "What survives a reboot, and what happens when the agent is killed."
 +++
 
-# State and recovery
-
 An edge device loses power. The agent gets OOM-killed. Someone pulls the plug
 mid-update. Keystone is built to come back from all three without a human.
 
@@ -50,16 +48,16 @@ So before reconciling, the agent walks the PIDs in the snapshot and reaps the on
 that look like orphans from its previous life:
 
 ```mermaid
-flowchart TD
-    A["boot: read snapshot"] --> B{"resume this plan?"}
-    B -- no --> Z["idle"]
-    B -- yes --> C["for each recorded PID"]
+flowchart TB
+    A["boot: read the snapshot"] --> B{"resume this plan?"}
+    B -- "no" --> Z["stay idle"]
+    B -- "yes" --> C["for each recorded PID"]
     C --> D{"is its parent PID 1?"}
-    D -- no --> E["leave it alone<br/><small>the PID was recycled</small>"]
-    D -- yes --> F["SIGTERM, wait ~2s, then SIGKILL"]
-    F --> G["reset persisted state to stopped"]
-    E --> G
-    G --> H["re-apply the plan from scratch"]
+    D -- "no" --> E["leave it alone"]
+    D -- "yes" --> F["SIGTERM, then SIGKILL"]
+    E --> G["reset state to stopped"]
+    F --> G
+    G --> H["re-apply from scratch"]
 ```
 
 The parent-is-`init` test is the safety catch: a PID from a previous boot has

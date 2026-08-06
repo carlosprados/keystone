@@ -4,8 +4,6 @@ weight = 42
 description = "How trust reaches the device, and how to set it up."
 +++
 
-# Signing
-
 Everything the agent installs must be traceable to a key you control. That is done
 with **detached signatures** verified against a **trust bundle** on the device.
 
@@ -19,6 +17,22 @@ with **detached signatures** verified against a **trust bundle** on the device.
 
 The order matters for recipes: the install hook is arbitrary shell, so verifying
 after running it would be pointless.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CI as Your CI
+    participant ST as Artifact store
+    participant AG as Agent
+
+    CI->>CI: build, then sign with the release key
+    CI->>ST: publish artifact + .sig
+    AG->>ST: download both
+    AG->>AG: sha256 matches?
+    AG->>AG: signature chains to the trust bundle?
+    AG->>AG: only now: unpack and run hooks
+```
+
 
 ## Trust bundle
 

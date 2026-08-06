@@ -38,3 +38,8 @@ jobs:
         run: go build ./...
       - name: Test
         run: go test -race ./...
+      - name: OpenAPI document is in sync with the code
+        # The spec is generated from the agent's route table. If a route or a
+        # response type changed without regenerating it, the published API
+        # reference would describe something the binary no longer does.
+        run: go run ./cmd/openapi-gen -check -o site/content/reference/api/openapi.yaml

@@ -4,8 +4,6 @@ weight = 52
 description = "Subjects, authentication and the JetStream job queue."
 +++
 
-# NATS
-
 For fleets. One broker, thousands of devices, request/reply for commands and
 publish for events — plus JetStream when commands must survive a device being
 offline.
@@ -15,6 +13,14 @@ keystone --nats-url nats://broker.acme.com:4222 --nats-device-id edge-001
 ```
 
 ## Subjects
+
+```mermaid
+flowchart TB
+    ROOT["keystone.{deviceId}"]
+    ROOT --> CMD["cmd.*<br/>request / reply"]
+    ROOT --> EV["events.state<br/>events.health"]
+```
+
 
 Everything under `keystone.{deviceId}.`:
 

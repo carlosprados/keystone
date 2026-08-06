@@ -4,8 +4,6 @@ weight = 13
 description = "Get the binaries, or build them from source."
 +++
 
-# Install
-
 Keystone is a single static binary per architecture. No runtime dependencies —
 `CGO` is disabled at build time.
 

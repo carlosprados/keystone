@@ -4,8 +4,6 @@ weight = 63
 description = "A hardened unit, and why the agent is confined too."
 +++
 
-# Running under systemd
-
 The agent should itself be a supervised, confined service. There is a hardened
 example at `configs/systemd/keystone.service`:
 

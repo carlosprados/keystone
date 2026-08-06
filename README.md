@@ -4,6 +4,8 @@
 
 # Keystone — Lightweight Edge Orchestration in Go
 
+📖 **Documentation:** <https://carlosprados.github.io/keystone>
+
 Keystone is a minimal, robust, and secure edge orchestration agent written in Go. It manages local components (native processes and containers), executes deployments atomically with rollback, and keeps devices converging to a desired state — even with flaky networks.
 
 Why Keystone? Because edge fleets need something that is lightweight, predictable, and operable without dragging a full container stack everywhere. Keystone embraces "processes first, containers when needed," with a clean, pluggable design inspired by Greengrass. When you need containers, Keystone supports containerd natively or falls back to Docker/nerdctl/podman CLI.
@@ -30,9 +32,11 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 
 ## Documentation
 
-📖 **[Full documentation site](https://carlosprados.github.io/keystone/)** — concepts,
-internals, security model and reference, written to be read start to finish. The
-source lives in [`site/`](site/).
+📖 **[Read the documentation → carlosprados.github.io/keystone](https://carlosprados.github.io/keystone/)**
+
+Concepts, internals, the security model, worked examples for HTTP/MQTT/NATS, and a
+generated OpenAPI reference — written to be read start to finish. Source in
+[`site/`](site/).
 
 | Document | What it covers |
 |----------|----------------|
