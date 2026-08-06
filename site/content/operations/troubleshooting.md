@@ -4,12 +4,20 @@ weight = 62
 description = "Symptoms, causes and the log line that tells you which."
 +++
 
-# Troubleshooting
-
 The agent's log is designed to be greppable: `[agent]`, `[supervisor]` and
 `[runner]` prefixes, and `key=value` fields.
 
 ## A component will not start
+
+```mermaid
+flowchart LR
+    A1["command not found"] --> B1["the artifact did not deliver it"]
+    A2["install script failed"] --> B2["your hook; output in the log"]
+    A3["readiness timeout"] --> B3["it never became healthy"]
+    A4["signature failed"] --> B4["unsigned, or an unknown key"]
+    A5["privdrop error"] --> B5["confinement not applicable"]
+```
+
 
 Look for the reason in this order:
 

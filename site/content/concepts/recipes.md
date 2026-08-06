@@ -4,11 +4,21 @@ weight = 21
 description = "The complete recipe format, field by field."
 +++
 
-# Recipes
-
 A recipe describes **one piece of software**: where to get it, how to install it,
 how to run it, how to tell whether it is healthy, and what it needs from other
 components.
+
+```mermaid
+flowchart LR
+    R["recipe"] --> M["metadata"]
+    R --> A["artifacts"]
+    R --> I["lifecycle.install"]
+    R --> RUN["lifecycle.run"]
+    R --> D["dependencies"]
+    RUN --> S["run.security"]
+    RUN --> H["run.health"]
+```
+
 
 {{% notice style="primary" title="Like you're five" %}}
 A recipe is a cooking recipe. It says what to buy (artifacts), how to prepare it

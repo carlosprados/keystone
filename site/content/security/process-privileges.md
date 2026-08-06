@@ -4,8 +4,6 @@ weight = 44
 description = "Per-component user, capabilities and no_new_privileges — and how they are enforced."
 +++
 
-# Process privileges
-
 By default a process component inherits everything from the agent: same uid, full
 capability set, `NoNewPrivs=0`. And the agent usually **has** to run as root — it
 writes systemd units, installs into `/usr/local/bin`, touches `/etc`. So without
@@ -55,19 +53,31 @@ So the agent re-executes its own binary as a shim:
 ```mermaid
 sequenceDiagram
     participant A as agent
-    participant S as keystone --privdrop-exec
+    participant S as privdrop shim
     participant C as component
-    A->>S: fork/exec self with the restrictions as argv
-    Note over S: PR_SET_KEEPCAPS<br/>close the bounding set<br/>setgroups → setgid → setuid<br/>capset to the allow-list<br/>raise ambient caps<br/>PR_SET_NO_NEW_PRIVS
+
+    A->>S: exec self with the restrictions
+    Note over S: keepcaps, bounding set,<br/>setuid, capset, ambient,<br/>no_new_privs
     S->>S: verify against the kernel
-    S->>C: execve(component)
-    Note over C: same PID as the shim
+    S->>C: execve, same PID
 ```
 
 `execve` replaces the process image, so the **PID does not change** — supervision,
 metrics and `GET /v1/components` are unaffected.
 
 ### Why that order
+
+```mermaid
+flowchart TB
+    A["PR_SET_KEEPCAPS"] --> B["close the bounding set"]
+    B --> C["setgroups, setgid, setuid"]
+    C --> D["capset to the allow-list"]
+    D --> E["raise ambient caps"]
+    E --> F["PR_SET_NO_NEW_PRIVS"]
+    F --> G["verify against the kernel"]
+    G --> H["execve the component"]
+```
+
 
 Each step is where it is for a reason:
 

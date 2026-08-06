@@ -4,25 +4,21 @@ weight = 32
 description = "The state machine and the layered, parallel start."
 +++
 
-# Supervisor
-
 The supervisor owns *ordering* and *readiness*. It knows nothing about processes,
 containers, artifacts or signatures — it calls hooks.
 
 ## The component state machine
 
 ```mermaid
-stateDiagram-v2
-    [*] --> none
-    none --> installing: Install()
-    installing --> stopped: install hook ok
-    installing --> failed: install hook failed
-    stopped --> starting: Start()
-    starting --> running: ready signal
-    starting --> failed: start error / readiness timeout
-    running --> stopping: Stop()
-    stopping --> stopped: stop hook ok
-    running --> [*]
+flowchart TB
+    A["none"] --> B["installing"]
+    B -- "hook ok" --> C["stopped"]
+    B -- "hook failed" --> F["failed"]
+    C --> D["starting"]
+    D -- "ready signal" --> E["running"]
+    D -- "error or timeout" --> F
+    E --> G["stopping"]
+    G --> C
 ```
 
 `Install` is a no-op unless the component is `none` or `stopped`, and `Start` is a
@@ -38,7 +34,22 @@ layers := graph.TopoLayers()      // error if there is a cycle
 ```
 
 Each layer is started with one goroutine per component, then the supervisor waits
-for the whole layer before moving on. Within a layer, install and start run
+for the whole layer before moving on.
+
+```mermaid
+sequenceDiagram
+    participant SU as Supervisor
+    participant A as db
+    participant B as api
+
+    SU->>A: install, then start
+    A-->>SU: ready
+    Note over SU: layer 0 complete
+    SU->>B: install, then start
+    B-->>SU: ready
+    Note over SU: all components running
+```
+ Within a layer, install and start run
 concurrently; the install phase gets a bounded timeout
 (`KEYSTONE_INSTALL_TIMEOUT`, default 2 m) while the start phase does not — the
 runner owns that.

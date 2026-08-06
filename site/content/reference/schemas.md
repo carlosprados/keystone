@@ -4,8 +4,6 @@ weight = 74
 description = "Every field, its type and its default, in one place."
 +++
 
-# Recipe and plan schema
-
 Both are TOML, and both are validated against a schema on load — invalid input is
 rejected, not best-effort parsed.
 

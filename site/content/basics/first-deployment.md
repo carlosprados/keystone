@@ -4,8 +4,6 @@ weight = 14
 description = "A two-component stack on your own machine, start to finish."
 +++
 
-# Your first deployment
-
 Ten minutes, no devices, no containers. We will deploy two toy components with a
 dependency between them, watch them run, kill one, and watch Keystone put it back.
 

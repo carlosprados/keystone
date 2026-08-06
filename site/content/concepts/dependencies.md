@@ -4,8 +4,6 @@ weight = 23
 description = "Start order, restart cascades, and the three dependency types."
 +++
 
-# Dependencies
-
 Dependencies do two separate jobs, and Keystone lets you pick them independently:
 
 1. **Ordering** — who starts before whom.
@@ -52,18 +50,13 @@ The graph is turned into **layers**. Everything in a layer starts in parallel;
 the next layer waits for the previous one to be ready.
 
 ```mermaid
-flowchart LR
-    subgraph L0["layer 0"]
-        DB["database"]
-        BR["broker"]
-    end
-    subgraph L1["layer 1"]
-        API["api"]
-        ING["ingest"]
-    end
-    subgraph L2["layer 2"]
-        UI["dashboard"]
-    end
+flowchart TB
+    DB["database"]
+    BR["broker"]
+    API["api"]
+    ING["ingest"]
+    UI["dashboard"]
+
     DB --> API
     DB --> ING
     BR --> ING
@@ -96,6 +89,22 @@ restarts `database`, then `api` and `ingest`, then `dashboard` — in dependency
 order. Change `dashboard`'s dependency to `ordering` and it is left running.
 
 To see what a restart would touch without doing it:
+
+```mermaid
+sequenceDiagram
+    participant AG as Agent
+    participant DB as database
+    participant API as api
+
+    AG->>API: stop (dependent first)
+    AG->>DB: stop
+    AG->>DB: start
+    AG->>API: start
+```
+
+A `hard` edge means the dependent is stopped **before** and started **after** its
+dependency. An `ordering` edge would leave `api` alone entirely.
+
 
 ```bash
 curl -s -X POST "http://127.0.0.1:8080/v1/components/database:restart?dry=true" | jq

@@ -3,8 +3,6 @@ title = "Control planes"
 weight = 50
 +++
 
-# Control planes
-
 Three ways to drive the same agent. They are **adapters** over one shared
 `CommandHandler`, so any of them can do anything the others can — no feature drifts
 between transports.

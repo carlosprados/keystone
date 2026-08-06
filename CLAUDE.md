@@ -101,6 +101,34 @@ The HTTP adapter exposes: `/healthz`, `/metrics`, `/v1/components`, `/v1/plan/st
 
 All agent flags are discoverable via `./keystone --help`. Environment variables are documented in `README.md` (section "Environment Variables"). The agent loads `.env` from the working directory.
 
+## Documentation is part of every change
+
+**Doctrine, not a suggestion: no change ships without a documentation review.**
+
+Before opening a PR, check each of these and state in the PR body which ones you
+touched and which you deliberately did not:
+
+| If you changed | Review |
+|---|---|
+| An HTTP route, or any type a handler encodes | `internal/adapter/http/routes.go` is the single source of truth; run `task openapi` and commit the regenerated `site/content/reference/api/openapi.yaml`. CI fails if it drifts |
+| A recipe or plan field | `site/content/concepts/recipes.md`, `site/content/reference/schemas.md`, and the examples that use it |
+| Component state, reuse or supervision behaviour | `site/content/concepts/component-state.md` and `reconcile-and-reuse.md` — those pages are a contract, not a description |
+| A flag or environment variable | `site/content/reference/cli.md` and `env.md`, plus the README |
+| Security posture, defaults, or confinement | `docs/security.md` **and** `site/content/security/` |
+| An adapter's topics, subjects or payloads | `site/content/control-planes/` and the matching example page |
+| Anything a user would follow step by step | The examples chapter — the walkthroughs must still work verbatim |
+
+Rules that follow from this:
+
+- **A behaviour change with no documentation change is suspect.** Either the
+  behaviour was undocumented (fix that) or the docs are now wrong.
+- **Prefer generated over written.** The OpenAPI document and the CLI reference are
+  derived from the code. When you can generate a fact, generate it.
+- **Verify the claim, do not repeat it.** Several pages have been wrong because a
+  response shape or a subcommand was assumed. Read the struct, run the command.
+- **Say what is not covered.** A limitation written down is a known gap; an
+  undocumented one is a surprise in production.
+
 ## Key Documentation
 
 - `README.md` — Features, quick start, all CLI flags, environment variables

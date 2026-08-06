@@ -4,8 +4,6 @@ weight = 25
 description = "Why re-applying a plan does not restart your stack."
 +++
 
-# Reconcile and reuse
-
 Applying a plan is a **reconcile**, not a restart. Keystone compares what you want
 with what is running and touches as little as possible.
 
@@ -30,6 +28,18 @@ Every component in the new plan lands in exactly one bucket:
 
 The reconcile decision appears in the log on every apply:
 
+```mermaid
+flowchart TB
+    C["component in the new plan"] --> A{"was it in<br/>the old plan?"}
+    A -- "no" --> START["start"]
+    A -- "yes" --> B{"recipe identity or<br/>digest changed?"}
+    B -- "yes" --> RESTART["stop, then start"]
+    B -- "no" --> C2{"reusable?"}
+    C2 -- "yes" --> KEEP["no_touch"]
+    C2 -- "no" --> RESTART
+```
+
+
 ```
 [agent] reconcile stop_order=[legacy-agent] start_order=[api] no_touch=[database broker]
 ```
@@ -51,6 +61,19 @@ Restarts then cascade to dependents according to each edge's
 ## Reuse has preconditions
 
 A component is kept running only when **all** of these hold:
+
+```mermaid
+flowchart TB
+    Q1{"reported<br/>running?"} -- "no" --> NO["restart it"]
+    Q1 -- "yes" --> Q2{"supervision<br/>loop alive?"}
+    Q2 -- "no" --> NO
+    Q2 -- "yes" --> Q3{"process alive?"}
+    Q3 -- "no" --> NO
+    Q3 -- "yes" --> Q4{"healthy, if it<br/>declares a check?"}
+    Q4 -- "no" --> NO
+    Q4 -- "yes" --> YES["reuse it"]
+```
+
 
 1. it is reported `running`;
 2. it has a **live supervision loop**;
