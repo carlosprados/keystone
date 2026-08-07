@@ -338,12 +338,13 @@ curl -s -X POST localhost:8080/v1/plan/apply -H 'Content-Type: application/json'
 
 ## Releases
 
-Keystone uses [GoReleaser](https://goreleaser.com/) for automated builds and releases. To trigger a new release:
+Keystone uses [GoReleaser](https://goreleaser.com/) for automated builds and releases. To cut a new release:
 
-1. Tag the commit: `git tag -a v0.1.0 -m "Release v0.1.0"`
-2. Push the tag: `git push origin v0.1.0`
+1. Bump `params.version` in `site/hugo.toml` to the version being cut, and merge that to `main`. The docs site publishes on that merge, so its footer names the new release; the tag itself cannot republish the site (see the header of `.github/workflows/pages.yml`).
+2. Tag the merge commit: `git tag -a v0.1.0 -m "Release v0.1.0"`
+3. Push the tag: `git push origin v0.1.0`
 
-The GitHub Action will automatically build the binaries for multiple architectures (`amd64`, `arm64`, `armv7`) and create a GitHub Release with the artifacts.
+The GitHub Action will automatically build the binaries for multiple architectures (`amd64`, `arm64`, `armv7`) and create a GitHub Release with the artifacts. It refuses to build if step 1 was skipped: the tag name and `params.version` must agree.
 
 ## Configuration
 

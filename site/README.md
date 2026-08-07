@@ -20,16 +20,21 @@ each page's `weight`, and chapter landing pages list their children with the
 
 ## Publishing
 
-Pushes to `main` build and deploy, as do release tags. Pull requests build without
-deploying. The workflow can also be run manually (**Actions → docs → Run workflow**)
-to publish out of band.
+Pushes to `main` build and deploy. Pull requests build without deploying. The workflow
+can also be run manually (**Actions → docs → Run workflow**) to publish out of band.
 
-The sidebar footer names **the last release that was cut** — `git describe --tags
---abbrev=0`, not the commit being built — so it keeps naming that release while
-`main` moves ahead of the tag. Republishing a commit that has already been published, which is
-exactly what a release tag does, needs a per-run `pages_build_version` and a tag
-policy on the `github-pages` environment; both are set up and explained in the header
-comment of `.github/workflows/pages.yml`. Read that before changing the deploy job.
+**Tags do not publish, on purpose.** Pages keys a deployment by the commit, and a
+release tag points at a commit `main` has already published, so a tag build deploys a
+version Pages already has and it is discarded — silently, with a green check. The header
+comment of `.github/workflows/pages.yml` has the full finding; read it before adding a
+trigger back.
+
+So the version in the footer is **committed**, in `params.version` in `hugo.toml`:
+
+1. The release PR bumps it to the version about to be cut.
+2. Merging that PR is a new commit, so the deploy that lands the bump publishes it.
+3. Then tag that commit. `release.yml` fails the release if the tag name and
+   `params.version` disagree, so forgetting the bump is loud rather than silent.
 
 Checks are **local**, not CI. The workflow only runs Hugo — Relearn renders mermaid in
 the browser, so nothing on the server side needs one.

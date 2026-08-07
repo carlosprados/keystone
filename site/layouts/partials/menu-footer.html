@@ -1,7 +1,7 @@
 {{- /*
   Sidebar footer. Overrides the theme's "Built with Hugo" line to state which
-  version of Keystone the docs describe — set by HUGO_PARAMS_VERSION in CI (the
-  tag on a release build, git describe otherwise).
+  version of Keystone the docs describe. That comes from params.version in
+  hugo.toml, bumped in the release PR and checked against the tag by release.yml.
 
   Note for future edits: this is the correct hook for site-wide chrome.
   custom-footer.html is injected at the end of <body> for scripts, so visible

@@ -16,34 +16,33 @@ name: docs
 #                       maintaining a path filter that silently skips a needed
 #                       rebuild (a change to a Go response type regenerates the
 #                       OpenAPI document, which lives under site/).
-#   - tag v*            cutting a release republishes the docs for that release,
-#                       so the footer names the tag that was just cut. This needs
-#                       two things that are not obvious; see "Republishing" below.
 #   - pull request      builds without deploying, so a broken site is caught
 #                       before it is merged.
-#   - manual dispatch   publish out of band, and to re-serve a bad deployment.
+#   - manual dispatch   publish out of band.
 #
-# Republishing the same commit — two traps, both hit while cutting v0.3.0:
+# There is deliberately NO tag trigger, and the version in the footer is committed
+# in site/hugo.toml rather than derived from git. Both follow from one finding,
+# established while cutting v0.3.0 and worth not rediscovering:
 #
-#   1. The github-pages environment must allow tag refs, or the deploy job is
-#      rejected in about a second with zero steps executed, which is
-#      indistinguishable from an Actions outage. Fixed on the environment:
-#        gh api -X POST \
-#          repos/carlosprados/keystone/environments/github-pages/deployment-branch-policies \
-#          -f name='v*' -f type=tag
+#   Pages keys a deployment by pages_build_version, and actions/deploy-pages sends
+#   GITHUB_SHA for it (src/internal/context.js). A release tag points at a commit
+#   main has already published, so a tag build deploys a version Pages already has
+#   and the deployment is discarded: four of them reported success and none was
+#   ever served. Overriding GITHUB_SHA does not help — the runner applies the
+#   default GITHUB_* variables after workflow-declared env, so the value is listed
+#   in the step's env block and ignored, and the action reads no other source.
 #
-#   2. Pages keys a deployment by pages_build_version, and actions/deploy-pages
-#      sends GITHUB_SHA for it. A release tag points at a commit main has already
-#      published, so the tag build reported success four times and was never
-#      served: the first deployment of a version wins and later ones for the same
-#      version are discarded. The deploy step below overrides GITHUB_SHA with a
-#      per-run value so every deployment is a new version. Consequence: a deploy
-#      is never a no-op now, and the commit shown for a Pages deployment is that
-#      composite string rather than a bare SHA.
+# So the release ritual carries the version instead: the release PR bumps
+# params.version in site/hugo.toml and the merge that lands it is a new commit,
+# which Pages does serve. release.yml then refuses to build a tag whose name
+# disagrees with that value, so forgetting the bump fails the release rather than
+# silently publishing a stale footer.
+#
+# One consequence to know: after a tag is cut nothing republishes, which is fine
+# because the bump was already published by the merge just before it.
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
     paths:
       - 'site/**'
@@ -91,22 +90,10 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
 
-      # The footer must name the last release that was cut, not the commit being
-      # built: `git describe --tags` alone appends a distance and a hash as soon
-      # as anything lands after the tag (main showed v0.2.1-33-ga1bcf26 while
-      # v0.3.0 was the current release), and on a tag build it only reports the
-      # tag because the tag happens to point at HEAD. --abbrev=0 reports the
-      # nearest reachable tag on both, so one code path covers branch and tag.
-      - name: Work out the version being documented
-        id: ver
-        run: |
-          echo "version=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)" >> "$GITHUB_OUTPUT"
-
       - name: Build
         working-directory: site
         env:
           HUGO_ENVIRONMENT: production
-          HUGO_PARAMS_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           # On a PR there is no Pages base URL; the relative one is enough to
           # prove the site builds.
@@ -126,10 +113,5 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      # GITHUB_SHA is what deploy-pages sends as pages_build_version. Making it
-      # unique per run is what lets a release tag republish a commit main has
-      # already published — see "Republishing" at the top of this file.
       - id: deployment
         uses: actions/deploy-pages@v4
-        env:
-          GITHUB_SHA: ${{ github.sha }}-${{ github.run_id }}

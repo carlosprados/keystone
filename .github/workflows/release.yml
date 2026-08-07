@@ -19,6 +19,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # The docs footer names the release from a committed value, because a tag
+      # cannot republish the site — see the header of pages.yml. That value is
+      # only true if the release PR bumped it, so fail the release here rather
+      # than ship binaries alongside a site that names the previous version.
+      # A pre-release tag (v0.4.0-rc1) is exempt: the site describes released
+      # behaviour, so it stays on the last stable version through an rc.
+      - name: Check the docs version matches the tag
+        run: |
+          want="${GITHUB_REF_NAME}"
+          case "$want" in
+            *-*) echo "pre-release $want: docs version not checked"; exit 0 ;;
+          esac
+          got="$(sed -n 's/^[[:space:]]*version = "\(.*\)"$/\1/p' site/hugo.toml)"
+          if [ "$want" != "$got" ]; then
+            echo "::error file=site/hugo.toml::params.version is \"$got\" but the tag is \"$want\". Bump it on main and re-tag."
+            exit 1
+          fi
+          echo "docs version $got matches the tag"
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
