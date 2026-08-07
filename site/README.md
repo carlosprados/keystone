@@ -24,6 +24,13 @@ Pushes to `main` build and deploy, as do release tags. Pull requests build witho
 deploying. The workflow can also be run manually (**Actions → docs → Run workflow**)
 to publish out of band.
 
+The sidebar footer names **the last release that was cut** — `git describe --tags
+--abbrev=0`, not the commit being built — so it keeps naming that release while
+`main` moves ahead of the tag. Republishing a commit that has already been published, which is
+exactly what a release tag does, needs a per-run `pages_build_version` and a tag
+policy on the `github-pages` environment; both are set up and explained in the header
+comment of `.github/workflows/pages.yml`. Read that before changing the deploy job.
+
 Checks are **local**, not CI. The workflow only runs Hugo — Relearn renders mermaid in
 the browser, so nothing on the server side needs one.
 
