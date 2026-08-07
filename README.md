@@ -338,13 +338,17 @@ curl -s -X POST localhost:8080/v1/plan/apply -H 'Content-Type: application/json'
 
 ## Releases
 
-Keystone uses [GoReleaser](https://goreleaser.com/) for automated builds and releases. To cut a new release:
+Keystone uses [GoReleaser](https://goreleaser.com/) for automated builds and releases. Cutting one is two commands with a review in between:
 
-1. Bump `params.version` in `site/hugo.toml` to the version being cut, and merge that to `main`. The docs site publishes on that merge, so its footer names the new release; the tag itself cannot republish the site (see the header of `.github/workflows/pages.yml`).
-2. Tag the merge commit: `git tag -a v0.1.0 -m "Release v0.1.0"`
-3. Push the tag: `git push origin v0.1.0`
+```bash
+task release:prepare RELEASE=v0.3.1   # bumps the documented version, opens the PR
+# review and merge that PR
+task release:tag RELEASE=v0.3.1       # tags origin/main and pushes the tag
+```
 
-The GitHub Action will automatically build the binaries for multiple architectures (`amd64`, `arm64`, `armv7`) and create a GitHub Release with the artifacts. It refuses to build if step 1 was skipped: the tag name and `params.version` must agree.
+`prepare` bumps `params.version` in `site/hugo.toml` on a branch, checks the built site really shows it in the footer, and opens the pull request. Merging that PR is what publishes the docs for the new version — **the tag cannot**, because GitHub Pages discards a second deployment of a commit it has already published (the header of `.github/workflows/pages.yml` has the details). `tag` then refuses to tag a `main` whose documented version disagrees with the tag name, so the two cannot drift.
+
+Pushing the tag triggers GoReleaser, which builds the binaries for multiple architectures (`amd64`, `arm64`, `armv7`) and creates a GitHub Release with the artifacts. `release.yml` re-checks the version match server-side, so cutting a tag by hand cannot skip the step either. Pre-release tags (`v0.4.0-rc1`) are exempt: the site stays on the last stable version, so tag those directly.
 
 ## Configuration
 

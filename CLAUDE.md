@@ -21,6 +21,10 @@ task fmt            # go fmt ./...
 task vet            # go vet ./...
 task hooks          # Setup git pre-commit hook (go fmt)
 
+# Cut a release: bump the documented version, review, then tag
+task release:prepare RELEASE=v0.3.1   # bumps site/hugo.toml, opens the PR
+task release:tag RELEASE=v0.3.1       # after the merge: tags origin/main
+
 # Single test
 go test -v -run TestName ./internal/package/...
 
@@ -31,7 +35,7 @@ go test -v -run TestName ./internal/package/...
 go run ./cmd/keystone --demo
 ```
 
-Releases via GoReleaser (`.goreleaser.yaml`), triggered by version tags. Builds Linux amd64/arm64/armv7, CGO disabled.
+Releases via GoReleaser (`.goreleaser.yaml`), triggered by version tags. Builds Linux amd64/arm64/armv7, CGO disabled. The documented version in `site/hugo.toml` must be bumped and published **before** the tag exists — a tag cannot republish the docs site, and `release.yml` fails a tag that disagrees with it. Use the two tasks above rather than tagging by hand.
 
 ## Architecture
 
@@ -141,3 +145,4 @@ Rules that follow from this:
 - `configs/examples/` — Example plans and recipes
 - `configs/trust/README.md` — CA setup and recipe/artifact signing walkthrough
 - `scripts/dev-sign.sh` — Dev helper: generate a throwaway CA and sign recipes/artifacts
+- `scripts/release.sh` — Release helper behind `task release:prepare` / `task release:tag`; why the order matters is in its header

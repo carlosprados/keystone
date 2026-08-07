@@ -36,6 +36,10 @@ So the version in the footer is **committed**, in `params.version` in `hugo.toml
 3. Then tag that commit. `release.yml` fails the release if the tag name and
    `params.version` disagree, so forgetting the bump is loud rather than silent.
 
+Do not do that by hand — `task release:prepare RELEASE=v0.3.1` bumps it, verifies the
+built footer shows it and opens the PR; `task release:tag RELEASE=v0.3.1` tags `main`
+after the merge. See "Releases" in the top-level README.
+
 Checks are **local**, not CI. The workflow only runs Hugo — Relearn renders mermaid in
 the browser, so nothing on the server side needs one.
 

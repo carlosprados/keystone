@@ -122,6 +122,28 @@ tasks:
         fi
         go run ./cmd/keystone --apply {{.PLAN}} --dry-run --http 127.0.0.1:0 --insecure-skip-verify
 
+  # RELEASE, not VERSION: VERSION is a global var above, so an omitted argument
+  # would silently resolve to git describe and prepare the wrong release.
+  release:prepare:
+    desc: "Bump the documented version and open the release PR (usage: task release:prepare RELEASE=v0.3.1)"
+    cmds:
+      - |
+        if [ -z "{{.RELEASE}}" ]; then
+          echo "Usage: task release:prepare RELEASE=v0.3.1"
+          exit 1
+        fi
+        ./scripts/release.sh prepare {{.RELEASE}}
+
+  release:tag:
+    desc: "Tag origin/main once the release PR is merged (usage: task release:tag RELEASE=v0.3.1)"
+    cmds:
+      - |
+        if [ -z "{{.RELEASE}}" ]; then
+          echo "Usage: task release:tag RELEASE=v0.3.1"
+          exit 1
+        fi
+        ./scripts/release.sh tag {{.RELEASE}}
+
   hooks:
     desc: Setup git hooks
     cmds:
