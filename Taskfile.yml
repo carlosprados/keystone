@@ -92,10 +92,14 @@ tasks:
       - hugo server
 
   docs:check:
-    desc: Build the docs and run the layout and diagram checks
+    desc: Build the docs and run the fast layout checks
     cmds:
       - cd site && hugo --gc --minify
       - python3 site/scripts/check-layout.py
+
+  docs:check:diagrams:
+    desc: Check diagram legibility (drives a headless Chromium, ~40s)
+    cmds:
       - python3 site/scripts/check-diagrams.py
 
   test:
