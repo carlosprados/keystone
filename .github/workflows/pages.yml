@@ -17,7 +17,18 @@ name: docs
 #                       maintaining a path filter that silently skips a needed
 #                       rebuild (a change to a Go response type regenerates the
 #                       OpenAPI document, which lives under site/).
-#   - tag v*            cutting a release republishes the docs for that release.
+#   - tag v*            cutting a release republishes the docs for that release,
+#                       so the footer states the version being documented.
+#                       NOTE: this needs a deployment policy on the github-pages
+#                       environment allowing the tag pattern. The environment
+#                       defaults to the default branch only, and a tag ref is not
+#                       a branch — the deploy job is then rejected in about a
+#                       second with no steps run, which reads like an outage
+#                       rather than a permissions problem. Policies live in
+#                       Settings → Environments → github-pages, or:
+#                         gh api -X POST repos/OWNER/REPO/environments/\
+#                           github-pages/deployment-branch-policies \
+#                           -f name='v*' -f type=tag
 #   - pull request      builds without deploying, so a broken site is caught
 #                       before it is merged.
 #   - manual dispatch   publish out of band.
