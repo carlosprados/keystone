@@ -12,15 +12,34 @@ name: docs
 #
 # Triggers, and why:
 #   - push to main      every merge, so the published docs never lag the branch
-#                       they describe. The build is ~40s and deploying an
-#                       unchanged site is a no-op, which is cheaper than
+#                       they describe. The build is ~40s, which is cheaper than
 #                       maintaining a path filter that silently skips a needed
 #                       rebuild (a change to a Go response type regenerates the
 #                       OpenAPI document, which lives under site/).
-#   - tag v*            cutting a release republishes the docs for that release.
+#   - tag v*            cutting a release republishes the docs for that release,
+#                       so the footer names the tag that was just cut. This needs
+#                       two things that are not obvious; see "Republishing" below.
 #   - pull request      builds without deploying, so a broken site is caught
 #                       before it is merged.
-#   - manual dispatch   publish out of band.
+#   - manual dispatch   publish out of band, and to re-serve a bad deployment.
+#
+# Republishing the same commit — two traps, both hit while cutting v0.3.0:
+#
+#   1. The github-pages environment must allow tag refs, or the deploy job is
+#      rejected in about a second with zero steps executed, which is
+#      indistinguishable from an Actions outage. Fixed on the environment:
+#        gh api -X POST \
+#          repos/carlosprados/keystone/environments/github-pages/deployment-branch-policies \
+#          -f name='v*' -f type=tag
+#
+#   2. Pages keys a deployment by pages_build_version, and actions/deploy-pages
+#      sends GITHUB_SHA for it. A release tag points at a commit main has already
+#      published, so the tag build reported success four times and was never
+#      served: the first deployment of a version wins and later ones for the same
+#      version are discarded. The deploy step below overrides GITHUB_SHA with a
+#      per-run value so every deployment is a new version. Consequence: a deploy
+#      is never a no-op now, and the commit shown for a Pages deployment is that
+#      composite string rather than a bare SHA.
 on:
   push:
     branches: [main]
@@ -72,14 +91,16 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
 
+      # The footer must name the last release that was cut, not the commit being
+      # built: `git describe --tags` alone appends a distance and a hash as soon
+      # as anything lands after the tag (main showed v0.2.1-33-ga1bcf26 while
+      # v0.3.0 was the current release), and on a tag build it only reports the
+      # tag because the tag happens to point at HEAD. --abbrev=0 reports the
+      # nearest reachable tag on both, so one code path covers branch and tag.
       - name: Work out the version being documented
         id: ver
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
-          fi
+          echo "version=$(git describe --tags --abbrev=0 2>/dev/null || echo dev)" >> "$GITHUB_OUTPUT"
 
       - name: Build
         working-directory: site
@@ -105,5 +126,10 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # GITHUB_SHA is what deploy-pages sends as pages_build_version. Making it
+      # unique per run is what lets a release tag republish a commit main has
+      # already published — see "Republishing" at the top of this file.
       - id: deployment
         uses: actions/deploy-pages@v4
+        env:
+          GITHUB_SHA: ${{ github.sha }}-${{ github.run_id }}
