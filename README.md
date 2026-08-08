@@ -349,6 +349,8 @@ task release:tag RELEASE=v0.3.1       # tags origin/main and pushes the tag
 
 `prepare` bumps `params.version` in `site/hugo.toml` on a branch, checks the built site really shows it in the footer, and opens the pull request. Merging that PR is what publishes the docs for the new version — **the tag cannot**, because GitHub Pages discards a second deployment of a commit it has already published (the header of `.github/workflows/pages.yml` has the details). `tag` then refuses to tag a `main` whose documented version disagrees with the tag name, so the two cannot drift.
 
+`tag` waits for that documentation deployment to finish before tagging, and **stops if it failed**: releasing binaries beside a site that still names the previous version is not fixable afterwards, because the repository rules forbid moving or deleting a `v*` tag. A deployment that is merely slow or has not started yet is not treated as a failure — it warns and proceeds. Override with `SKIP_DOCS_WAIT=1`, or adjust `DOCS_APPEAR_TIMEOUT` (180 s) and `DOCS_FINISH_TIMEOUT` (600 s).
+
 Pushing the tag triggers GoReleaser, which builds the binaries for multiple architectures (`amd64`, `arm64`, `armv7`) and creates a GitHub Release with the artifacts. `release.yml` re-checks the version match server-side, so cutting a tag by hand cannot skip the step either. Pre-release tags (`v0.4.0-rc1`) are exempt: the site stays on the last stable version, so tag those directly.
 
 ## Configuration

@@ -112,6 +112,88 @@ task release:tag RELEASE=$version
 	echo "Prepared. Merge that PR, then: task release:tag RELEASE=$version"
 }
 
+# How long to wait for the docs deployment of the commit about to be tagged.
+# The build takes ~40 s; the rest of the budget absorbs a queued runner.
+DOCS_APPEAR_TIMEOUT=${DOCS_APPEAR_TIMEOUT:-180}
+DOCS_FINISH_TIMEOUT=${DOCS_FINISH_TIMEOUT:-600}
+
+# wait_for_docs blocks until the documentation site has been published for the
+# commit being tagged.
+#
+# Why block rather than report: the point of bumping the version in a commit of
+# its own is that the site names the release before the release exists. Tagging
+# while that deployment is still in flight is usually harmless, but a tag cannot
+# be moved or deleted — the repository rules forbid it — so a *failed* docs
+# deployment is worth stopping for. You would otherwise publish binaries beside
+# a site still naming the previous version, and the only way back is to cut
+# another version.
+#
+# A run that never appears or never finishes is not treated as failure: a slow
+# or queued runner is not a reason to hold a release. That case warns and
+# continues. Set SKIP_DOCS_WAIT=1 to skip the wait entirely.
+wait_for_docs() {
+	local target="$1" version="$2" short="${1:0:7}"
+
+	if [ -n "${SKIP_DOCS_WAIT:-}" ]; then
+		echo "==> SKIP_DOCS_WAIT set; not waiting for the docs deployment"
+		return 0
+	fi
+	if ! command -v gh >/dev/null; then
+		echo "==> gh not on PATH; cannot check the docs deployment for $short"
+		return 0
+	fi
+
+	# The run is created a moment after the push, so first wait for it to exist.
+	local waited=0 status="" conclusion="" line
+	echo "==> waiting for the docs deployment of $short"
+	while :; do
+		line="$(docs_run_state "$target")"
+		status="${line%% *}"
+		conclusion="${line#* }"
+		[ -n "$status" ] && break
+		if [ "$waited" -ge "$DOCS_APPEAR_TIMEOUT" ]; then
+			echo "==> warning: no docs run for $short after ${DOCS_APPEAR_TIMEOUT}s; tagging anyway"
+			return 0
+		fi
+		sleep 5
+		waited=$((waited + 5))
+	done
+
+	waited=0
+	while [ "$status" != "completed" ]; do
+		if [ "$waited" -ge "$DOCS_FINISH_TIMEOUT" ]; then
+			echo "==> warning: the docs deployment of $short is still $status after ${DOCS_FINISH_TIMEOUT}s; tagging anyway"
+			return 0
+		fi
+		sleep 10
+		waited=$((waited + 10))
+		line="$(docs_run_state "$target")"
+		status="${line%% *}"
+		conclusion="${line#* }"
+	done
+
+	case "$conclusion" in
+	success)
+		echo "==> docs published for $short"
+		;;
+	*)
+		die "the docs deployment of $short finished as \"$conclusion\", so the site does not name $version.
+       Fix the deployment and re-run, or re-run with SKIP_DOCS_WAIT=1 to tag anyway.
+       Note the tag cannot be moved afterwards: correcting this later costs a new version."
+		;;
+	esac
+}
+
+# docs_run_state echoes "<status> <conclusion>" for the pages run of a commit,
+# or nothing when no run exists yet. A failure to reach the API is reported as
+# no run rather than as an error, so a network blip retries instead of aborting.
+docs_run_state() {
+	gh run list --workflow pages.yml --branch main --limit 20 \
+		--json headSha,status,conclusion \
+		--jq "[.[] | select(.headSha==\"$1\")] | first | select(. != null) | \"\(.status) \(.conclusion // \"-\")\"" \
+		2>/dev/null || true
+}
+
 cmd_tag() {
 	local version="${1:-}"
 	require_version_arg "$version" tag
@@ -134,17 +216,7 @@ cmd_tag() {
 			die "origin/main documents \"$documented\", not \"$version\". Run: task release:prepare RELEASE=$version"
 	fi
 
-	# Informational: the site should already carry the bump, published by the merge.
-	if command -v gh >/dev/null; then
-		local docs
-		docs="$(gh run list --workflow pages.yml --branch main --limit 1 \
-			--json headSha,conclusion --jq ".[] | select(.headSha==\"$target\") | .conclusion" 2>/dev/null || true)"
-		case "$docs" in
-		success) echo "==> docs already published for ${target:0:7}" ;;
-		"") echo "==> note: no docs run found for ${target:0:7} yet" ;;
-		*) echo "==> warning: the docs run for ${target:0:7} is \"$docs\"; the site may not name $version" ;;
-		esac
-	fi
+	wait_for_docs "$target" "$version"
 
 	echo "==> tagging ${target:0:7} as $version"
 	git tag -a "$version" "$target" -m "Release $version"
