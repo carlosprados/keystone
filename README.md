@@ -16,6 +16,7 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 - **Solid**: atomic deployments, checkpoints, rollback, exponential backoff
 - **Secure by default**: loopback API with bearer-token auth, mandatory recipe & artifact signatures (ECDSA/RSA), fail-closed verification — see [docs/security.md](docs/security.md)
 - **Portable**: Linux x86/ARM, single binary, no mandatory Docker/CRI
+- **Frugal on the link**: downloads resume, and an artifact can opt into being *patched* instead of re-downloaded — 13.4 MB becomes 1.0 MB between two adjacent releases, with a full-download fallback whenever patching is not possible
 - **Connected**: HTTP REST, NATS (+ JetStream), MQTT adapters
 - **Operable**: structured logs, Prometheus metrics, health endpoints, persistence
 
@@ -201,7 +202,7 @@ See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 | **ProcessRunner** | Process management, log streaming, health probes (HTTP/TCP/cmd), restart policies, exponential backoff |
 | **ContainerRunner** | containerd client, CLI fallback (docker/nerdctl/podman), image pull, mounts, ports, resource limits |
 | **Deployment Engine** | TOML plans and recipes, environment variable substitution, dry-run mode |
-| **Artifact Manager** | Secure download with resume, SHA-256 verification, detached signatures, GC, cache limits |
+| **Artifact Manager** | Secure download with resume, SHA-256 verification, detached signatures, GC, cache limits, optional delta (patch) updates |
 | **Security** | Trust bundles (PEM), ECDSA/RSA signature verification, mTLS support |
 | **Observability** | Prometheus metrics, structured logging, health endpoints, per-process metrics |
 | **Persistence** | Automatic state snapshotting, recovery on restart, atomic writes |
@@ -377,6 +378,7 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_MAX_REQUEST_BYTES`          | Max HTTP request body size in bytes (default: 4 MiB).                  |
 | `KEYSTONE_MAX_EXTRACT_BYTES`          | Max total uncompressed size per archive extraction (default: 2 GiB).   |
 | `KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES` | Max size of `runtime/artifacts` (default: 2GiB).                       |
+| `KEYSTONE_DELTA_MAX_BASE_BYTES`       | Largest artifact the delta path will attempt (default: 256 MiB; 0 = no limit). |
 | `KEYSTONE_ARTIFACT_DOWNLOAD_TIMEOUT`  | Artifact download timeout (default: 30m). Supports "5m", "1h", etc.    |
 | `KEYSTONE_TRUST_BUNDLE`               | Path to CA trust bundle (PEM) for signature verification.              |
 | `KEYSTONE_LEAF_CERT`                  | Default certificate (PEM) for signature verification if not in recipe. |

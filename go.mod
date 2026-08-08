@@ -1,14 +1,17 @@
 module github.com/carlosprados/keystone
 
-go 1.25.0
+go 1.25.6
 
 toolchain go1.25.11
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
+	github.com/carlosprados/ota-updater v0.4.1
 	github.com/containerd/containerd/v2 v2.2.1
 	github.com/containerd/go-cni v1.1.13
 	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/gabstv/go-bsdiff v1.0.5
+	github.com/klauspost/compress v1.18.5
 	github.com/nats-io/nats.go v1.48.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.3.0
@@ -17,6 +20,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/shirou/gopsutil/v4 v4.25.8
 	github.com/stretchr/testify v1.11.1
+	github.com/swaggest/openapi-go v0.2.61
 	golang.org/x/sys v0.43.0
 )
 
@@ -41,6 +45,7 @@ require (
 	github.com/cyphar/filepath-securejoin v0.5.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
+	github.com/dsnet/compress v0.0.0-20171208185109-cc9eb1d7ad76 // indirect
 	github.com/ebitengine/purego v0.8.4 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -50,7 +55,6 @@ require (
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
-	github.com/klauspost/compress v1.18.1 // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/moby/locker v1.0.1 // indirect
 	github.com/moby/sys/mountinfo v0.7.2 // indirect
@@ -74,7 +78,6 @@ require (
 	github.com/sasha-s/go-deadlock v0.3.5 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/swaggest/jsonschema-go v0.3.78 // indirect
-	github.com/swaggest/openapi-go v0.2.61 // indirect
 	github.com/swaggest/refl v1.4.0 // indirect
 	github.com/tklauser/go-sysconf v0.3.15 // indirect
 	github.com/tklauser/numcpus v0.10.0 // indirect

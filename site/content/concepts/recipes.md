@@ -63,6 +63,41 @@ Downloads resume, retry with backoff, and are cached under
 mandatory** unless the agent runs with `--insecure-skip-verify`. Details in
 [Artifacts](../../internals/artifacts/).
 
+### Patching instead of downloading
+
+On a slow or metered link, an artifact can be updated by patching the version the
+device already has:
+
+```toml
+[[artifacts]]
+uri = "https://downloads.acme.com/api-1.4.0.tar.gz"   # unchanged, still the fallback
+sha256 = "9f2c8b1e…"
+unpack = true
+
+[artifacts.delta]
+server = "https://ota.acme.com"   # a delta server
+sha256 = "4a71d0c3…"              # digest of the archive, uncompressed, after patching
+```
+
+Between two adjacent Keystone releases that turns a 13.4 MB download into 1.0 MB.
+The saving is not fixed — a release that changes the Go toolchain is nearer 6 MB.
+
+The block is optional and additive:
+
+- **Nothing else changes.** The publisher keeps publishing the same `.tar.gz`; the
+  patch is computed over its uncompressed form, which only exists on the device.
+- **It always falls back.** First install, no patch on the server, a patch that
+  does not apply, a digest that does not match — all of them download the whole
+  artifact instead of failing the apply.
+- **It is safe to roll out gradually.** An agent older than this field ignores it
+  and downloads normally, so a recipe carrying a delta block can go to a fleet of
+  mixed agent versions without coordinating an upgrade.
+
+The `sha256` inside the block is what the patched result is checked against, and it
+is trusted because the recipe itself is signed. How that changes who attests to the
+bytes, and the current limits, are in
+[Artifacts](../../internals/artifacts/#delta-downloads).
+
 ## Lifecycle: install
 
 ```toml

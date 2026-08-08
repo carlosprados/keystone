@@ -236,6 +236,9 @@ func Unpack(archivePath, targetDir string) error {
 	if strings.HasSuffix(archivePath, ".zip") {
 		return unzip(archivePath, targetDir)
 	}
+	if strings.HasSuffix(archivePath, ".tar") {
+		return untar(archivePath, targetDir)
+	}
 	// Fallback: detect by magic header (GitHub artifacts may download as '.../zip')
 	if isZipFile(archivePath) {
 		return unzip(archivePath, targetDir)
@@ -275,9 +278,6 @@ func isGzipFile(path string) bool {
 }
 
 func untarGz(archivePath, targetDir string) error {
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return err
-	}
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return err
@@ -288,7 +288,30 @@ func untarGz(archivePath, targetDir string) error {
 		return err
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	return untarStream(gz, targetDir)
+}
+
+// untar extracts an uncompressed tar. Keystone does not ask anyone to publish
+// artifacts in this form: it is the shape a patched artifact has after the
+// delta path reconstructs it, since the patch transforms the uncompressed tar.
+func untar(archivePath, targetDir string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return untarStream(f, targetDir)
+}
+
+// untarStream holds the extraction loop for both callers. It is deliberately
+// the single copy: zip-slip containment, setuid/world-write stripping and the
+// decompression-bomb budget all live here, and a second implementation would
+// be a second place for them to be forgotten.
+func untarStream(r io.Reader, targetDir string) error {
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+	tr := tar.NewReader(r)
 	budget := maxExtractBytes()
 	for {
 		hdr, err := tr.Next()

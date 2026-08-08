@@ -71,7 +71,16 @@ const recipeSchema = `{
         "properties":{
           "uri":{"type":"string"},
           "sha256":{"type":"string"},
-          "unpack":{"type":"boolean"}
+          "unpack":{"type":"boolean"},
+          "delta":{
+            "type":"object",
+            "required":["server","sha256"],
+            "properties":{
+              "server":{"type":"string"},
+              "sha256":{"type":"string"},
+              "format":{"type":"string"}
+            }
+          }
         }
       }
     },

@@ -859,6 +859,10 @@ func (a *Agent) ensureAndVerifyArtifact(artDir, workDir string, adef recipe.Arti
 		}
 	}
 
+	if a.tryDeltaArtifact(artDir, workDir, adef) {
+		return nil
+	}
+
 	path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
 	if err != nil {
 		return err
@@ -899,6 +903,66 @@ func (a *Agent) ensureAndVerifyArtifact(artDir, workDir string, adef recipe.Arti
 		return nil
 	}
 	return stageArtifactToWorkDir(path, workDir)
+}
+
+// tryDeltaArtifact attempts to reconstruct an artifact by patching a version
+// already on this device, and reports whether it succeeded. False means
+// "carry on with the normal download" — it is never a failure the caller
+// should propagate, because every reason to give up here is a reason the whole
+// artifact is fetched instead.
+//
+// What verifies the result: the sha256 the recipe declares for the patched
+// archive. That digest is trustworthy because the recipe itself is
+// signature-verified against the trust bundle before any of it is acted on
+// (see verifyRecipeFileSignature), so no second signature has to be published
+// and no new signing machinery is involved.
+//
+// The distinction worth being explicit about: on the full-download path the
+// artifact's own detached signature proves the *publisher* signed those bytes.
+// On this path the attestation comes from whoever signed the recipe. Where the
+// same trust bundle covers both, the assurance is equivalent. Where a
+// deployment deliberately relies on a separate artifact-publisher key, opting
+// an artifact into deltas moves that trust — which is why it is opt-in, per
+// artifact, and off unless a recipe asks for it.
+func (a *Agent) tryDeltaArtifact(artDir, workDir string, adef recipe.Artifact) bool {
+	if adef.Delta == nil {
+		return false
+	}
+	// The patch reconstructs an uncompressed tar, so there has to be
+	// something to unpack. A single-file artifact staged verbatim is not
+	// covered yet.
+	if !adef.Unpack {
+		log.Printf("[artifact] delta skipped for %s: only unpacked archives are supported", adef.URI)
+		return false
+	}
+
+	cfg := artifact.DefaultDownloadConfig()
+	cfg.HTTPOptions = artifact.HTTPOptions{Headers: adef.Headers, GithubToken: adef.GithubToken}
+	if a.artifactDownloadTimeout > 0 {
+		cfg.OverallTimeout = a.artifactDownloadTimeout
+	}
+
+	tarPath, err := artifact.FetchViaDelta(context.Background(), artDir,
+		adef.Delta.Server, adef.Delta.SHA256, adef.Delta.Format, cfg)
+	if err != nil {
+		// Deliberately Printf and not an error return: a first install has no
+		// base, a server may hold no patch from this base, and a release may
+		// change too much for a patch to be worth serving. All are ordinary.
+		log.Printf("[artifact] delta unavailable for %s (%v); downloading the whole artifact", adef.URI, err)
+		return false
+	}
+
+	marker := filepath.Join(workDir, ".unpacked-"+filepath.Base(tarPath))
+	if _, err := os.Stat(marker); os.IsNotExist(err) {
+		if err := artifact.Unpack(tarPath, workDir); err != nil {
+			log.Printf("[artifact] unpacking the patched artifact failed (%v); downloading the whole artifact", err)
+			return false
+		}
+		_ = os.MkdirAll(filepath.Dir(marker), 0o755)
+		_ = os.WriteFile(marker, []byte(time.Now().Format(time.RFC3339)), 0o644)
+	}
+	log.Printf("[artifact] %s installed from a delta patch", adef.URI)
+	return true
 }
 
 func stageArtifactToWorkDir(srcPath, workDir string) error {

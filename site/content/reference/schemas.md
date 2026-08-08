@@ -40,6 +40,22 @@ That is the entire plan schema. Everything else is in the recipe.
 | `unpack` | bool | `false` | Extract into the working directory |
 | `github_token` | string | — | Sets `Authorization` for private GitHub assets |
 | `headers` | table | — | Extra HTTP headers for this download |
+| `delta` | table | — | Opt into patching instead of downloading — see below |
+
+### `[artifacts.delta]`
+
+Optional. Absent means the artifact is always downloaded whole, which is what every
+recipe written before this field does.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `server` | string | — | Base URL of a delta server. Required. The patch URL is derived: `{server}/delta/{base sha256}/{sha256}` |
+| `sha256` | string | — | Digest of the **uncompressed** archive after patching. Required — it is what the result is verified against |
+| `format` | string | `bsdiff+zstd` | Patch encoding. An unrecognised value is not an error: the agent logs it and downloads the whole artifact |
+
+Requires `unpack = true`. Every failure falls back to the full download rather than
+failing the apply. See [Artifacts](../../internals/artifacts/#delta-downloads) for
+the trust model, the measured savings and the current limits.
 
 ### `[lifecycle.install]`
 

@@ -26,6 +26,43 @@ type Artifact struct {
 	// Optional GitHub token to set Authorization for github.com/api.github.com downloads
 	// when Authorization is not already provided via Headers.
 	GithubToken string `toml:"github_token"`
+	// Optional delta-download source. Absent means "always fetch the whole
+	// artifact", which is what every recipe written before this field did.
+	Delta *ArtifactDelta `toml:"delta"`
+}
+
+// ArtifactDelta opts one artifact into patch-based updates: instead of
+// downloading the whole archive again, the agent patches the copy it already
+// has. It is always optional and always falls back — see internal/artifact.
+//
+// The patch transforms the *uncompressed* archive, not the compressed one: a
+// single changed byte reshuffles a gzip stream, so a delta over .tar.gz saves
+// nothing (measured: 98% of the full size). Over the uncompressed tar of two
+// adjacent Keystone releases the same patch is 3%.
+//
+// SHA256 is the digest of the uncompressed archive after patching, and it is
+// the trust gate for this path. It is trustworthy for the same reason the rest
+// of the recipe is: a file-loaded recipe carries a detached signature verified
+// against the trust bundle before anything in it is acted on. No new signing
+// machinery is needed, and no second signature has to be published.
+type ArtifactDelta struct {
+	// Server is the base URL of a delta server. The agent derives the patch
+	// URL from the two digests it already knows:
+	//
+	//	{server}/delta/{sha256 of the base archive}/{SHA256}
+	//
+	// so no manifest, handshake or heartbeat is involved. Any server
+	// implementing that route works; github.com/carlosprados/ota-updater does.
+	Server string `toml:"server"`
+	// SHA256 is the hex digest of the uncompressed archive the patch must
+	// produce. Required: without it there is nothing to verify the patch
+	// against, and an unverified patch is not a download, it is an exploit.
+	SHA256 string `toml:"sha256"`
+	// Format names the patch encoding. Empty means the default,
+	// artifact.DeltaFormatBsdiffZstd. An unrecognised value is not an error:
+	// the agent logs it and falls back to the full download, so a server that
+	// moves to a new encoding degrades loudly instead of corrupting bytes.
+	Format string `toml:"format"`
 }
 
 type LifecycleInstall struct {

@@ -25,6 +25,7 @@ anything else, so these can live there or in a systemd `EnvironmentFile`.
 | Variable | Default | Effect |
 |---|---|---|
 | `KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES` | 2 GiB | Cache budget; oldest evicted first |
+| `KEYSTONE_DELTA_MAX_BASE_BYTES` | 256 MiB | Largest artifact the delta path will attempt. Patching costs memory proportional to the artifact, so past this size downloading it is cheaper than reconstructing it. `0` disables the limit |
 | `KEYSTONE_ARTIFACT_DOWNLOAD_TIMEOUT` | `30m` | Per-artifact download timeout. Accepts `5m`, `1h` |
 
 ## Lifecycle
