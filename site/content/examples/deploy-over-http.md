@@ -101,7 +101,7 @@ keystonectl stop-plan
 
 `keystonectl stop-plan` stops everything; `keystonectl stop api` stops one
 component. They are different commands — see the
-[CLI reference](../../reference/cli/).
+[keystonectl reference](../../reference/keystonectl/).
 
 ## Scripting a rollout
 

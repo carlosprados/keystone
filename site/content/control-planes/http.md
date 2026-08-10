@@ -63,7 +63,7 @@ keystonectl stop-plan         # everything
 ```
 
 It reads `KEYSTONE_API_TOKEN` from the environment and takes `--addr` for a remote
-agent. See [the CLI reference](../../reference/cli/) for every subcommand.
+agent. See [the keystonectl reference](../../reference/keystonectl/) for every subcommand.
 
 ## Bruno collection
 

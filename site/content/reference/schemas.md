@@ -1,6 +1,6 @@
 +++
 title = "Recipe and plan schema"
-weight = 74
+weight = 75
 description = "Every field, its type and its default, in one place."
 +++
 
