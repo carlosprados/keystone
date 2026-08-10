@@ -1,6 +1,6 @@
 +++
 title = "HTTP API"
-weight = 73
+weight = 74
 description = "Endpoints, parameters and response shapes."
 +++
 

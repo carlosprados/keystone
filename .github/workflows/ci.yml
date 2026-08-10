@@ -43,3 +43,8 @@ jobs:
         # response type changed without regenerating it, the published API
         # reference would describe something the binary no longer does.
         run: go run ./cmd/openapi-gen -check -o site/content/reference/api/openapi.yaml
+      - name: CLI reference is in sync with the code
+        # The page is generated from the agent's flag set and keystonectl's
+        # command tree. A new command or flag that never reached the docs would
+        # otherwise be invisible to anyone reading the site.
+        run: go run ./cmd/cli-gen -check -dir site/content/reference

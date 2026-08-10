@@ -85,6 +85,16 @@ tasks:
     cmds:
       - go run ./cmd/openapi-gen -check -o site/content/reference/api/openapi.yaml
 
+  cli-docs:
+    desc: Regenerate the CLI reference from the agent's flags and keystonectl's command tree
+    cmds:
+      - go run ./cmd/cli-gen -dir site/content/reference
+
+  cli-docs:check:
+    desc: Fail if the checked-in CLI reference is out of date
+    cmds:
+      - go run ./cmd/cli-gen -check -dir site/content/reference
+
   docs:
     desc: Serve the documentation site locally (needs Hugo extended)
     dir: site

@@ -117,7 +117,8 @@ touched and which you deliberately did not:
 | An HTTP route, or any type a handler encodes | `internal/adapter/http/routes.go` is the single source of truth; run `task openapi` and commit the regenerated `site/content/reference/api/openapi.yaml`. CI fails if it drifts |
 | A recipe or plan field | `site/content/concepts/recipes.md`, `site/content/reference/schemas.md`, and the examples that use it |
 | Component state, reuse or supervision behaviour | `site/content/concepts/component-state.md` and `reconcile-and-reuse.md` — those pages are a contract, not a description |
-| A flag or environment variable | `site/content/reference/cli.md` and `env.md`, plus the README |
+| A flag or environment variable | Run `task cli-docs` and commit the regenerated `site/content/reference/cli.md` and `keystonectl.md`; CI fails if either drifts. Then `env.md` and the README |
+| A `keystonectl` command, its help or its examples | Same: `site/content/reference/keystonectl.md` is generated from the Cobra tree in `internal/cli`. Never edit that page by hand |
 | Security posture, defaults, or confinement | `docs/security.md` **and** `site/content/security/` |
 | An adapter's topics, subjects or payloads | `site/content/control-planes/` and the matching example page |
 | Anything a user would follow step by step | The examples chapter — the walkthroughs must still work verbatim |

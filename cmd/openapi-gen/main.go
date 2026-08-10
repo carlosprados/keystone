@@ -165,6 +165,14 @@ func addOperation(r *openapi31.Reflector, route ksHTTP.Route, method string) err
 		oc.AddRespStructure(route.Response, func(cu *openapi.ContentUnit) {
 			cu.HTTPStatus = status
 		})
+		// A second structure on the same status becomes a oneOf, which is how
+		// an endpoint whose body depends on a parameter gets described
+		// honestly rather than by picking whichever shape came first.
+		if route.ResponseAlt != nil {
+			oc.AddRespStructure(route.ResponseAlt, func(cu *openapi.ContentUnit) {
+				cu.HTTPStatus = status
+			})
+		}
 	default:
 		oc.AddRespStructure(nil, func(cu *openapi.ContentUnit) {
 			cu.HTTPStatus = status
@@ -248,9 +256,81 @@ func decorate(r *openapi31.Reflector, route ksHTTP.Route, method string) error {
 		op.Security = []map[string][]string{{"bearerAuth": {}}}
 	}
 
+	if route.ResponseAlt != nil {
+		if err := oneOfSuccess(r, route, op); err != nil {
+			return fmt.Errorf("%s %s: %w", method, route.Path, err)
+		}
+	}
+
 	setOperation(&pathItem, method, op)
 	r.Spec.Paths.MapOfPathItemValues[route.Path] = pathItem
 	return nil
+}
+
+// oneOfSuccess rewrites the success response of an endpoint that can answer two
+// different shapes so the document says exactly that.
+//
+// Registering two structures on one status does not merge them — the second
+// simply replaces the first — so the schema is assembled here instead. Both
+// types are already in components: the reflector put them there when each was
+// registered.
+func oneOfSuccess(r *openapi31.Reflector, route ksHTTP.Route, op *openapi31.Operation) error {
+	status := route.SuccessStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	resp, ok := op.Responses.MapOfResponseOrReferenceValues[fmt.Sprint(status)]
+	if !ok || resp.Response == nil {
+		return fmt.Errorf("no %d response to turn into a oneOf", status)
+	}
+	media, ok := resp.Response.Content["application/json"]
+	if !ok {
+		return fmt.Errorf("the %d response is not JSON", status)
+	}
+
+	primary, err := schemaRef(r, route.Response)
+	if err != nil {
+		return err
+	}
+	alt, err := schemaRef(r, route.ResponseAlt)
+	if err != nil {
+		return err
+	}
+
+	media.Schema = map[string]interface{}{
+		"oneOf": []interface{}{
+			map[string]interface{}{"$ref": primary},
+			map[string]interface{}{"$ref": alt},
+		},
+	}
+	resp.Response.Content["application/json"] = media
+	op.Responses.MapOfResponseOrReferenceValues[fmt.Sprint(status)] = resp
+	return nil
+}
+
+// schemaRef finds the component the reflector generated for a Go type, matching
+// on the type's own name rather than assuming how the reflector spells it.
+func schemaRef(r *openapi31.Reflector, v any) (string, error) {
+	t := reflect.TypeOf(v)
+	for t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	name := t.Name()
+
+	var found string
+	for key := range r.SpecEns().ComponentsEns().Schemas {
+		if key == name || strings.HasSuffix(key, name) {
+			// Prefer an exact match; otherwise the shortest suffix match, so
+			// RestartResult cannot be satisfied by some LongerRestartResult.
+			if found == "" || len(key) < len(found) {
+				found = key
+			}
+		}
+	}
+	if found == "" {
+		return "", fmt.Errorf("no generated schema for %s", name)
+	}
+	return "#/components/schemas/" + found, nil
 }
 
 func operationFor(pi *openapi31.PathItem, method string) *openapi31.Operation {

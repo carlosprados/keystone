@@ -56,11 +56,29 @@ Comparison is constant-time, so the token cannot be recovered by timing. `/healt
 is exempt so an unauthenticated liveness probe still works; it exposes no component
 detail.
 
+## Prefer a tunnel to an exposed port
+
+The most common reason to bind a non-loopback address is simply wanting to run
+`keystonectl` from a laptop. That is a poor trade: it turns a privileged local
+surface into a network one, and the token then travels in plaintext.
+
+`keystonectl --ssh` removes the reason. It carries the request to the device over
+your own SSH client, so the agent keeps listening only on its own loopback:
+
+```bash
+keystonectl --ssh ops@edge-001 --addr http://127.0.0.1:9180 components
+```
+
+`--addr` is resolved on the far side. Authentication, host key verification and
+key handling are `ssh`'s, following your `~/.ssh/config` — Keystone introduces no
+key material and no cryptography of its own for this. See
+[the CLI reference](../../reference/keystonectl/#reaching-an-agent-bound-to-loopback).
+
 ## What is still your job
 
 - **TLS.** Keystone does not terminate TLS. Put it behind a reverse proxy, or reach
-  it over a VPN or an SSH tunnel. A bearer token on plaintext HTTP over an untrusted
-  network is a token you have given away.
+  it over a VPN or an SSH tunnel (`keystonectl --ssh`, above). A bearer token on
+  plaintext HTTP over an untrusted network is a token you have given away.
 - **One token per device.** A fleet-wide shared token means one compromised device
   compromises the fleet.
 - **Rotation.** The token comes from the environment, so rotation is a config

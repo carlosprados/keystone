@@ -1,6 +1,6 @@
 +++
 title = "Environment variables"
-weight = 72
+weight = 73
 description = "Every KEYSTONE_* variable, grouped by what it affects."
 +++
 
@@ -65,12 +65,32 @@ it under systemd:
 | `KEYSTONE_MQTT_STATE_INTERVAL` | `--mqtt-state-interval` |
 | `KEYSTONE_MQTT_HEALTH_INTERVAL` | `--mqtt-health-interval` |
 
-## JetStream
-
-| Variable | Effect |
-|---|---|
-| `KEYSTONE_JOBS` | JetStream stream name for the job queue |
-
 An invalid value (a non-numeric integer, an unparseable duration, a bad boolean) is
 logged and ignored rather than crashing the agent — but check your logs, because
 "ignored" means the default is in force.
+
+{{% notice style="note" title="KEYSTONE_JOBS is not one of these" %}}
+`KEYSTONE_JOBS` is the *default value* of the `--nats-js-stream` flag — the name
+of the JetStream stream. The agent never reads it from the environment.
+{{% /notice %}}
+
+## keystonectl
+
+The client reads three of its own, and they are the ones worth exporting for a
+device you work on regularly. They are not part of the agent's `.env`.
+
+| Variable | Flag | Default |
+|---|---|---|
+| `KEYSTONE_ADDR` | `--addr` | `http://127.0.0.1:8080` |
+| `KEYSTONE_API_TOKEN` | `--token` | (none) |
+| `KEYSTONE_SSH` | `--ssh` | (direct connection) |
+
+```bash
+export KEYSTONE_SSH=ops@edge-001:52022
+export KEYSTONE_ADDR=http://127.0.0.1:9180   # resolved on the SSH host
+keystonectl components
+```
+
+`KEYSTONE_API_TOKEN` is shared with the agent, which reads it as the token to
+require. See [the CLI reference](../keystonectl/#reaching-an-agent-bound-to-loopback) for
+what `--ssh` does and what it needs.
