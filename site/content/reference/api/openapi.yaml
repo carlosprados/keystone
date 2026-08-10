@@ -142,7 +142,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AdapterRestartResult'
+                oneOf:
+                - $ref: '#/components/schemas/AdapterRestartResult'
+                - $ref: '#/components/schemas/AdapterRestartDryResult'
           description: OK
         "400":
           content:
@@ -592,6 +594,21 @@ components:
           type: string
         status:
           type: string
+      type: object
+    AdapterRestartDryResult:
+      properties:
+        startOrder:
+          items:
+            type: string
+          type:
+          - array
+          - "null"
+        stopOrder:
+          items:
+            type: string
+          type:
+          - array
+          - "null"
       type: object
     AdapterRestartResult:
       properties:

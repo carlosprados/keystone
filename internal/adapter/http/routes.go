@@ -41,6 +41,12 @@ type Route struct {
 	// Response is a pointer to the success response body type, or nil for the
 	// endpoints that answer 204 with no content.
 	Response any
+	// ResponseAlt is a second success body the same endpoint can return when a
+	// parameter changes its shape — :restart answers a RestartDryResult under
+	// dry=true and a RestartResult otherwise. Documenting only one of the two
+	// would make the spec describe a response the binary sometimes does not
+	// send.
+	ResponseAlt any
 	// SuccessStatus is the status code on success.
 	SuccessStatus int
 	// Params documents the query and path parameters.
@@ -119,6 +125,7 @@ func (a *Adapter) routes() []Route {
 			Summary:       "Restart one component",
 			Description:   "Restarts a component and cascades to its dependents according to each dependency type: hard and soft cascade, ordering does not. With dry=true the response is the planned order instead (stopOrder/startOrder).",
 			Response:      new(adapter.RestartResult),
+			ResponseAlt:   new(adapter.RestartDryResult),
 			SuccessStatus: http.StatusOK,
 			Params: []Param{
 				{Name: "name", In: "path", Description: "Component name as given in the plan", Required: true, Example: "api"},
