@@ -82,6 +82,32 @@ KEYSTONE_API_TOKEN="$KEYSTONE_API_TOKEN" ./keystonectl --addr http://host:8080 s
 > or use the token over a trusted link. NATS/MQTT support TLS natively (see
 > [adapters.md](adapters.md)).
 
+### Prefer a tunnel to an exposed port
+
+The usual reason to bind a non-loopback address is wanting to run `keystonectl`
+from a laptop. That trade is a bad one: it turns a privileged local surface into
+a network one, and without TLS the token travels in plaintext.
+
+`keystonectl --ssh` removes the reason, so the agent can keep listening only on
+its own loopback:
+
+```bash
+./keystonectl --ssh ops@edge-001 --addr http://127.0.0.1:9180 components
+```
+
+`--addr` is resolved on the far side, so it names the agent's own loopback. The
+transport is the operator's `ssh` client invoked with `-W`: authentication, host
+key verification, `known_hosts`, `ProxyJump` and key handling are SSH's,
+following `~/.ssh/config`. **Keystone introduces no key material and no
+cryptography of its own here** — the security properties are exactly those of
+the operator's existing SSH policy.
+
+Caveats worth stating: it needs the `ssh` binary on the operator's machine, the
+device's `sshd` must allow `AllowTcpForwarding` (the default, but sometimes off
+on a hardened image), and `--ssh` is Unix-only. It is a confidentiality and
+authentication measure for the *link*; the API token still governs what the
+request is allowed to do once it arrives.
+
 ---
 
 ## Artifact integrity

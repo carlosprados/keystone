@@ -136,7 +136,37 @@ See everything running at a glance:
 
 ## Project Status
 
-**MVP Complete.** Keystone is ready for production evaluation. The agent includes a complete supervisor, process runner, artifact manager, deployment engine, and multiple control plane adapters (HTTP, NATS, MQTT). See the roadmap below for upcoming features.
+**Released and in production evaluation.** Latest release: **v0.4.0** (August 2026) — see [releases](https://github.com/carlosprados/keystone/releases). Each release publishes a `tar.gz` per architecture (Linux `amd64`, `arm64`, `armv7`) containing all three binaries: `keystone`, `keystonectl` and `keystoneserver`.
+
+What is done: supervisor with DAG deployments and rollback, process and container runners, artifact manager with resume and optional delta downloads, signature verification that fails closed, privilege dropping, and three control-plane adapters (HTTP, NATS, MQTT). Documentation is published at [carlosprados.github.io/keystone](https://carlosprados.github.io/keystone/) and the OpenAPI document is generated from the route table, so it cannot drift from the code.
+
+Known limitations, stated plainly:
+
+- **Released binaries are not signed.** No cosign signature and no SBOM yet. Verify the published checksums and fetch over HTTPS.
+- **No built-in TLS for the HTTP API.** Terminate at a reverse proxy, use a VPN, or tunnel with `keystonectl --ssh`. NATS and MQTT do support TLS natively.
+- **cgroups are a no-op placeholder.** ProcessRunner applies `RLIMIT_NOFILE` only; container resource limits do work.
+- **The NATS and MQTT adapters still accept `planPath`**, which the HTTP API deliberately rejects. Treat those transports as trusted.
+- **Self-update and canary rings are not implemented** (Phase 7 below).
+
+## Install
+
+Every release publishes one archive per architecture, containing all three
+binaries:
+
+```bash
+tar xzf keystone_0.4.0_linux_arm64.tar.gz
+sudo install -m 0755 keystone keystonectl keystoneserver /usr/local/bin/
+keystone --version
+```
+
+| Binary | What it is for |
+|---|---|
+| `keystone` | The agent. This is what runs on the device |
+| `keystonectl` | CLI client, talks to an agent over its HTTP API |
+| `keystoneserver` | Tiny static file server, for serving test artifacts while developing |
+
+Binaries are not signed yet — check the published checksums and fetch over HTTPS.
+From source: `task build`.
 
 ## Quick Start
 
@@ -190,7 +220,9 @@ curl -s localhost:8080/metrics | head
 - [x] **Phase 4**: Control plane adapters — HTTP REST, NATS (+ JetStream), MQTT
 - [x] **Phase 5**: Robustness — download resume, exponential backoff, graceful shutdown
 - [x] **Phase 6**: ContainerRunner — containerd client, CLI fallback (docker/nerdctl/podman)
+- [x] **Phase 6.5**: Delta (patch) artifact downloads, privilege dropping, published documentation site
 - [ ] **Phase 7**: Self-update and canary rings
+- [ ] **Phase 8**: Signed releases (cosign + SBOM)
 
 See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 
@@ -207,6 +239,7 @@ See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 | **Observability** | Prometheus metrics, structured logging, health endpoints, per-process metrics |
 | **Persistence** | Automatic state snapshotting, recovery on restart, atomic writes |
 | **Control Plane** | HTTP REST API, NATS adapter (+ JetStream jobs), MQTT adapter (QoS, LWT) |
+| **CLI** | `keystonectl`: full parity with the HTTP API, self-documenting help with examples, SSH tunnelling, shell completion |
 | **Robustness** | Download resume (HTTP Range), exponential backoff with jitter, context propagation, graceful shutdown |
 
 ## Apply a Deployment Plan (End-to-End Preview)
@@ -278,7 +311,7 @@ Verification is **mandatory by default** and fails closed; `--insecure-skip-veri
 ### Artifact Download Headers (TOML)
 
 - Configure per-artifact HTTP headers directly in the recipe under `[[artifacts]].headers`.
-- For GitHub artifacts (`github.com` or `api.github.com`), set `github_token` (at the same level as `uri`) to inject `Authorization: Bearer <token>` when no `Authorization` header is provided.
+- For GitHub artifacts (`github.com` or `api.github.com`), set `github_token` (at the same level as `uri`) to inject `Authorization: Bearer <token>` when no `Authorization` header is provided. There is no environment fallback for this: the token is per-artifact, in the recipe.
 
 Example snippet inside a recipe:
 
@@ -289,24 +322,72 @@ sha256 = "sha256:<...>"
 unpack = true
 github_token = ""
 [artifacts.headers]
-Accept = "application/vnd.github+json"   # para endpoint de Actions /artifacts/{id}/zip (302 hacia S3)
+Accept = "application/vnd.github+json"   # for the Actions /artifacts/{id}/zip endpoint (302 to S3)
 ```
 
 ### keystonectl (CLI)
 
-Build and use the local CLI for convenience:
+`keystonectl` covers the whole HTTP API and **documents itself** — every command
+carries a description, runnable examples and the endpoint it calls, so exploring
+with `help` is enough to learn it:
 
 ```bash
-go build -o keystonectl ./cmd/keystonectl
-./keystonectl status
-./keystonectl components
-./keystonectl stop-plan
-./keystonectl stop hello
-./keystonectl restart hello
-./keystonectl graph
-./keystonectl restart-dry hello
-./keystonectl apply-dry configs/examples/plan.toml
+keystonectl help                 # every command, grouped
+keystonectl help restart         # one command, with examples
+keystonectl restart --help       # the same
+source <(keystonectl completion bash)
 ```
+
+The commands:
+
+```bash
+keystonectl health                            # agent liveness and uptime
+keystonectl status                            # plan status
+keystonectl components                        # state, PID and health of each component
+keystonectl graph                             # dependency graph and start order
+
+keystonectl apply plan.toml [--dry]           # upload and apply a plan
+keystonectl apply-dry plan.toml               # same as apply --dry
+keystonectl stop-plan                         # stop everything
+
+keystonectl stop hello                        # stop one component
+keystonectl restart hello [--wait health] [--timeout 120s]
+keystonectl restart-dry hello                 # what a restart would touch
+
+keystonectl recipes                           # list the recipe store
+keystonectl upload-recipe api.toml [--force]  # add a recipe
+keystonectl delete-recipe com.acme.api 1.4.0  # remove one
+keystonectl sha256 dist/api.tar.gz            # digest for an artifact entry
+```
+
+Global flags, each with an environment fallback (the flag always wins):
+`--addr` / `KEYSTONE_ADDR`, `--token` / `KEYSTONE_API_TOKEN`, `--ssh` /
+`KEYSTONE_SSH`. Exit codes: `0` success, `1` the agent or network failed, `2`
+the command was used wrongly.
+
+#### Reaching an agent bound to loopback
+
+The agent listens on `127.0.0.1` by default and demands a token to bind anything
+else, so on a device its API is only reachable from the device itself. Rather
+than exposing the port, tunnel the request:
+
+```bash
+keystonectl --ssh ops@edge-001 components
+keystonectl --ssh ops@edge-001:52022 --addr http://127.0.0.1:9180 restart-dry api
+
+# For a device you work on often
+export KEYSTONE_SSH=ops@edge-001:52022
+export KEYSTONE_ADDR=http://127.0.0.1:9180
+keystonectl status
+```
+
+**`--addr` is resolved on the far side**, so the default `127.0.0.1:8080` means
+the agent's own loopback. Under the hood this runs your `ssh` client with `-W`,
+inheriting your `~/.ssh/config` — `Host` aliases, `IdentityFile`, `ProxyJump`
+through a bastion, the agent and `known_hosts` — with host key verification done
+by `ssh` under your own rules. It needs the `ssh` binary on your machine and
+`AllowTcpForwarding` on the device (the default), and is Unix-only; on Windows
+use `ssh -L` and point `--addr` at the forwarded port.
 
 ### keystoneserver
 
@@ -332,9 +413,12 @@ Graph and dry-run from API directly:
 
 ```bash
 curl -s localhost:8080/v1/plan/graph | jq
-curl -s -X POST localhost:8080/v1/components/hello:restart?dry=true | jq
-curl -s -X POST localhost:8080/v1/plan/apply -H 'Content-Type: application/json' \
-  -d '{"planPath":"configs/examples/plan.toml","dry":true}'
+curl -s -X POST 'localhost:8080/v1/components/hello:restart?dry=true' | jq
+
+# The plan is uploaded as content. A JSON body naming a planPath is rejected on
+# purpose: it would turn the API into a file-read primitive.
+curl -s -X POST 'localhost:8080/v1/plan/apply?dry=true' \
+  --data-binary @configs/examples/plan.toml
 ```
 
 ## Releases
@@ -384,7 +468,7 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_ARTIFACT_DOWNLOAD_TIMEOUT`  | Artifact download timeout (default: 30m). Supports "5m", "1h", etc.    |
 | `KEYSTONE_TRUST_BUNDLE`               | Path to CA trust bundle (PEM) for signature verification.              |
 | `KEYSTONE_LEAF_CERT`                  | Default certificate (PEM) for signature verification if not in recipe. |
-| `KEYSTONE_GITHUB_TOKEN`               | Default token for GitHub artifact downloads (if not in recipe).        |
+| `KEYSTONE_IMAGE_VOLUME_DIR`           | Where container image volumes are materialised.                        |
 | `KEYSTONE_DEVICE_ID`                  | Device ID for NATS/MQTT topics (default: hostname).                    |
 | `KEYSTONE_MQTT_BROKER`                | MQTT broker URL (enables MQTT if set and `--mqtt-broker` not passed).  |
 | `KEYSTONE_MQTT_DEVICE_ID`             | MQTT device ID (overrides `KEYSTONE_DEVICE_ID` for MQTT only).         |
@@ -446,14 +530,21 @@ The HTTP adapter exposes a REST API for local management:
 ./keystone --http "" --nats-url nats://server:4222 --nats-device-id edge-001
 ```
 
-**Key Endpoints:**
+**Endpoints** (the generated OpenAPI document is [in the docs site](https://carlosprados.github.io/keystone/reference/api/)):
+
 | Endpoint | Description |
 |----------|-------------|
-| `GET /healthz` | Health check |
+| `GET /healthz` | Health check (exempt from auth) |
 | `GET /metrics` | Prometheus metrics |
 | `GET /v1/components` | List components |
-| `POST /v1/plan/apply` | Apply deployment plan |
-| `POST /v1/components/{name}:restart` | Restart component |
+| `POST /v1/components/{name}:stop` | Stop one component |
+| `POST /v1/components/{name}:restart` | Restart one component (`dry`, `wait`, `timeout`) |
+| `GET /v1/plan/status` | Applied plan, status and components |
+| `GET /v1/plan/graph` | Dependency graph and start order |
+| `POST /v1/plan/apply` | Apply a plan (body is the plan TOML; `dry`) |
+| `POST /v1/plan/stop` | Stop every component |
+| `GET`/`POST /v1/recipes` | List or add stored recipes (`force`) |
+| `DELETE /v1/recipes/{name}/{version}` | Remove a stored recipe |
 
 ### NATS Adapter
 
@@ -526,6 +617,7 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 | `--api-token` | (empty) | Bearer token for the API (or `KEYSTONE_API_TOKEN`); required for a non-loopback bind |
 | `--insecure-skip-verify` | `false` | Disable mandatory artifact/recipe verification — dev/demo only (or `KEYSTONE_INSECURE_SKIP_VERIFY=true`) |
 | `--demo` | `false` | Run the built-in mock 3-component stack (db → cache → api) |
+| `--version` | — | Print version and commit, then exit |
 
 </details>
 
