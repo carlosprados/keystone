@@ -10,7 +10,21 @@ enableGitInfo = true
   # Passed straight to mermaid.initialize by the theme. The CSS lifts mermaid's
   # small default label sizes: legibility on a documentation page matters more
   # than mermaid's compactness.
-  mermaidInitialize = "{\"themeCSS\": \"/* Mermaid hardcodes 12px for edge labels and 10px for state-diagram labels, which is fine print on a documentation page. */ .edgeLabel, .edgeLabel p, .edgeLabel span, .edgeLabels div { font-size: 15px !important; } .stateLabel, .stateGroup text, .state-note text, .stateGroup .divider + text { font-size: 15px !important; } .messageText, .loopText, .noteText, .labelText { font-size: 15px !important; }\"}"
+  #
+  # The colour rules put diagrams on the same palette as the rest of the page.
+  # They resolve CSS custom properties rather than literals on purpose: mermaid
+  # injects this as a <style> inside an inline <svg>, so the variables inherit
+  # from :root and each theme variant recolours its own diagrams. The literal
+  # after each comma is the fallback mermaid-cli sees when it renders these
+  # diagrams outside the page for site/scripts/check-diagrams.py.
+  #
+  # Font sizes are deliberately untouched below the legibility floor that
+  # check-diagrams.py enforces.
+  mermaidInitialize = '''
+  {
+    "themeCSS": "/* Mermaid hardcodes 12px for edge labels and 10px for state-diagram labels, which is fine print on a documentation page. */ .edgeLabel, .edgeLabel p, .edgeLabel span, .edgeLabels div { font-size: 15px !important; } .stateLabel, .stateGroup text, .state-note text, .stateGroup .divider + text { font-size: 15px !important; } .messageText, .loopText, .noteText, .labelText { font-size: 15px !important; } /* Palette: panels and hairlines, accented edges, page text. */ .node rect, .node circle, .node ellipse, .node polygon, .node path, .stateGroup rect, .actor { fill: var(--CODE-BLOCK-BG-color, #0a0f16) !important; stroke: var(--PRIMARY-color, #38bdf8) !important; } .cluster rect { fill: var(--MAIN-BG-color, #04070c) !important; stroke: var(--KEYSTONE-RULE-color, rgba(148,180,220,0.10)) !important; } .nodeLabel, .edgeLabel, .label, .cluster-label, .titleText, .stateLabel, .messageText, .noteText, .actor-line + text { color: var(--MAIN-TEXT-color, #c7d0dd) !important; fill: var(--MAIN-TEXT-color, #c7d0dd) !important; } .edgeLabel, .edgeLabel p, .edgeLabel span, .edgeLabel div, .edgeLabel rect, .edgeLabel .labelBkg, .edgeLabel .label-container { fill: var(--MAIN-BG-color, #04070c) !important; background-color: var(--MAIN-BG-color, #04070c) !important; } .edgePath .path, .flowchart-link, .messageLine0, .messageLine1, .transition { stroke: var(--MAIN-TEXT-color, #c7d0dd) !important; } .marker, .arrowheadPath, marker path { fill: var(--MAIN-TEXT-color, #c7d0dd) !important; stroke: none !important; }"
+  }
+  '''
   # The release these docs describe, shown in the sidebar footer. Bumped in the
   # release PR, before the tag is cut, so the merge that lands the bump is the
   # deploy that publishes it. release.yml refuses to build a tag that disagrees
@@ -19,7 +33,17 @@ enableGitInfo = true
   # deployment of the same commit — see .github/workflows/pages.yml.
   version = "v0.5.0"
   editURL = "https://github.com/carlosprados/keystone/edit/develop/site/content/"
-  themeVariant = ["auto", "relearn-light", "relearn-dark", "neon"]
+  # The look follows carlos.enredando.me: dark by default, cyan accent, the
+  # Space Grotesk / Inter / JetBrains Mono trio. "auto" leads so a visitor whose
+  # system asks for light gets light, exactly as the blog behaves; the two named
+  # variants stay selectable, and the theme's own are kept as an escape hatch.
+  themeVariant = [
+    { identifier = "auto", auto = ["keystone-light", "keystone-dark"] },
+    { identifier = "keystone-dark", name = "Keystone Dark" },
+    { identifier = "keystone-light", name = "Keystone Light" },
+    { identifier = "relearn-light" },
+    { identifier = "relearn-dark" },
+  ]
   disableLandingPageButton = true
   alwaysopen = false
   collapsibleMenu = true

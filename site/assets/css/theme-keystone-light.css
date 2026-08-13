@@ -1,0 +1,118 @@
+/* ==========================================================================
+   Keystone docs — light variant
+   --------------------------------------------------------------------------
+   The blog is dark by default and only switches when the visitor's system asks
+   for light, so there is no light design to copy: this is the same grammar
+   (cyan accent, same three families, blueprint grid) inverted onto paper.
+   Variables only — see theme-keystone-dark.css for why.
+   ========================================================================== */
+:root {
+  /* keystone-light */
+
+  /* --- Brand ------------------------------------------------------------ */
+  --PRIMARY-color: rgba( 3, 105, 161, 1 );
+  --PRIMARY-HOVER-color: rgba( 2, 132, 197, 1 );
+  --SECONDARY-color: rgba( 3, 105, 161, 1 );
+  --SECONDARY-HOVER-color: rgba( 2, 132, 197, 1 );
+  --ACCENT-color: rgba( 217, 119, 6, 1 );
+  --ACCENT-HOVER-color: rgba( 245, 158, 11, 1 );
+
+  /* --- Type ------------------------------------------------------------- */
+  --MAIN-font: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --MAIN-font-variation-settings: normal;
+  --MAIN-font-weight: 400;
+  --MAIN-letter-spacing: normal;
+  --MAIN-BOLD-font-weight: 600;
+
+  --MAIN-TITLES-font: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --MAIN-TITLES-font-variation-settings: normal;
+  --MAIN-TITLES-font-weight: 600;
+  --MAIN-TITLES-letter-spacing: -0.02em;
+  --MAIN-TITLES-H1-font-weight: 500;
+  --MAIN-TITLES-H1-letter-spacing: -0.035em;
+
+  --CODE-font: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', menlo, monospace;
+  --CODE-font-variation-settings: normal;
+  --CODE-font-weight: 400;
+  --CODE-letter-spacing: normal;
+
+  --LOGO-font: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+
+  /* --- Content ---------------------------------------------------------- */
+  --MAIN-BG-color: rgba( 249, 250, 252, 1 );
+  --MAIN-TEXT-color: rgba( 45, 55, 70, 1 );
+  --MAIN-TITLES-TEXT-color: rgba( 13, 20, 31, 1 );
+  --MAIN-LINK-color: rgba( 3, 105, 161, 1 );
+  --MAIN-LINK-HOVER-color: rgba( 2, 132, 197, 1 );
+
+  /* --- Code ------------------------------------------------------------- */
+  --CODE-theme: keystone-light;
+  --CODE-BLOCK-color: rgba( 31, 35, 40, 1 );
+  --CODE-BLOCK-BG-color: rgba( 243, 246, 250, 1 );
+  --CODE-BLOCK-BORDER-color: rgba( 45, 70, 100, 0.16 );
+  --CODE-INLINE-color: rgba( 3, 89, 133, 1 );
+  --CODE-INLINE-BG-color: rgba( 238, 243, 249, 1 );
+  --CODE-INLINE-BORDER-color: rgba( 45, 70, 100, 0.14 );
+
+  /* --- Sidebar ---------------------------------------------------------- */
+  --MENU-HEADER-BG-color: rgba( 237, 242, 248, 1 );
+  --MENU-HEADER-color: rgba( 13, 20, 31, 1 );
+  --MENU-HEADER-BORDER-color: rgba( 3, 105, 161, 0.28 );
+  --MENU-BORDER-color: rgba( 45, 70, 100, 0.12 );
+  --MENU-SEARCH-color: rgba( 45, 55, 70, 1 );
+  --MENU-SEARCH-BG-color: rgba( 255, 255, 255, 1 );
+  --MENU-SEARCH-BORDER-color: rgba( 45, 70, 100, 0.22 );
+  --MENU-SECTIONS-BG-color: rgba( 240, 244, 249, 1 );
+  --MENU-SECTIONS-ACTIVE-BG-color: rgba( 3, 105, 161, 0.07 );
+  --MENU-SECTIONS-LINK-color: rgba( 71, 84, 103, 1 );
+  --MENU-SECTIONS-LINK-HOVER-color: rgba( 13, 20, 31, 1 );
+  --MENU-SECTION-ACTIVE-CATEGORY-color: rgba( 3, 105, 161, 1 );
+  --MENU-SECTION-ACTIVE-CATEGORY-BG-color: rgba( 0, 0, 0, 0 );
+  --MENU-SECTION-SEPARATOR-color: rgba( 45, 70, 100, 0.16 );
+  --MENU-VISITED-color: rgba( 21, 128, 61, 1 );
+  --MENU-HOME-LINK-color: rgba( 71, 84, 103, 1 );
+  --MENU-HOME-LINK-HOVER-color: rgba( 3, 105, 161, 1 );
+
+  /* --- Topbar ----------------------------------------------------------- */
+  --TOPBAR-BG-color: rgba( 249, 250, 252, 0.85 );
+  --TOPBAR-TEXT-color: rgba( 45, 55, 70, 1 );
+  --TOPBAR-SEPARATOR-color: rgba( 3, 105, 161, 0.22 );
+  --TOPBAR-OVERLAY-BG-color: rgba( 255, 255, 255, 1 );
+  --TOPBAR-LINK-color: rgba( 71, 84, 103, 1 );
+  --TOPBAR-LINK-HOVER-color: rgba( 3, 105, 161, 1 );
+  --TOPBAR-BUTTON-color: rgba( 71, 84, 103, 1 );
+  --TOPBAR-BUTTON-HOVER-color: rgba( 3, 105, 161, 1 );
+  --MAIN-TOPBAR-BORDER-color: rgba( 3, 105, 161, 0.22 );
+  --MENU-TOPBAR-BORDER-color: rgba( 3, 105, 161, 0.22 );
+
+  /* --- Boxes ------------------------------------------------------------ */
+  --BOX-CAPTION-color: rgba( 255, 255, 255, 1 );
+  --BOX-BG-color: rgba( 255, 255, 255, 1 );
+  --BOX-TEXT-color: rgba( 45, 55, 70, 1 );
+
+  /* The dark variant's accents, darkened until a white caption sits on them. */
+  --BOX-GREEN-color: rgba( 21, 128, 61, 1 );
+  --BOX-ORANGE-color: rgba( 180, 83, 9, 1 );
+  --BOX-RED-color: rgba( 185, 28, 28, 1 );
+  --BOX-BLUE-color: rgba( 3, 105, 161, 1 );
+  --BOX-CYAN-color: rgba( 14, 116, 144, 1 );
+  --BOX-MAGENTA-color: rgba( 126, 34, 206, 1 );
+  --BOX-GREY-color: rgba( 100, 116, 139, 1 );
+
+  --TAG-BG-color: rgba( 3, 105, 161, 1 );
+
+  /* --- Delegated themes ------------------------------------------------- */
+  --BROWSER-theme: light;
+  --MERMAID-theme: default;
+  --OPENAPI-theme: light;
+  --OPENAPI-CODE-theme: idea;
+
+  /* --- Chrome tokens, read by custom.css -------------------------------- */
+  --KEYSTONE-GRID-color: rgba( 45, 70, 100, 0.06 );
+  --KEYSTONE-GLOW-color: rgba( 56, 189, 248, 0.10 );
+  --KEYSTONE-SCAN-color: rgba( 3, 105, 161, 0.35 );
+  --KEYSTONE-NOISE-opacity: 0;
+  --KEYSTONE-RULE-color: rgba( 45, 70, 100, 0.14 );
+  --KEYSTONE-SIGIL-color: rgba( 148, 163, 184, 1 );
+  --KEYSTONE-PANEL-BG-color: rgba( 255, 255, 255, 0.6 );
+}

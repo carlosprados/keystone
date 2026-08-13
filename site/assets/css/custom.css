@@ -1,0 +1,299 @@
+/* ==========================================================================
+   Keystone docs — chrome
+   --------------------------------------------------------------------------
+   Loaded by Relearn's own custom-header.html when it exists at
+   assets/css/custom.css. Colours live in theme-keystone-dark.css and
+   theme-keystone-light.css; everything here is shape, texture and type — the
+   parts of https://carlos.enredando.me that no theme variable can express.
+
+   Every colour below is read from a variable so the light variant inverts
+   with the rest of the page. Hardcoding one would leave a dark smear on paper.
+   ========================================================================== */
+
+/* >>> GENERATED FONTS — do not edit by hand, run site/scripts/fetch-fonts.py */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('../fonts/inter/inter-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('../fonts/inter/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('../fonts/jetbrains-mono/jetbrains-mono-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('../fonts/jetbrains-mono/jetbrains-mono-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('../fonts/space-grotesk/space-grotesk-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('../fonts/space-grotesk/space-grotesk-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* <<< GENERATED FONTS */
+
+/* ─── Ground: blueprint grid, corner glow, grain ──────────────────────────── */
+/* The blog paints these on the body. Here they have to be fixed layers behind
+   everything, because Relearn scrolls #R-body-inner rather than the window —
+   a scrolling grid would tear against the fixed sidebar.
+
+   z-index -1 rather than a raised layer: the theme positions #R-sidebar and
+   sizes #R-body around it, so giving either of them a `position` of our own
+   makes the sidebar take its 18.75rem twice and pushes the content off-screen.
+   A negative layer needs nothing from them. It still shows, because body's own
+   background propagates to the canvas and paints below this. */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    radial-gradient(50rem 34rem at 62% -14%, var(--KEYSTONE-GLOW-color), transparent 68%),
+    linear-gradient(var(--KEYSTONE-GRID-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--KEYSTONE-GRID-color) 1px, transparent 1px);
+  background-size: auto, 40px 40px, 40px 40px;
+}
+
+/* Grain. Kept at the blog's opacity; `overlay` is what stops it from greying
+   out the black rather than sitting on top of it. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: var(--KEYSTONE-NOISE-opacity);
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+/* The content column is transparent so the grid reads through it; only the
+   sidebar keeps a solid panel, as the blog's own panels do. */
+#R-body,
+#R-body-inner,
+#R-main-overlay {
+  background-color: transparent;
+}
+
+/* Scan line. Decoration, and the first thing to go when motion is unwelcome.
+   z-index sits above the content (#R-body is 70) and below the topbar (170),
+   so it passes behind the bar the way it does on the blog. */
+html::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  z-index: 100;
+  pointer-events: none;
+  opacity: 0.4;
+  background: linear-gradient(90deg, transparent, var(--KEYSTONE-SCAN-color) 50%, transparent);
+  animation: keystone-scan 10s linear infinite;
+}
+@keyframes keystone-scan { to { transform: translateY(100vh); } }
+
+/* ─── Type ────────────────────────────────────────────────────────────────── */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Relearn centres and letter-spaces the H1 into a wide banner; the blog sets
+   its titles tight and left. */
+#R-body-inner h1 {
+  text-align: left;
+  text-transform: none;
+}
+
+/* Section rule with a cyan tick under it — the blog's `.en-sec-head` reduced to
+   what a documentation page can carry without turning into a poster. */
+#R-body-inner h2 {
+  position: relative;
+  margin-top: 2.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--KEYSTONE-RULE-color);
+}
+#R-body-inner h2::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 3.5rem;
+  height: 1px;
+  background: var(--INTERNAL-PRIMARY-color);
+  box-shadow: 0 0 10px var(--INTERNAL-PRIMARY-color);
+}
+
+/* ─── Sidebar ─────────────────────────────────────────────────────────────── */
+#R-sidebar {
+  border-right: 1px solid var(--KEYSTONE-RULE-color);
+}
+
+#R-header-wrapper {
+  border-bottom: 1px solid var(--KEYSTONE-RULE-color);
+}
+
+#R-logo .logo-title {
+  font-family: var(--INTERNAL-MAIN-TITLES-font);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* Chapter rows read as terminal paths — mono, uppercase, `//` sigil — while
+   the leaves below stay in Inter. Uppercasing the whole tree would cost more
+   legibility than the reference is worth. */
+.R-shortcutmenu-main > ul > li > a,
+.R-shortcutmenu-main > ul > li > label {
+  font-family: var(--INTERNAL-CODE-font);
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+/* The sigil stays in the text flow. Two alternatives were tried and reverted:
+   the anchor's own padding is what clears the expand chevron, so overriding it
+   slides the label under the chevron, and a negative text-indent moves the
+   slashes there instead. A long chapter wrapping to a second line at the same
+   left edge is the cheapest of the three outcomes. */
+.R-shortcutmenu-main > ul > li > a::before {
+  content: '// ';
+  color: var(--KEYSTONE-SIGIL-color);
+}
+
+/* The shortcut menu ("More") and the footer are chrome, so they are mono too. */
+.R-shortcutmenu-shortcuts a,
+#R-footer {
+  font-family: var(--INTERNAL-CODE-font);
+  letter-spacing: 0.04em;
+}
+
+.searchbox {
+  border-radius: 2px;
+}
+.searchbox input {
+  font-family: var(--INTERNAL-CODE-font);
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+}
+
+/* ─── Topbar ──────────────────────────────────────────────────────────────── */
+#R-topbar {
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+/* The glow under the bar. The theme already draws a 1px separator; this sits on
+   top of it and fades out at both ends, like the blog's `.en-topbar::after`. */
+#R-topbar::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent 8%, var(--KEYSTONE-SCAN-color) 50%, transparent 92%);
+}
+.topbar-button button,
+.topbar-button a {
+  border-radius: 2px;
+}
+
+/* ─── Code ────────────────────────────────────────────────────────────────── */
+/* The generated chroma sheets carry github-dark's own #0d1117; the blog's panel
+   colour wins so code blocks match every other surface on the page. */
+#R-body-inner pre:not(.mermaid),
+#R-body-inner .chroma {
+  background-color: var(--INTERNAL-CODE-BLOCK-BG-color);
+  border-radius: 2px;
+}
+#R-body-inner pre:not(.mermaid) {
+  border: 1px solid var(--INTERNAL-CODE-BLOCK-BORDER-color);
+}
+#R-body-inner code {
+  border-radius: 2px;
+  font-feature-settings: "zero", "ss02";
+}
+/* Chroma paints the block; the surrounding pre already has the border. */
+#R-body-inner pre:not(.mermaid) > code,
+#R-body-inner pre:not(.mermaid) .chroma {
+  border: none;
+}
+
+/* ─── Blockquotes, tables, boxes ──────────────────────────────────────────── */
+/* The blog's `.en-philosophy`: a hairline box, a 2px accent edge, and a wash
+   that runs out before it reaches the right margin. */
+#R-body-inner blockquote {
+  border-left: 2px solid var(--INTERNAL-PRIMARY-color);
+  border-radius: 0;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--INTERNAL-PRIMARY-color) 6%, transparent), transparent 60%);
+}
+
+#R-body-inner table {
+  border-radius: 0;
+}
+#R-body-inner table thead th {
+  font-family: var(--INTERNAL-CODE-font);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* Relearn's notice boxes keep their semantic colour, but square off and drop
+   the drop shadow — the blog's surfaces are drawn with hairlines, not depth. */
+#R-body-inner .box {
+  border-radius: 2px;
+  box-shadow: none;
+}
+
+/* ─── Small parts ─────────────────────────────────────────────────────────── */
+::selection {
+  background: color-mix(in srgb, var(--INTERNAL-PRIMARY-color) 30%, transparent);
+  color: var(--INTERNAL-MAIN-TITLES-TEXT-color);
+}
+
+#R-body-inner .badge,
+#R-body-inner .tag,
+#R-body-inner .btn {
+  border-radius: 2px;
+}
+
+#R-body-inner hr {
+  border-color: var(--KEYSTONE-RULE-color);
+}
+
+/* ─── Reduced motion ──────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  html::after { animation: none; }
+}

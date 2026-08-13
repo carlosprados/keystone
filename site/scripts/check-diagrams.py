@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 
 
 def mmdc(args: list[str], timeout: int) -> subprocess.CompletedProcess:
@@ -66,11 +67,23 @@ def collect(content: pathlib.Path) -> list[tuple[pathlib.Path, int, str]]:
 
 
 def theme_config(config_path: pathlib.Path) -> str:
-    """The site's own mermaid config, so the check sees what readers see."""
+    """The site's own mermaid config, so the check sees what readers see.
+
+    Parsed with tomllib rather than a regex. The regex only understood the
+    single-line, double-quoted form, and when the value moved to a multi-line
+    literal it silently fell back to '{}' — every diagram then rendered without
+    the font-size lifts and measured 0.0px, which reads as 26 broken diagrams
+    instead of one broken parser. A missing value is now an error, not a shrug.
+    """
     if not config_path.is_file():
-        return '{}'
-    m = re.search(r'mermaidInitialize\s*=\s*"(.*)"\s*$', config_path.read_text(), re.M)
-    return json.loads('"' + m.group(1) + '"') if m else '{}'
+        raise SystemExit(f"::error::config not found: {config_path}")
+    with config_path.open('rb') as fh:
+        config = tomllib.load(fh)
+    value = config.get('params', {}).get('mermaidInitialize')
+    if value is None:
+        raise SystemExit(f"::error::params.mermaidInitialize missing from {config_path}")
+    json.loads(value)  # fail here, not inside mermaid-cli, if it is not JSON
+    return value
 
 
 def main() -> int:
