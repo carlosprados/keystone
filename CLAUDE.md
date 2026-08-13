@@ -105,6 +105,29 @@ The HTTP adapter exposes: `/healthz`, `/metrics`, `/v1/components`, `/v1/plan/st
 
 All agent flags are discoverable via `./keystone --help`. Environment variables are documented in `README.md` (section "Environment Variables"). The agent loads `.env` from the working directory.
 
+## Branches
+
+**`main` is the only long-lived branch.** Work happens on short-lived
+`keystone/<feature-name>` branches that reach `main` by pull request and are
+deleted on merge. There is no `develop`, no release branch, no integration
+branch.
+
+That single branch is load-bearing in three places, which is why nothing else
+gets to be long-lived:
+
+- **CI** gates every PR into `main` and re-runs on the merge (`ci.yml`).
+  Rulesets enforce it: no direct pushes, no history rewriting.
+- **The docs site** publishes from `main` (`pages.yml`), and the site's
+  "edit this page" link points there. Publishing branch and branch of record are
+  the same by construction.
+- **Releases** tag a commit on `main`, and release tags are immutable.
+
+A second long-lived branch existed once. It received no pull requests, published
+nothing, was tagged never, and had no protection — so it drifted 22 commits
+behind while the docs' edit links still pointed at it. Every reader who clicked
+"edit this page" got a stale copy, and nothing looked broken. If a branch is not
+one of the three things above, it is short-lived.
+
 ## Documentation is part of every change
 
 **Doctrine, not a suggestion: no change ships without a documentation review.**

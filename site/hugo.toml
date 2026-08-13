@@ -34,8 +34,9 @@ enableGitInfo = true
   version = "v0.5.0"
   # The "edit this page" button. It points at `main` because that is the branch
   # this site is built from: an edit link into any other branch opens a version
-  # of the page the reader is not looking at. It pointed at `develop` until
-  # `develop` had fallen 22 commits behind, which is exactly that failure.
+  # of the page the reader is not looking at. It once pointed at a second
+  # long-lived branch that had fallen 22 commits behind, which is exactly that
+  # failure — and the reason there is only one long-lived branch now.
   editURL = "https://github.com/carlosprados/keystone/edit/main/site/content/"
   # The look follows carlos.enredando.me: dark by default, cyan accent, the
   # Space Grotesk / Inter / JetBrains Mono trio. "auto" leads so a visitor whose

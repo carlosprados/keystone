@@ -1,14 +1,15 @@
 name: ci
 
+# main is the only long-lived branch. Work happens on short-lived keystone/*
+# branches that reach main by pull request and are deleted on merge, so the two
+# triggers below cover everything: the PR gate, and the merge that lands it.
 on:
   push:
     branches:
       - main
-      - develop
   pull_request:
     branches:
       - main
-      - develop
 
 permissions:
   contents: read
