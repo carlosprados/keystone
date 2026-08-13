@@ -32,7 +32,11 @@ enableGitInfo = true
   # points at a commit Pages has already published, and Pages discards a second
   # deployment of the same commit — see .github/workflows/pages.yml.
   version = "v0.5.0"
-  editURL = "https://github.com/carlosprados/keystone/edit/develop/site/content/"
+  # The "edit this page" button. It points at `main` because that is the branch
+  # this site is built from: an edit link into any other branch opens a version
+  # of the page the reader is not looking at. It pointed at `develop` until
+  # `develop` had fallen 22 commits behind, which is exactly that failure.
+  editURL = "https://github.com/carlosprados/keystone/edit/main/site/content/"
   # The look follows carlos.enredando.me: dark by default, cyan accent, the
   # Space Grotesk / Inter / JetBrains Mono trio. "auto" leads so a visitor whose
   # system asks for light gets light, exactly as the blog behaves; the two named
