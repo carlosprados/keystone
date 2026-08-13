@@ -151,4 +151,7 @@ curl -X POST --data-binary @plan.toml "localhost:8080/v1/plan/apply?dry=true"
 ```
 
 A dry run loads and validates every recipe, verifies signatures and computes the
-reconcile plan — without installing or starting anything.
+reconcile plan — without installing or starting anything. It also rejects any key
+the agent does not recognise, which a real apply tolerates on purpose so that a
+recipe can outrun the agents it is published to. The
+[TOML cheat sheet](../toml/#traps) has that trade in full.

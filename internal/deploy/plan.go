@@ -11,6 +11,12 @@ import (
 // Plan defines a minimal deployment plan for Keystone demo/apply.
 type Plan struct {
 	Components []Component `toml:"components"`
+
+	// UnknownFields lists keys the file carried that this struct does not
+	// declare. Same contract as Recipe.UnknownFields: reported, not rejected,
+	// so the authoring path can fail on them and the runtime path cannot be
+	// stranded by them.
+	UnknownFields []string `toml:"-"`
 }
 
 type Component struct {
@@ -23,10 +29,15 @@ func Load(path string) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A plan is two fields per component, so a misspelling here is both easy and
+	// total — `recipie = "..."` leaves the path empty. Recorded, not rejected;
+	// the dry run is what turns it into an error.
 	var p Plan
-	if err := toml.Unmarshal(b, &p); err != nil {
+	unknown, err := validate.DecodeTOML(b, &p)
+	if err != nil {
 		return nil, err
 	}
+	p.UnknownFields = unknown
 	var m map[string]any
 	if err := toml.Unmarshal(b, &m); err != nil {
 		return nil, err

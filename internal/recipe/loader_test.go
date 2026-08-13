@@ -1,6 +1,9 @@
 package recipe
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 const processRecipe = `
 [metadata]
@@ -154,5 +157,66 @@ command = "./x"
 		if _, err := Unmarshal([]byte(toml)); err == nil {
 			t.Errorf("%s: Unmarshal accepted an invalid recipe, want error", name)
 		}
+	}
+}
+
+// TestUnmarshalReportsUnknownFields is the other half of
+// TestUnmarshalIgnoresUnknownFields. Tolerating a field an older agent has
+// never heard of is what lets a recipe reach a mixed-version fleet; the price
+// is that a typo looks exactly the same from here. So the loader still accepts
+// the recipe, but it says what it did not understand — and it says where, since
+// a key alone is hard to find in a file that repeats [[artifacts]] four times.
+//
+// If this test fails while TestUnmarshalIgnoresUnknownFields still passes, the
+// tolerance became silent again, which is the bug this pair exists to prevent.
+func TestUnmarshalReportsUnknownFields(t *testing.T) {
+	const withTypo = `
+[metadata]
+name = "app"
+version = "1.0.0"
+[lifecycle.run]
+restart_polciy = "never"
+[lifecycle.run.exec]
+command = "./app"
+`
+	r, err := Unmarshal([]byte(withTypo))
+	if err != nil {
+		t.Fatalf("recipe with an unknown field was rejected: %v", err)
+	}
+	if len(r.UnknownFields) != 1 {
+		t.Fatalf("UnknownFields = %v, want exactly one entry", r.UnknownFields)
+	}
+	got := r.UnknownFields[0]
+	if !strings.Contains(got, "lifecycle.run.restart_polciy") {
+		t.Errorf("report %q does not name the offending key", got)
+	}
+	if !strings.Contains(got, "line 6") {
+		t.Errorf("report %q does not carry the line number", got)
+	}
+	// The typo is the whole point: the field it was aiming at stayed unset, and
+	// an empty restart policy resolves to "always" further down.
+	if r.Lifecycle.Run.RestartPolicy != "" {
+		t.Errorf("RestartPolicy = %q, want empty — the typo must not have set it", r.Lifecycle.Run.RestartPolicy)
+	}
+}
+
+// A recipe whose keys are all understood must report nothing, or the warning
+// becomes noise an operator learns to scroll past.
+func TestUnmarshalReportsNothingWhenClean(t *testing.T) {
+	const clean = `
+[metadata]
+name = "app"
+version = "1.0.0"
+[lifecycle.run]
+restart_policy = "never"
+[lifecycle.run.exec]
+command = "./app"
+`
+	r, err := Unmarshal([]byte(clean))
+	if err != nil {
+		t.Fatalf("valid recipe rejected: %v", err)
+	}
+	if len(r.UnknownFields) != 0 {
+		t.Errorf("UnknownFields = %v, want none", r.UnknownFields)
 	}
 }

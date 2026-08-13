@@ -5,6 +5,7 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/carlosprados/keystone/internal/store"
@@ -51,12 +52,29 @@ type CommandHandler interface {
 	GetHealth() *HealthStatus
 }
 
+// ErrInvalidInput marks a failure caused by what the caller submitted rather
+// than by anything wrong on the device. Transports map it to a client error:
+// answering 500 to a malformed plan tells an operator the agent broke, and tells
+// automation to retry — which it will do forever, since the file will not fix
+// itself in the meantime.
+//
+// Wrap with %w at the point the input is judged; check with errors.Is.
+var ErrInvalidInput = errors.New("invalid input")
+
 // PlanStatus represents the current state of the deployment plan.
 type PlanStatus struct {
-	PlanPath   string                `json:"planPath"`
-	Status     string                `json:"status"`
-	Error      string                `json:"error,omitempty"`
-	Components []store.ComponentInfo `json:"components"`
+	PlanPath string `json:"planPath"`
+	Status   string `json:"status"`
+	Error    string `json:"error,omitempty"`
+	// UnknownFields lists keys the applied plan and its recipes carry that this
+	// agent does not understand, each as `"lifecycle.run.restart_polciy"
+	// (line 6)`. It is not an error: the agent may predate the field, and
+	// refusing would strand a device over a recipe newer than its binary. It is
+	// here so that a typo — which is the same thing seen from the other side —
+	// is visible without reading the agent's logs. A dry-run apply refuses
+	// outright instead.
+	UnknownFields []string              `json:"unknownFields,omitempty"`
+	Components    []store.ComponentInfo `json:"components"`
 }
 
 // GraphInfo represents the dependency graph of the current plan.

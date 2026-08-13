@@ -30,10 +30,11 @@ func (a *Agent) GetPlanStatus() *adapter.PlanStatus {
 		}
 	}
 	return &adapter.PlanStatus{
-		PlanPath:   a.planPath,
-		Status:     a.planStatus,
-		Error:      a.planErr,
-		Components: components,
+		PlanPath:      a.planPath,
+		Status:        a.planStatus,
+		Error:         a.planErr,
+		UnknownFields: append([]string(nil), a.planUnknown...),
+		Components:    components,
 	}
 }
 

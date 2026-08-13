@@ -45,6 +45,11 @@ curl -X POST --data-binary @plan.toml "http://127.0.0.1:8080/v1/plan/apply?dry=t
 A dry run logs the stop, start and no-touch sets and updates the reported plan
 status to `dry-run`, but installs and starts nothing.
 
+It is also stricter than a real apply on one point: it **refuses any key the
+agent does not recognise**, where an apply accepts it and reports it. That is
+deliberate — see [the TOML cheat sheet](../../reference/toml/#traps) for why the
+two differ and which one you want when.
+
 ## What an apply actually does
 
 ```mermaid

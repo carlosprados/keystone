@@ -594,6 +594,10 @@ components:
           type: string
         status:
           type: string
+        unknownFields:
+          items:
+            type: string
+          type: array
       type: object
     AdapterRestartDryResult:
       properties:

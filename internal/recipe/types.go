@@ -171,6 +171,17 @@ type Recipe struct {
 	Lifecycle    Lifecycle    `toml:"lifecycle"`
 	Resources    Resources    `toml:"resources"`
 	Dependencies []Dependency `toml:"dependencies"`
+
+	// UnknownFields lists the keys the file carried that this struct does not
+	// declare, each as `"lifecycle.run.restart_polciy" (line 6)`. Loading does
+	// not fail on them — an agent older than a field must still run the recipe,
+	// which is what lets a new field reach a mixed-version fleet. A dry run
+	// turns this list into an error and the agent logs it, so a typo is loud
+	// where it is cheap to fix and visible where it is not.
+	//
+	// Not a TOML field: it is derived from the parse, and a recipe that tried to
+	// set it would be reporting on itself.
+	UnknownFields []string `toml:"-"`
 }
 
 // Health probe definition

@@ -3,6 +3,7 @@ package deploy
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,5 +38,31 @@ name = "svc"
 `)
 	if _, err := Load(p); err == nil {
 		t.Fatal("plan with a component missing 'recipe' was accepted, want error")
+	}
+}
+
+// A plan is two keys per component, so a misspelling is total: `recipie` leaves
+// the path empty and the component resolves to nothing. Loading still succeeds,
+// for the same fleet reason recipes tolerate unknown keys, but the plan carries
+// what it did not understand so the dry run can refuse it.
+func TestLoadPlanReportsUnknownFields(t *testing.T) {
+	p := writePlan(t, `
+[[components]]
+name = "svc"
+recipe = "svc.recipe.toml"
+recipie = "typo.recipe.toml"
+`)
+	plan, err := Load(p)
+	if err != nil {
+		t.Fatalf("plan with an unknown field was rejected: %v", err)
+	}
+	if len(plan.UnknownFields) != 1 {
+		t.Fatalf("UnknownFields = %v, want exactly one entry", plan.UnknownFields)
+	}
+	if !strings.Contains(plan.UnknownFields[0], "recipie") {
+		t.Errorf("report %q does not name the offending key", plan.UnknownFields[0])
+	}
+	if plan.Components[0].RecipePath != "svc.recipe.toml" {
+		t.Errorf("RecipePath = %q, the real key must still win", plan.Components[0].RecipePath)
 	}
 }

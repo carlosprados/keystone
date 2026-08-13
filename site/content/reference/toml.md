@@ -1,19 +1,26 @@
 +++
 title = "TOML cheat sheet"
 weight = 74
-description = "The four constructs every recipe and plan is made of, and the mistakes the parser will not catch for you."
+description = "The four constructs every recipe and plan is made of, and where a misspelled field shows up."
 +++
 
 Recipes and plans are TOML, and nothing else. The whole format reduces to four
-constructs — this page is those four, the shape they build, and the handful of
-mistakes that do **not** produce an error message.
+constructs — this page is those four, the shape they build, and the mistakes
+worth knowing about.
 
 {{% notice style="warning" title="Read this first" %}}
-**A misspelled field name is not an error.** Keystone ignores keys it does not
-recognise, so `restart_polciy = "never"` parses cleanly, sets nothing, and the
-component ends up with the default — `always`. You asked for a process that never
-restarts and you got one that restarts forever, silently. See
-[Traps](#traps-the-parser-will-not-catch) before you trust a file you have edited by hand.
+**A misspelled field name does not stop an apply.** Keystone ignores keys it does
+not recognise, on purpose: one recipe is published to many agents, and an agent
+older than a field has to run the recipe rather than refuse it. The cost is that
+`restart_polciy = "never"` sets nothing, and the component falls back to the
+default — `always`.
+
+So the agent reports what it ignored instead of hiding it, and a **dry run
+refuses it outright**. Run one before you trust a file you have edited by hand:
+
+```bash
+curl -X POST --data-binary @plan.toml "localhost:8080/v1/plan/apply?dry=true"
+```
 {{% /notice %}}
 
 ## The four constructs
@@ -202,14 +209,17 @@ recipe = "com.acme.api:1.4.0"                # …or name:version from the store
 There is no ordering in a plan. Order comes from `[[dependencies]]` in the
 recipes — see [Dependencies](../../concepts/dependencies/).
 
-## Traps the parser will not catch
+## Traps
 
-### An unknown key is silently ignored
+### An unknown key does not stop the apply
 
-The decoder does not run in strict mode and the schema does not forbid extra
-properties, so anything Keystone does not recognise is dropped without a word.
-The failure is not that the field is missing — it is that the **default takes
-over**, and the defaults are deliberately permissive:
+Keystone accepts a key it does not recognise. That is deliberate, and it is what
+makes a fleet upgradeable: one recipe is published to many devices, and an agent
+whose binary predates a field must still run the recipe rather than refuse it.
+`[artifacts.delta]` reached existing fleets on exactly that property.
+
+The cost is that a typo looks identical to a field from the future. The field you
+meant stays unset, and the **default takes over**:
 
 ```toml
 [lifecycle.run]
@@ -219,10 +229,22 @@ restart_polciy = "never"       # typo: ignored → restart_policy stays empty
 An empty `restart_policy` resolves to `always`. The component you wanted dead
 after one run restarts forever.
 
+What the agent will not do is hide it. Every key it did not understand is named,
+with its line, in three places:
+
+| Where | What happens |
+|---|---|
+| **A dry run** | **Refuses the plan.** This is the authoring path: you are one edit away from a fix and nothing is deployed yet |
+| The agent's log | `WARNING ignoring recipe recipes/api.toml (component api): "lifecycle.run.restart_polciy" (line 6)` |
+| `GET /v1/plan/status` | an `unknownFields` array, for an operator who is not reading stdout |
+
+If `unknownFields` is non-empty on a device, either that agent is older than the
+recipe — which is fine and expected mid-rollout — or somebody has a typo.
+
 ### A key can land in the wrong table without complaint
 
-A key belongs to the header above it. This is valid TOML, and it does the wrong
-thing for the same reason as the typo:
+A key belongs to the header above it. This is valid TOML, and it lands as an
+unknown field for the same reason the typo does:
 
 ```toml
 [lifecycle.run.exec]
@@ -231,12 +253,13 @@ restart_policy = "never"       # this is exec.restart_policy — nothing reads i
 ```
 
 Put scalars **before** the sub-table headers, or you will keep adding keys to the
-last table you opened rather than the one you meant.
+last table you opened rather than the one you meant. A dry run catches this one
+too.
 
-### What *is* caught
+### What is rejected outright
 
-Not everything slips through. A wrong **value** is rejected loudly, even though a
-wrong **key** is not:
+A wrong **value** never gets the benefit of the doubt, at any stage — there is no
+fleet-compatibility argument for a value the schema already enumerates:
 
 ```
 restart_policy = "sometimes"
@@ -244,9 +267,10 @@ restart_policy = "sometimes"
 
 version = 1.4
   → toml: float cannot be assigned to string
-```
 
-So: types and enumerations are enforced, field names are not.
+[artifacts]                    # single brackets on a repeatable table
+  → toml: cannot store a table in a slice
+```
 
 ### `capabilities = []` is not the same as omitting it
 
@@ -268,9 +292,19 @@ curl -X POST --data-binary @plan.toml "localhost:8080/v1/plan/apply?dry=true"
 A dry run parses the plan, loads every recipe, verifies signatures, enforces the
 schema and computes the reconcile plan — without installing or starting anything.
 It catches malformed TOML, bad types, invalid enum values, missing required
-fields and unresolvable dependencies.
+fields, unresolvable dependencies **and every key the agent does not recognise**,
+which a real apply deliberately tolerates.
 
-**It does not catch a misspelled field name**, for the reason above. For a file
-you have hand-edited, the check that works is reading back what the agent
-actually loaded — `GET /v1/plan/status` and the component's behaviour — rather
-than trusting that a clean apply means the file said what you meant.
+That last one is why a dry run is worth running on a file you have hand-edited
+even when you are sure of it: it is the only place a misspelled field is an
+error rather than a line in a log.
+
+```
+unknown fields, which the agent would ignore:
+  recipe recipes/api.toml (component api): "lifecycle.run.restart_polciy" (line 6)
+```
+
+One caveat worth stating: a dry run is checked against **the agent you ran it
+on**. A recipe using a field newer than that agent's binary will be rejected by
+it and accepted by a newer one — which is the same tolerance seen from the other
+end. Run the dry run against an agent at least as new as the recipe.
