@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	semver "github.com/Masterminds/semver/v3"
+	"github.com/carlosprados/keystone/internal/adapter"
 	"github.com/carlosprados/keystone/internal/deploy"
 	"github.com/carlosprados/keystone/internal/recipe"
 	sysrt "github.com/carlosprados/keystone/internal/runtime"
@@ -34,6 +35,39 @@ type plannedState struct {
 	indegrees map[string]int
 }
 
+// unknownFieldReports names every key the plan and its recipes carried that the
+// agent does not understand, each already carrying its own line number.
+//
+// They are reported rather than refused because one recipe is published to many
+// agents: an agent older than a field must still run it. What that tolerance
+// costs is a silent typo, so the list surfaces twice — a dry run fails on it,
+// where the author is one edit away from a fix, and an apply logs it and puts it
+// in the plan status, where an operator can at least see it.
+func (p *plannedState) unknownFieldReports() []string {
+	var reports []string
+	for _, u := range p.plan.UnknownFields {
+		reports = append(reports, fmt.Sprintf("plan %s: %s", p.path, u))
+	}
+	// Sorted by component name: map iteration order would otherwise reshuffle
+	// the message between two runs over the same unchanged files.
+	for _, name := range sortedComponentNames(p.byName) {
+		comp := p.byName[name]
+		for _, u := range comp.rec.UnknownFields {
+			reports = append(reports, fmt.Sprintf("recipe %s (component %s): %s", comp.item.RecipePath, name, u))
+		}
+	}
+	return reports
+}
+
+func sortedComponentNames(m map[string]*plannedComponent) []string {
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 type reconcileActions struct {
 	stopTargets  map[string]bool
 	startTargets map[string]bool
@@ -56,6 +90,17 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 		return err
 	}
 
+	// A dry run is the authoring path: this is the one place where an unknown
+	// key is worth refusing, because the person who can fix it is right here and
+	// nothing is deployed yet. It returns before any state is touched.
+	unknown := desired.unknownFieldReports()
+	if dry && len(unknown) > 0 {
+		return fmt.Errorf("%w: unknown fields, which the agent would ignore: %s", adapter.ErrInvalidInput, strings.Join(unknown, "; "))
+	}
+	for _, u := range unknown {
+		log.Printf("[agent] WARNING ignoring %s — the agent does not know this field; a dry run rejects it", u)
+	}
+
 	a.mu.RLock()
 	oldPlanPath := a.planPath
 	oldPlanComps := append([]state.PlanComponent(nil), a.planComps...)
@@ -72,6 +117,7 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 		a.planPath = planPath
 		a.planStatus = "dry-run"
 		a.planErr = ""
+		a.planUnknown = nil
 		a.planComps = desired.planMap
 		a.mu.Unlock()
 		a.persistSnapshot()
@@ -83,6 +129,7 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 	a.planPath = planPath
 	a.planStatus = "applying"
 	a.planErr = ""
+	a.planUnknown = unknown
 	a.mu.Unlock()
 	a.persistSnapshot()
 

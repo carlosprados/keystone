@@ -67,6 +67,11 @@ type Agent struct {
 	planPath   string
 	planStatus string // idle | applying | running | failed
 	planErr    string
+	// planUnknown holds the keys the current plan and its recipes carry that
+	// this agent does not understand. It is not an error — the agent may simply
+	// predate the field — but it is the difference between a typo that is
+	// invisible and one an operator can see without reading the logs.
+	planUnknown []string
 	// persistence
 	stateDir string
 	// lastSnapshot fingerprints the last snapshot actually written, so an idle

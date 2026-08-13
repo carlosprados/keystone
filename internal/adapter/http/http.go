@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -353,7 +354,14 @@ func (a *Adapter) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.handler.ApplyPlanContent(string(body), dry); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// A plan the caller got wrong is a 4xx. The distinction is not cosmetic:
+		// a 500 tells automation to retry, and a file with a typo in it will
+		// still have that typo on the next attempt.
+		status := http.StatusInternalServerError
+		if errors.Is(err, adapter.ErrInvalidInput) {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)

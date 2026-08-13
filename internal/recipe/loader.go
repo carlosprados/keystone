@@ -23,15 +23,21 @@ func Unmarshal(b []byte) (*Recipe, error) {
 	return parseAndValidate(b)
 }
 
-// parseAndValidate decodes a recipe and enforces both the path-safety of its
-// metadata and the JSON-Schema contract. Schema errors are now returned (no
-// longer best-effort/discarded), so malformed recipes are rejected before they
-// can drive process/container execution.
+// parseAndValidate decodes a recipe and enforces the path-safety of its
+// metadata and the JSON-Schema contract. Schema errors are returned (no longer
+// best-effort/discarded), so malformed recipes are rejected before they can
+// drive process/container execution.
+//
+// Unknown keys are recorded on the Recipe rather than rejected: the authoring
+// path fails on them, the runtime path logs them. See validate.DecodeTOML for
+// the two failure modes that split.
 func parseAndValidate(b []byte) (*Recipe, error) {
 	var r Recipe
-	if err := toml.Unmarshal(b, &r); err != nil {
+	unknown, err := validate.DecodeTOML(b, &r)
+	if err != nil {
 		return nil, err
 	}
+	r.UnknownFields = unknown
 	if err := validateMetadata(&r); err != nil {
 		return nil, err
 	}
