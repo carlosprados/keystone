@@ -5,7 +5,9 @@ description = "Every field, its type and its default, in one place."
 +++
 
 Both are TOML, and both are validated against a schema on load — invalid input is
-rejected, not best-effort parsed.
+rejected, not best-effort parsed. This page is the field list; if you want the
+syntax itself — which tables repeat, what the dots mean, and which mistakes the
+parser stays quiet about — read the [TOML cheat sheet](../toml/) first.
 
 ## Plan
 

@@ -8,6 +8,11 @@ A recipe describes **one piece of software**: where to get it, how to install it
 how to run it, how to tell whether it is healthy, and what it needs from other
 components.
 
+This page is about what the fields mean. If the TOML itself is what you are
+fighting — why `[[artifacts]]` has two brackets, or why a misspelled field does
+not raise an error — start with the
+[TOML cheat sheet](../../reference/toml/).
+
 ```mermaid
 flowchart LR
     R["recipe"] --> M["metadata"]
