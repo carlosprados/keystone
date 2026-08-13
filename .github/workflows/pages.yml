@@ -7,8 +7,10 @@ name: docs
 # `task docs:check:diagrams` before pushing. Relearn renders mermaid in the
 # browser, so nothing here needs one.
 #
-# Deploys from main only: the site documents features as released, and publishing
-# from develop would describe flags that a downloaded binary does not have yet.
+# Deploys from main only. The site documents features as released, so publishing
+# from a branch that has not landed would describe flags a downloaded binary does
+# not have yet. main is also the only long-lived branch, so "the published site"
+# and "the branch of record" are the same thing by construction.
 #
 # Triggers, and why:
 #   - push to main      every merge, so the published docs never lag the branch
