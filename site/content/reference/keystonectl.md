@@ -36,6 +36,7 @@ source <(keystonectl completion bash)   # or zsh, fish, powershell
 | `apply <plan.toml>` | Upload and apply a deployment plan |
 | `apply-dry <plan.toml>` | Apply a plan in dry-run mode and show the reconcile |
 | `graph` | Show the dependency graph and a valid start order |
+| `reconcile` | Repair the plan in effect |
 | `status` | Show the applied plan, its status and its components |
 | `stop-plan` | Stop every component in the plan |
 
@@ -67,7 +68,10 @@ source <(keystonectl completion bash)   # or zsh, fish, powershell
 
 | Command | What it does |
 |---|---|
+| `manifest` | Create, sign and check dataset manifests |
 | `sha256 <file>` | Compute the SHA-256 of a local file |
+| `sign <file>` | Sign a file, producing a detached <file>.sig |
+| `verify <file>` | Verify a detached signature the way the agent will |
 
 ### Global flags
 

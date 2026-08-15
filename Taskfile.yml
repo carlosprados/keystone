@@ -5,7 +5,9 @@ vars:
     sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
   COMMIT:
     sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
-  LDFLAGS: -ldflags "-X github.com/carlosprados/keystone/internal/version.Version={{.VERSION}} -X github.com/carlosprados/keystone/internal/version.Commit={{.COMMIT}}"
+  BUILD_DATE:
+    sh: date -u +%Y-%m-%dT%H:%M:%SZ
+  LDFLAGS: -ldflags "-X github.com/carlosprados/keystone/internal/version.Version={{.VERSION}} -X github.com/carlosprados/keystone/internal/version.Commit={{.COMMIT}} -X github.com/carlosprados/keystone/internal/version.Date={{.BUILD_DATE}}"
 
 tasks:
   default:

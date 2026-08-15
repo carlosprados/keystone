@@ -92,6 +92,7 @@ privileged surface:
 | `GET /v1/plan/status` | GET | Get current plan status |
 | `GET /v1/plan/graph` | GET | Get dependency graph |
 | `POST /v1/plan/apply` | POST | Apply a deployment plan |
+| `POST /v1/plan/reconcile` | POST | Repair the plan in effect (restart dead components) |
 | `POST /v1/plan/stop` | POST | Stop all components |
 
 **Apply Plan Request:**

@@ -17,8 +17,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/carlosprados/keystone/internal/adapter"
 	"github.com/carlosprados/keystone/internal/artifact"
+	"github.com/carlosprados/keystone/internal/clock"
 	"github.com/carlosprados/keystone/internal/config"
+	"github.com/carlosprados/keystone/internal/dataset"
 	"github.com/carlosprados/keystone/internal/deploy"
 	"github.com/carlosprados/keystone/internal/metrics"
 	"github.com/carlosprados/keystone/internal/recipe"
@@ -36,6 +39,9 @@ type Options struct {
 	// InsecureSkipVerify disables the mandatory artifact integrity policy
 	// (sha256 + signature). Intended for local development/demo only.
 	InsecureSkipVerify bool
+	// ClockPolicy decides what happens when the system clock is behind the
+	// agent's own evidence of the current time. Empty means high-water.
+	ClockPolicy clock.Policy
 }
 
 // Agent is the top-level runtime handle for Keystone.
@@ -72,6 +78,12 @@ type Agent struct {
 	// predate the field — but it is the difference between a typo that is
 	// invisible and one an operator can see without reading the logs.
 	planUnknown []string
+	// lastReconcile and lastReconcileResult record the most recent ReconcileNow
+	// pass. They are reported on the plan status so that a periodic reconcile is
+	// visible without reading the logs: a timer nobody can observe is a timer
+	// nobody trusts.
+	lastReconcile       time.Time
+	lastReconcileResult string
 	// persistence
 	stateDir string
 	// lastSnapshot fingerprints the last snapshot actually written, so an idle
@@ -87,8 +99,20 @@ type Agent struct {
 	trustPool          *x509.CertPool
 	trustPath          string
 	insecureSkipVerify bool
+	// clock decides what time certificate validity is judged against. A gateway
+	// with no RTC boots at 1970 and would otherwise reject every valid
+	// certificate as not yet valid.
+	clock *clock.Source
 	// recipes
 	recipes *store.RecipeStore
+	// datasets is the on-disk tree of refreshable data, and datasetSpecs /
+	// datasetState are what the current plan asked for and what is actually
+	// being served. Kept separate from components because a dataset outlives
+	// any single apply: the component restarts, the data does not.
+	datasets     *dataset.Store
+	datasetSpecs map[string]dataset.Spec
+	datasetBinds map[string]datasetBinding
+	datasetState map[string]state.DatasetState
 }
 
 // New creates an Agent with the provided options.
@@ -114,6 +138,17 @@ func New(opts Options) *Agent {
 		ctx:            ctx,
 		ctxCancel:      cancel,
 	}
+	a.datasets = dataset.NewStore(filepath.Join("runtime", "datasets"))
+	a.datasetSpecs = map[string]dataset.Spec{}
+	a.datasetBinds = map[string]datasetBinding{}
+	a.datasetState = map[string]state.DatasetState{}
+	a.clock = clock.New(opts.ClockPolicy, a.stateDir)
+	if !a.clock.Trusted() {
+		log.Printf("[agent] WARNING: the system clock reads %s, which is behind known-good time %s. "+
+			"Certificate validity is being checked against the later of the two (source: %s). "+
+			"A device with no RTC needs its clock set, or signatures will keep looking wrong.",
+			time.Now().UTC().Format(time.RFC3339), a.clock.Now().Format(time.RFC3339), a.clock.Origin())
+	}
 	// Set artifact cache limit from env (bytes). Default: 2 GiB.
 	a.artifactCacheLimit = 2 * 1024 * 1024 * 1024
 	if v := os.Getenv("KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES"); v != "" {
@@ -135,6 +170,9 @@ func New(opts Options) *Agent {
 		a.planStatus = snap.Plan.Status
 		a.planErr = snap.Plan.Error
 		a.planComps = snap.PlanComponents
+		for _, ds := range snap.Datasets {
+			a.datasetState[ds.Name] = ds
+		}
 
 		resume := a.planPath != "" && shouldResumeLastPlan(a.planStatus)
 
@@ -186,6 +224,7 @@ func New(opts Options) *Agent {
 		}
 	}
 	a.startStatePoller()
+	a.startDatasetRefresher()
 	return a
 }
 
@@ -206,6 +245,10 @@ func (a *Agent) startStatePoller() {
 			}
 			a.refreshComponentStates()
 			a.persistSnapshot()
+			// Cheap: only writes when the mark has moved on by 15 minutes.
+			a.clock.Tick()
+			metrics.SetClockTrusted(a.clock.Trusted())
+			a.publishDatasetMetrics()
 		}
 	}()
 }
@@ -261,6 +304,13 @@ func (a *Agent) Close() error {
 	// the last applied plan automatically.
 	if err := a.stopPlanInternal(false); err != nil {
 		log.Printf("[agent] warning: stop plan during close failed: %v", err)
+	}
+	// Record how far time has got before we lose the chance: this mark is what
+	// stops the clock going backwards across a restart.
+	if a.clock != nil {
+		if err := a.clock.Persist(); err != nil {
+			log.Printf("[agent] warning: could not persist the clock mark: %v", err)
+		}
 	}
 	// Cancel the agent context to signal all operations to stop
 	if a.ctxCancel != nil {
@@ -502,6 +552,12 @@ func (a *Agent) applyPlan(planPath string) error {
 					return err
 				}
 			}
+			// Datasets before the start hook — and before the install script,
+			// which may well want to ingest them. A discovery product must not
+			// come up with no OUI list and start reporting unknown vendors.
+			if err := a.installDatasets(ctx, it.Name, r, workDir); err != nil {
+				return err
+			}
 			// Run install script if any (idempotent via .installed marker)
 			installedMarker := filepath.Join(workDir, ".installed")
 			if r.Lifecycle.Install.Script != "" {
@@ -574,7 +630,7 @@ func (a *Agent) applyPlan(planPath string) error {
 			}
 
 			// Build options
-			opts := buildRunnerOptions(it.Name, r, workDir)
+			opts := buildRunnerOptions(it.Name, r, workDir, a.datasetEnv(r))
 			if runType == "" || runType == "process" {
 				log.Printf("[agent] component=%s type=process cwd=%s cmd=%s args=%v msg=starting component", it.Name, workDir, opts.Command, opts.Args)
 			} else {
@@ -623,6 +679,12 @@ func (a *Agent) applyPlan(planPath string) error {
 						a.handles[it.Name] = h
 						ci, ok2 := a.comps.Get(it.Name)
 						if ok2 {
+							// Record it running here, rather than waiting for
+							// refreshComponentStates to notice on its next 500ms
+							// pass. That gap was long enough for a reconcile
+							// arriving right after an apply to judge every
+							// component un-reusable and restart the whole stack.
+							ci.State = "running"
 							// Extract PID for process handles
 							if ph, ok := h.(*runner.ProcessHandle); ok {
 								ci.PID = ph.PID()
@@ -807,6 +869,24 @@ func (a *Agent) applyPlan(planPath string) error {
 
 // stageArtifactToWorkDir copies a downloaded artifact into the component workDir
 // using the artifact basename. Existing files are overwritten.
+// verificationTime is the time certificate validity is judged against: the
+// later of the system clock and the agent's own evidence that time has already
+// passed. Under the strict clock policy it returns an error instead, refusing
+// to verify anything while the clock is behind that evidence.
+func (a *Agent) verificationTime() (time.Time, error) {
+	if a.clock == nil {
+		// Only reachable from tests that build an Agent literal. The zero time
+		// tells x509 to use the system clock, which is the old behaviour.
+		return time.Time{}, nil
+	}
+	at, err := a.clock.VerificationTime()
+	if err != nil {
+		// Retrying is right here: the clock fixes itself the moment NTP runs.
+		return time.Time{}, fmt.Errorf("%w: %v", adapter.ErrNotReady, err)
+	}
+	return at, nil
+}
+
 // verifyRecipeFileSignature enforces that a recipe loaded from a filesystem
 // path carries a valid detached signature before any of its lifecycle hooks
 // (install/run/shutdown scripts — arbitrary shell) can run. The signature is a
@@ -834,8 +914,14 @@ func (a *Agent) verifyRecipeFileSignature(recipePath string) error {
 	if certPath == "" {
 		return fmt.Errorf("recipe %q rejected: no certificate for signature verification (set KEYSTONE_LEAF_CERT or provide %s.crt)", recipePath, filepath.Base(recipePath))
 	}
-	if err := security.VerifyDetached(recipePath, sigPath, certPath, a.trustPool); err != nil {
-		return fmt.Errorf("recipe signature verify failed for %s: %w", filepath.Base(recipePath), err)
+	now, err := a.verificationTime()
+	if err != nil {
+		return fmt.Errorf("recipe %q rejected: %w", recipePath, err)
+	}
+	if err := security.VerifyDetachedAt(recipePath, sigPath, certPath, a.trustPool, now); err != nil {
+		// The caller's fault, not the device's: a signature that does not
+		// validate will not start validating on a retry.
+		return fmt.Errorf("%w: recipe signature verify failed for %s: %v", adapter.ErrInvalidInput, filepath.Base(recipePath), err)
 	}
 	return nil
 }
@@ -854,10 +940,10 @@ func (a *Agent) ensureAndVerifyArtifact(artDir, workDir string, adef recipe.Arti
 
 	if !a.insecureSkipVerify {
 		if strings.TrimSpace(adef.SHA256) == "" {
-			return fmt.Errorf("artifact %q rejected: sha256 is required (use --insecure-skip-verify for dev)", adef.URI)
+			return fmt.Errorf("%w: artifact %q rejected: sha256 is required (use --insecure-skip-verify for dev)", adapter.ErrInvalidInput, adef.URI)
 		}
 		if adef.SigURI == "" {
-			return fmt.Errorf("artifact %q rejected: sig_uri is required (use --insecure-skip-verify for dev)", adef.URI)
+			return fmt.Errorf("%w: artifact %q rejected: sig_uri is required (use --insecure-skip-verify for dev)", adapter.ErrInvalidInput, adef.URI)
 		}
 		if a.trustPool == nil {
 			return fmt.Errorf("artifact %q rejected: no trust bundle configured; set KEYSTONE_TRUST_BUNDLE (or --insecure-skip-verify for dev)", adef.URI)
@@ -891,8 +977,12 @@ func (a *Agent) ensureAndVerifyArtifact(artDir, workDir string, adef recipe.Arti
 		if certPath == "" {
 			return fmt.Errorf("no certificate specified for signature verification")
 		}
-		if err := security.VerifyDetached(path, sigPath, certPath, a.trustPool); err != nil {
-			return fmt.Errorf("signature verify failed for %s: %w", filepath.Base(path), err)
+		now, err := a.verificationTime()
+		if err != nil {
+			return fmt.Errorf("artifact %q rejected: %w", adef.URI, err)
+		}
+		if err := security.VerifyDetachedAt(path, sigPath, certPath, a.trustPool, now); err != nil {
+			return fmt.Errorf("%w: signature verify failed for %s: %v", adapter.ErrInvalidInput, filepath.Base(path), err)
 		}
 	}
 
@@ -1111,7 +1201,7 @@ func validateRunSecurity(r *recipe.Recipe) error {
 	return nil
 }
 
-func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Options {
+func buildRunnerOptions(name string, r *recipe.Recipe, workDir string, datasetEnv []string) runner.Options {
 	runType := r.Lifecycle.Run.Type
 	if runType == "" || runType == "process" {
 		// Process options
@@ -1119,6 +1209,7 @@ func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Op
 		for k, v := range r.Lifecycle.Run.Exec.Env {
 			env = append(env, fmt.Sprintf("%s=%s", k, v))
 		}
+		env = append(env, datasetEnv...)
 		return runner.Options{
 			Name:       name,
 			Command:    r.Lifecycle.Run.Exec.Command,
@@ -1254,13 +1345,14 @@ func (a *Agent) persistSnapshot() {
 		},
 		Components:     comps,
 		PlanComponents: a.planComps,
+		Datasets:       a.datasetSnapshot(),
 	}
 
 	// The state poller calls this twice a second and state.Save rewrites and
 	// renames the file every time; skip the write when nothing observable
 	// changed. Updated is deliberately excluded from the fingerprint, or every
 	// tick would look like a change.
-	fingerprint := fmt.Sprintf("%s|%s|%s|%v|%v", a.planPath, a.planStatus, a.planErr, comps, a.planComps)
+	fingerprint := fmt.Sprintf("%s|%s|%s|%v|%v|%v", a.planPath, a.planStatus, a.planErr, comps, a.planComps, snap.Datasets)
 	if fingerprint == a.lastSnapshot {
 		return
 	}
@@ -1370,7 +1462,7 @@ func (a *Agent) restartFromPlan(name string) error {
 	}
 
 	// Build options
-	opts := buildRunnerOptions(name, r, workDir)
+	opts := buildRunnerOptions(name, r, workDir, a.datasetEnv(r))
 	if runType == "" || runType == "process" {
 		log.Printf("[agent] restarting component %s: type=process cwd=%s cmd=%s args=%v", name, workDir, opts.Command, opts.Args)
 	} else {

@@ -29,13 +29,18 @@ func (a *Agent) GetPlanStatus() *adapter.PlanStatus {
 			components = append(components, ci)
 		}
 	}
-	return &adapter.PlanStatus{
+	ps := &adapter.PlanStatus{
 		PlanPath:      a.planPath,
 		Status:        a.planStatus,
 		Error:         a.planErr,
 		UnknownFields: append([]string(nil), a.planUnknown...),
 		Components:    components,
 	}
+	if !a.lastReconcile.IsZero() {
+		ps.LastReconcile = a.lastReconcile.Format(time.RFC3339)
+		ps.LastReconcileResult = a.lastReconcileResult
+	}
+	return ps
 }
 
 // GetPlanGraph returns the dependency graph and topological order.
@@ -217,10 +222,17 @@ func (a *Agent) RestartComponentDry(name string) *adapter.RestartDryResult {
 
 // GetHealth returns the agent health status.
 func (a *Agent) GetHealth() *adapter.HealthStatus {
-	return &adapter.HealthStatus{
-		Status:  "ok",
-		Uptime:  time.Since(a.start).String(),
-		Closed:  a.closed.Load(),
-		TimeUTC: time.Now().UTC().Format(time.RFC3339),
+	h := &adapter.HealthStatus{
+		Status:       "ok",
+		Uptime:       time.Since(a.start).String(),
+		Closed:       a.closed.Load(),
+		TimeUTC:      time.Now().UTC().Format(time.RFC3339),
+		ClockTrusted: true,
+		ClockSource:  "system",
 	}
+	if a.clock != nil {
+		h.ClockTrusted = a.clock.Trusted()
+		h.ClockSource = a.clock.Origin()
+	}
+	return h
 }

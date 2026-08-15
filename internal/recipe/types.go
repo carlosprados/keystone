@@ -155,10 +155,81 @@ type LifecycleShutdown struct {
 	Script string `toml:"script"`
 }
 
+// LifecycleReload tells the agent how to hand a component a refreshed dataset
+// without restarting it.
+//
+// Restarting is the thing to avoid: a discovery engine watching an industrial
+// network cannot go down every night because a vulnerability feed arrived. The
+// agent swaps the dataset's `current` symlink atomically and then runs this
+// hook so the component reopens what it reads.
+//
+// Signal applies to process components only — a container reports no PID to
+// signal, so those must use Script (`docker kill -s HUP …`, or an exec into the
+// container). Declaring Signal on a container is rejected rather than ignored:
+// a reload that silently does nothing leaves the component reading stale data
+// with no indication.
+type LifecycleReload struct {
+	// Signal to send to the component's main process, e.g. "SIGHUP".
+	Signal string `toml:"signal"`
+	// Script to run instead, from the component's working directory.
+	Script string `toml:"script"`
+	// Grace is how long to wait for the component to report healthy after a
+	// reload before the new dataset is kept. Empty means 30s.
+	Grace string `toml:"grace"`
+}
+
 type Lifecycle struct {
 	Install  LifecycleInstall  `toml:"install"`
 	Run      LifecycleRun      `toml:"run"`
+	Reload   LifecycleReload   `toml:"reload"`
 	Shutdown LifecycleShutdown `toml:"shutdown"`
+}
+
+// Dataset is a body of data the component reads and the agent keeps fresh: the
+// IEEE OUI list, a vulnerability feed, a model file.
+//
+// It is deliberately not an [[artifacts]] entry. An artifact is immutable and
+// identified by a digest declared in the recipe, which is right for code and
+// impossible for data published every night — the recipe would need re-signing
+// daily, and reconcile would answer a changed recipe by restarting the
+// component. A dataset's current version is instead discovered from a signed
+// manifest, and the recipe only says where to look and how often.
+//
+// Datasets also live in their own tree (runtime/datasets), which is what keeps
+// the artifact cache's LRU from deleting the version a rollback needs.
+type Dataset struct {
+	// Name identifies the dataset to the component. The agent exports its path
+	// as KEYSTONE_DATASET_<NAME>, upper-cased with dashes and dots as
+	// underscores.
+	Name string `toml:"name"`
+	// Manifest is the URL of the signed manifest naming the current version.
+	Manifest string `toml:"manifest"`
+	// SigURI overrides where the manifest's detached signature lives. Empty
+	// means "<manifest>.sig".
+	SigURI string `toml:"sig_uri"`
+	// CertURI is the signing certificate, when it is not provisioned on the
+	// device as KEYSTONE_LEAF_CERT.
+	CertURI string `toml:"cert_uri"`
+	// Refresh is how often to look for a new version, as a duration. A duration
+	// and not a cron expression on purpose: it is monotonic, so it survives a
+	// device whose clock jumps by decades when NTP first syncs, and it needs no
+	// timezone, no DST rule and no catch-up policy. Empty means 24h.
+	Refresh string `toml:"refresh"`
+	// MaxAge is how old the data may get before the agent reports it stale.
+	// Empty means three times Refresh. A scanner working from a feed nobody has
+	// been able to update in six weeks is worse than one that is down, because
+	// it still answers.
+	MaxAge string `toml:"max_age"`
+	// Keep is how many versions to retain on disk. Below 2 there is nothing to
+	// roll back to and no base for a delta. Zero means 2.
+	Keep int `toml:"keep"`
+	// Required fails the component's install when the dataset cannot be
+	// fetched at all. Default true: a discovery product with no OUI list is not
+	// degraded, it is wrong.
+	Required *bool `toml:"required"`
+	// Headers and GithubToken mirror [[artifacts]], for a hub behind auth.
+	Headers     map[string]string `toml:"headers"`
+	GithubToken string            `toml:"github_token"`
 }
 
 type ConfigDefaults struct {
@@ -168,6 +239,7 @@ type ConfigDefaults struct {
 type Recipe struct {
 	Metadata     Metadata     `toml:"metadata"`
 	Artifacts    []Artifact   `toml:"artifacts"`
+	Datasets     []Dataset    `toml:"datasets"`
 	Lifecycle    Lifecycle    `toml:"lifecycle"`
 	Resources    Resources    `toml:"resources"`
 	Dependencies []Dependency `toml:"dependencies"`

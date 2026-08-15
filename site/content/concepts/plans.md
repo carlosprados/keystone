@@ -188,6 +188,20 @@ apply failed and rollback was completed: api start: start readiness timeout
 
 If the rollback itself fails you get both errors, and the plan status is `failed`.
 
+**There has to be a different plan to go back to.** Re-applying the plan already
+in effect — the boot resume, or a NATS or MQTT command naming the current
+`planPath` — has no predecessor: the rollback would re-read the same file and
+re-apply the same failure, after stopping every component in the plan to get
+there. The agent detects this and says so instead:
+
+```
+apply failed and there is nothing to roll back to: runtime/plans/applied.toml
+was already the plan in effect, so the plan is not stopped and re-applied
+```
+
+The failed apply still unwinds whatever it started in the layer that failed.
+What it no longer does is stop the components it reused and never touched.
+
 ## Stopping
 
 ```bash

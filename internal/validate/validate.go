@@ -84,6 +84,23 @@ const recipeSchema = `{
         }
       }
     },
+    "datasets":{
+      "type":"array",
+      "items":{
+        "type":"object",
+        "required":["name","manifest"],
+        "properties":{
+          "name":{"type":"string"},
+          "manifest":{"type":"string"},
+          "sig_uri":{"type":"string"},
+          "cert_uri":{"type":"string"},
+          "refresh":{"type":"string"},
+          "max_age":{"type":"string"},
+          "keep":{"type":"integer"},
+          "required":{"type":"boolean"}
+        }
+      }
+    },
     "lifecycle":{
       "type":"object",
       "required":["run"],
@@ -109,6 +126,14 @@ const recipeSchema = `{
               }
             },
             "restart_policy":{"type":"string","enum":["never","on-failure","always"]}
+          }
+        },
+        "reload":{
+          "type":"object",
+          "properties":{
+            "signal":{"type":"string"},
+            "script":{"type":"string"},
+            "grace":{"type":"string"}
           }
         }
       }

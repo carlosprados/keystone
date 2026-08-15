@@ -122,6 +122,36 @@ the trust model, the measured savings and the current limits.
 | `timeout` | duration | `3s` | |
 | `failure_threshold` | int | `3` | |
 
+### `[[datasets]]`
+
+Data the agent keeps fresh without restarting the component. See
+[datasets]({{% relref "/concepts/datasets" %}}).
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `name` | string | — | Required. Becomes a directory and `KEYSTONE_DATASET_<NAME>`; same allow-list as a recipe name |
+| `manifest` | string | — | Required. URL (or local path) of the signed manifest naming the current version |
+| `sig_uri` | string | `<manifest>.sig` | Detached signature of the manifest |
+| `cert_uri` | string | `KEYSTONE_LEAF_CERT` | Signing certificate |
+| `refresh` | duration | `24h` | How often to look. Minimum 1m — a dataset is not a poll loop |
+| `max_age` | duration | 3 × `refresh` | Past this the dataset reports stale |
+| `keep` | integer | `2` | Versions retained. Minimum 2: below that there is no rollback target |
+| `required` | boolean | `true` | Whether a component may start without it |
+| `headers` | table | — | Extra HTTP headers, for a hub behind auth |
+
+### `[lifecycle.reload]`
+
+How a component is told its data changed, instead of being restarted.
+
+| Field | Type | Notes |
+|---|---|---|
+| `signal` | string | `SIGHUP`, `SIGUSR1` or `SIGUSR2`. Process components only — a container has no PID to signal, and declaring it on one is rejected |
+| `script` | string | Run instead of a signal, from the working directory. This is how a container reloads |
+| `grace` | duration | How long the component has to prove it survived. Default `30s` |
+
+Signals are an allow-list on purpose: a reload is meant to make a component
+reread a file, and `SIGKILL` would turn "your data changed" into an outage.
+
 ### `[lifecycle.shutdown]`
 
 | Field | Type | Notes |

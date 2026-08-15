@@ -109,3 +109,41 @@ keystonectl apply plan.toml     # PIDs unchanged, restart counters unchanged
 Which means a fleet manager can safely re-assert the desired state on a schedule —
 every hour, every boot, after every network partition — without churning
 workloads. Convergence loops need that property.
+
+## Reconciling on a timer
+
+The agent can do that re-assertion itself, with no fleet manager and no
+connectivity at all:
+
+```bash
+keystone --reconcile-interval 15m
+```
+
+What that repairs: a component whose restart policy gave up. When `RunManaged`
+exhausts `max_retries` the component is recorded `failed` and stays that way
+until a message arrives — which on an isolated gateway means forever. A periodic
+pass puts it back in the **start** bucket, because a dead component fails the
+reuse preconditions above, and leaves everything else alone.
+
+Run one by hand with `keystonectl reconcile`.
+
+Three properties worth knowing, because they are deliberate:
+
+- **It is off unless you ask for it.** Switching it on by default would change
+  how every device in a fleet behaves the moment the binary is updated. A pass
+  is not free either: it re-verifies every recipe signature and re-hashes every
+  recipe file.
+- **It never resurrects a plan you stopped.** `keystonectl stop-plan` is
+  remembered across reboots, and the timer honours it exactly as the boot resume
+  does. The pass reports `skipped` and changes nothing.
+- **It never rolls back.** An apply that fails rolls back to the previous plan;
+  for a re-apply the "previous plan" is the same plan, so a rollback would stop
+  every healthy component and re-apply the failure. On a timer that would repeat
+  for as long as the cause persisted.
+
+A pass that changes nothing — no plan applied, an apply already running, a plan
+you stopped — is a success reporting `skipped`, not an error.
+
+Watch it with `keystone_reconcile_repairs_total`. A device that repairs nothing
+and a device that repairs the same component every night are very different
+situations, and only that counter tells them apart.

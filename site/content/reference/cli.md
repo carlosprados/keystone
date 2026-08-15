@@ -14,6 +14,8 @@ running. This is that output:
 Usage of keystone:
   -api-token string
     	Bearer token required for the HTTP API (or KEYSTONE_API_TOKEN); required to bind a non-loopback address
+  -clock-policy string
+    	What to do when the system clock is behind known-good time: high-water (verify against the later of the two) or strict (refuse to verify) (default "high-water")
   -demo
     	Run a built-in demo: start a mock 3-component stack
   -http string
@@ -76,6 +78,10 @@ Usage of keystone:
     	NATS server URL (empty to disable NATS adapter)
   -nats-user string
     	NATS username
+  -reconcile-interval duration
+    	Re-apply the plan in effect on this interval so dead components are restarted (0 disables it)
+  -reconcile-jitter duration
+    	Spread reconcile passes across a fleet by this much (defaults to 10% of the interval)
   -version
     	Print version and exit
 ```

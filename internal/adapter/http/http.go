@@ -357,14 +357,51 @@ func (a *Adapter) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 		// A plan the caller got wrong is a 4xx. The distinction is not cosmetic:
 		// a 500 tells automation to retry, and a file with a typo in it will
 		// still have that typo on the next attempt.
-		status := http.StatusInternalServerError
-		if errors.Is(err, adapter.ErrInvalidInput) {
-			status = http.StatusBadRequest
-		}
-		http.Error(w, err.Error(), status)
+		http.Error(w, err.Error(), applyStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// handleDatasets lists what each dataset is serving.
+func (a *Adapter) handleDatasets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(a.handler.DatasetStates())
+}
+
+// handleDatasetsRefresh checks every dataset for a new version now.
+func (a *Adapter) handleDatasetsRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	a.handler.RefreshDatasets()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(a.handler.DatasetStates())
+}
+
+// applyStatus maps an apply failure onto a status code by one question: will
+// submitting the same thing again ever work?
+//
+//   - No, the content is wrong (a typo, a signature that does not validate):
+//     400, so automation stops rather than retrying a file that will not fix
+//     itself.
+//   - Yes, the device is not ready yet (its clock is behind known-good time
+//     under the strict policy): 503, which is precisely "try again later".
+//   - Anything else is the agent's problem: 500.
+func applyStatus(err error) int {
+	switch {
+	case errors.Is(err, adapter.ErrInvalidInput):
+		return http.StatusBadRequest
+	case errors.Is(err, adapter.ErrNotReady):
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 // handlePlanStop stops all running components.
@@ -379,6 +416,26 @@ func (a *Adapter) handlePlanStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePlanReconcile repairs the plan in effect.
+//
+// A pass that decided to change nothing is a success with skipped=true, not an
+// error: "an apply is already running" is an ordinary answer, and reporting it
+// as a failure would train callers to ignore real ones.
+func (a *Adapter) handlePlanReconcile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	res, err := a.handler.ReconcileNow()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
 }
 
 func parseDurationDefault(s string, d time.Duration) time.Duration {

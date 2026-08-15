@@ -17,6 +17,15 @@ protects the rest of the HTTP adapter.
 | `keystone_component_healthy` | gauge | `name` | `1` healthy, `0` unhealthy |
 | `keystone_component_cpu_percent` | gauge | `name` | CPU percent, process components only |
 | `keystone_component_memory_rss_bytes` | gauge | `name` | Resident memory, process components only |
+| `keystone_reconcile_total` | counter | `result` | Reconcile passes, by outcome: `ok`, `skipped`, `failed` |
+| `keystone_reconcile_duration_seconds` | histogram | — | How long a pass takes |
+| `keystone_reconcile_repairs_total` | counter | `component` | Components brought back to running by a pass |
+| `keystone_reconcile_last_timestamp_seconds` | gauge | — | When the last pass ran, whatever its outcome |
+| `keystone_dataset_age_seconds` | gauge | `name` | How old the active dataset is. Absent when the clock cannot be trusted |
+| `keystone_dataset_stale` | gauge | `name` | `1` when the dataset is past its `max_age` |
+| `keystone_dataset_refreshes_total` | counter | `name`, `result` | Refresh attempts: `updated`, `unchanged`, `failed` |
+| `keystone_dataset_activations_total` | counter | `name`, `result` | Version switches: `ok`, `rolled-back`, `failed` |
+| `keystone_clock_trusted` | gauge | — | `1` when the system clock is at least as late as the agent's evidence, `0` when it is behind it |
 
 Plus the Go runtime and process collectors Prometheus adds by default.
 
@@ -40,6 +49,49 @@ because of the [state guarantees](../../concepts/component-state/):
 - alert: KeystoneComponentFlapping
   expr: increase(keystone_component_restarts_total[15m]) > 5
   for: 5m
+```
+
+**Repaired repeatedly.** Periodic reconcile restarting the same component night
+after night is a component with a problem nobody has looked at. The repair is
+working; that is exactly why the underlying fault stays invisible:
+
+```yaml
+- alert: KeystoneComponentRepeatedlyRepaired
+  expr: increase(keystone_reconcile_repairs_total[24h]) > 2
+  annotations:
+    summary: "{{ $labels.component }} keeps being repaired by reconcile"
+```
+
+**Stale dataset.** The one that matters most for a product whose answers depend
+on its data: a scanner working from a six-week-old vulnerability feed still
+answers, still reports healthy, and is wrong.
+
+```yaml
+- alert: KeystoneDatasetStale
+  expr: keystone_dataset_stale == 1
+  for: 1h
+  annotations:
+    summary: "{{ $labels.name }} is past its max_age on {{ $labels.instance }}"
+```
+
+**Dataset rolled back.** A published feed that a device could not live with.
+Rare, and each one is worth looking at:
+
+```yaml
+- alert: KeystoneDatasetRolledBack
+  expr: increase(keystone_dataset_activations_total{result="rolled-back"}[24h]) > 0
+```
+
+**Untrusted clock.** The device is checking certificate expiry against an
+approximate time, so a revoked or expired signer may still be accepted. Nothing
+else about the device looks wrong, which is exactly why this needs an alert:
+
+```yaml
+- alert: KeystoneClockUntrusted
+  expr: keystone_clock_trusted == 0
+  for: 30m
+  annotations:
+    summary: "clock behind known-good time; certificate expiry is not being enforced as configured"
 ```
 
 **Unhealthy but running.** The process is alive and failing its own probe — often
