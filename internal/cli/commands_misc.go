@@ -20,9 +20,9 @@ func agentCommands() []*cobra.Command {
 }
 
 func localCommands() []*cobra.Command {
-	return []*cobra.Command{
+	return append([]*cobra.Command{
 		sha256Command(),
-	}
+	}, signingCommands()...)
 }
 
 func healthCommand() *cobra.Command {

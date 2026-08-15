@@ -42,10 +42,14 @@ func TestEveryCommandDocumentsItself(t *testing.T) {
 // A command that talks to the agent should name the endpoint it uses, so both a
 // human and a machine can map the CLI onto the API by reading --help.
 func TestCommandsNameTheEndpointTheyCall(t *testing.T) {
-	local := map[string]bool{"version": true, "sha256": true, "help": true, "completion": true}
+	// Membership of the "Local tools" group *is* the statement that a command
+	// contacts no agent, so the exemption is derived from it rather than kept as
+	// a list someone has to remember to extend. `version` is the one command
+	// that is filed under Agent but still makes no request.
+	exempt := map[string]bool{"version": true, "help": true, "completion": true}
 
 	for _, cmd := range NewRootCommand().Commands() {
-		if local[cmd.Name()] {
+		if exempt[cmd.Name()] || cmd.GroupID == groupLocal {
 			continue
 		}
 		if !strings.Contains(cmd.Long, "Calls ") {

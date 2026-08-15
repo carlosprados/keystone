@@ -3,6 +3,7 @@ package security
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -105,8 +106,21 @@ func VerifyDetached(filePath, sigPath, leafCertPath string, roots *x509.CertPool
 		if !ecdsa.Verify(pub, digest, esig.R, esig.S) {
 			return errors.New("ecdsa verify failed")
 		}
+	case ed25519.PublicKey:
+		// The signed message is the 32-byte SHA-256 digest, NOT the file, and
+		// this is deliberately *not* Ed25519ph: Ed25519 hashes whatever it is
+		// given with SHA-512 internally, so it hashes the digest. Signing the
+		// digest keeps one rule for every algorithm here — "sign the SHA-256 of
+		// the file" — and lets a signer stream a large artifact once.
+		//
+		// Signer and verifier have to agree on this exactly or nothing
+		// validates, which is why it is stated here and in docs/security.md
+		// rather than left to be inferred from the code.
+		if !ed25519.Verify(pub, digest, sig) {
+			return errors.New("ed25519 verify failed")
+		}
 	default:
-		return errors.New("unsupported public key type")
+		return fmt.Errorf("unsupported public key type %T (supported: RSA, ECDSA, Ed25519)", pub)
 	}
 	return nil
 }

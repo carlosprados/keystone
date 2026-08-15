@@ -40,17 +40,37 @@ openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out lea
 ### 2. Sign a recipe (detached signature, verified before any hook runs)
 
 ```bash
-openssl dgst -sha256 -sign leaf.key -out com.example.app.recipe.toml.sig com.example.app.recipe.toml
+keystonectl sign --key leaf.key --cert leaf.pem com.example.app.recipe.toml
 ```
 
 Place `com.example.app.recipe.toml.sig` next to the recipe; provide the cert as
 `com.example.app.recipe.toml.crt` or via `KEYSTONE_LEAF_CERT`.
 
+`keystonectl sign` also verifies the result against `--cert` before writing it,
+which catches a key and certificate that do not belong together. The equivalent
+raw command, if you would rather not use the CLI:
+
+```bash
+openssl dgst -sha256 -sign leaf.key -out com.example.app.recipe.toml.sig com.example.app.recipe.toml
+```
+
+Both produce the same thing — a signature over the file's SHA-256 digest. For an
+**Ed25519** key use `keystonectl sign`: the scheme must be plain Ed25519 over
+that digest, not Ed25519ph, and the CLI gets that right by construction.
+
 ### 3. Sign an artifact (detached sig over SHA-256)
 
 ```bash
-openssl dgst -sha256 -sign leaf.key -out artifact.sig artifact.bin
+keystonectl sign --key leaf.key --cert leaf.pem artifact.bin   # → artifact.bin.sig
 ```
+
+### 3b. Check before you publish
+
+```bash
+keystonectl verify --trust-bundle ca.pem --cert leaf.pem artifact.bin
+```
+
+Worth wiring into CI: a signature that fails here fails on every device.
 
 ### 4. Configure Keystone
 

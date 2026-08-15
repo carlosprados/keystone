@@ -68,7 +68,10 @@ source <(keystonectl completion bash)   # or zsh, fish, powershell
 
 | Command | What it does |
 |---|---|
+| `manifest` | Create, sign and check dataset manifests |
 | `sha256 <file>` | Compute the SHA-256 of a local file |
+| `sign <file>` | Sign a file, producing a detached <file>.sig |
+| `verify <file>` | Verify a detached signature the way the agent will |
 
 ### Global flags
 

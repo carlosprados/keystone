@@ -184,6 +184,36 @@ production** — it turns the fail-closed posture back into fail-open.
 
 ---
 
+## Signing
+
+Signatures are **RSA (PKCS#1 v1.5), ECDSA (ASN.1) or Ed25519**, and the signed
+message is always the file's **32-byte SHA-256 digest**. For Ed25519 that means
+the digest is the message: the scheme is **not** Ed25519ph, because Ed25519
+already hashes its input with SHA-512 internally. Signer and verifier must agree
+on that exactly, so it is stated here rather than inferred from the code
+(`internal/security/verify.go`, `internal/signing`).
+
+Ed25519 was added after RSA and ECDSA. An older agent rejects an Ed25519
+signature as an unsupported key type — failing closed, which is right — so do
+not publish Ed25519 signatures until the fleet runs a build that accepts them.
+
+**The agent verifies and never signs.** `internal/signing` is linked only into
+`keystonectl`; `internal/signing.TestAgentDoesNotLinkSigning` fails the build if
+`cmd/keystone` ever pulls it in. A device that could sign would hand an attacker
+who took it a head start on forging updates for the rest of the fleet.
+
+```bash
+# Sign, checking key and certificate agree before writing anything.
+keystonectl sign --key signer.key --cert signer.pem com.example.api.recipe.toml
+
+# Verify exactly as the agent will. Run this in CI on every publication.
+keystonectl verify --trust-bundle ca.pem com.example.api.recipe.toml
+```
+
+Dataset manifests are signed the same way, through `keystonectl manifest
+new|sign|verify`; `manifest verify --since` additionally applies the anti-replay
+rule an agent enforces.
+
 ## Signing walkthrough
 
 A dev helper generates a throwaway CA and signs files for you:

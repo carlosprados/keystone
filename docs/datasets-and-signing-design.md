@@ -10,7 +10,10 @@ one. The driving use case is a device-discovery product for OT networks that
 must keep two moving datasets fresh: the IEEE OUI/MA-L list, and a
 consolidated vulnerability bundle published daily.
 
-Status: **design, not implemented.** Nothing described here exists yet.
+Status: **Part 1 (signing) is implemented; Part 2 (datasets) is not.**
+`internal/signing`, `internal/manifest` and the `keystonectl sign|verify|manifest`
+commands exist and are tested. Nothing in Part 2 does yet — no recipe reads a
+`[[datasets]]` block, and no agent refreshes anything.
 
 ---
 
@@ -149,15 +152,25 @@ RSA/ECDSA until the fleet has the release that understands Ed25519. This is a
 sequencing constraint, not a technical one, and it is the kind that gets
 discovered at the worst moment.
 
-## Tests worth writing
+## Tests
 
-- Round-trip per algorithm: sign with `keystonectl`, verify with the agent's
-  own `VerifyDetached` — RSA, ECDSA, Ed25519.
-- The linking invariant: `cmd/keystone` does not depend on `internal/signing`.
-- A signature over a modified file fails; a leaf that does not chain to the
-  bundle fails; an expired leaf fails.
-- Ed25519 vector fixed in a testdata file, so a future refactor cannot silently
-  switch to Ed25519ph.
+Written:
+
+- Round-trip per algorithm (`signing/roundtrip_test.go`): sign with the real
+  signing path, verify with the agent's own `VerifyDetached` — RSA-2048,
+  ECDSA-P256, Ed25519 — plus the guarantee that a modified file stops verifying.
+- The linking invariant, both ways (`signing/linkage_test.go`): `cmd/keystone`
+  and `cmd/keystoneserver` must not link `internal/signing`, and `keystonectl`
+  must, so the first test cannot pass because the commands moved.
+- Ed25519 is plain, not Ed25519ph — the one-line mistake that would only surface
+  on a device.
+- A key that does not match its certificate is refused at signing time.
+- Manifest validation, unknown-field tolerance, and the anti-replay rule
+  including a six-month-old replay (`manifest/manifest_test.go`).
+
+**Not covered:** an expired leaf certificate. That is the same code path as a
+chain failure, and the interesting case is not the rejection but what a device
+with a wrong clock does about it — which is the open question below, not a test.
 
 ## Documentation this touches
 
