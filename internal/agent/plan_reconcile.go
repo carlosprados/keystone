@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -151,7 +152,15 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 		return nil
 	}
 
-	if !allowRollback || oldPlanPath == "" {
+	if !canRollBackTo(oldPlanPath, planPath, allowRollback) {
+		if allowRollback && samePlanFile(oldPlanPath, planPath) {
+			// Deliberately not "surviving components are left running": the
+			// failed apply's own unwind already stopped whatever it started in
+			// the failing layer. What is skipped here is the extra, total stop
+			// of the plan — which is what would have taken down the components
+			// this apply reused and never touched.
+			log.Printf("[agent] apply failed and there is nothing to roll back to: %s was already the plan in effect, so the plan is not stopped and re-applied", planPath)
+		}
 		return err
 	}
 
@@ -169,6 +178,43 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 		return fmt.Errorf("apply failed: %v; rollback failed: %w", err, rbErr)
 	}
 	return fmt.Errorf("apply failed and rollback was completed: %w", err)
+}
+
+// canRollBackTo reports whether a failed apply has anywhere to roll back to.
+//
+// Two cases where it has not, and the second one is why this function exists:
+//
+//   - There was no previous plan at all.
+//   - The previous plan IS this plan. Rolling back re-reads the same file, so it
+//     can only re-apply the failure — and it gets there through
+//     stopPlanInternal, which stops every component in the plan, the healthy
+//     ones included. That turned one component failing to start into a total
+//     outage, reachable from a NATS or MQTT command naming the planPath already
+//     in effect, and from the boot resume.
+//
+// It is the path that decides, not the plan mapping. The rollback loads the plan
+// from disk, so the same path with edited contents still rolls back into the
+// very bytes that just failed.
+func canRollBackTo(oldPlanPath, newPlanPath string, allowRollback bool) bool {
+	if !allowRollback {
+		return false
+	}
+	if strings.TrimSpace(oldPlanPath) == "" {
+		return false
+	}
+	return !samePlanFile(oldPlanPath, newPlanPath)
+}
+
+// samePlanFile compares two plan paths after cleaning them, so "x.toml" and
+// "./x.toml" are recognised as one file. It does not resolve symlinks or mix
+// absolute with relative paths: those alias forms fall through to the old
+// behaviour, which is a useless rollback rather than a wrong one.
+func samePlanFile(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == "" || b == "" {
+		return false
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 func (a *Agent) loadPlannedState(planPath string) (*plannedState, error) {

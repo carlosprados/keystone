@@ -224,17 +224,34 @@ than merely mentioned.
 
 ---
 
-## Technical debt found while designing this
+## The rollback bug found while designing this — fixed
 
-**The rollback path treats a re-apply of the same plan as if it were a
-rollback to a different one.** Described in full above. It is latent today: the
-boot resume calls `ApplyPlan(planPath, false)` with rollback enabled
-(`agent.go:168`), so a resume that fails already stops every component and
-re-applies the same plan once. Once is survivable and mostly invisible;
-on a timer it would not be.
+**The rollback path treated a re-apply of the same plan as if it were a
+rollback to a different one.** This phase avoids it by applying with rollback
+disabled, but it was reachable without any timer: the boot resume calls
+`ApplyPlan(planPath, false)` with rollback enabled (`agent.go:168`), and the
+NATS and MQTT adapters accept a `planPath`, which an operator can perfectly well
+point at the plan already in effect.
 
-Proposed fix, separate from this phase and not to be bundled into it: make
-`applyPlanReconcileUnlocked` skip the rollback when `oldPlanPath == planPath`
-and the plan mapping is unchanged, since there is by definition nothing to roll
-back to. That also makes the boot resume safer without any caller changing.
-Needs its own test: a failing resume must leave healthy components running.
+Reproduced before fixing, by resuming a plan whose recipe had been edited to a
+command that does not exist:
+
+```
+[agent] apply failed, attempting rollback to previous plan: runtime/plans/applied.toml
+[agent] resume failed: apply failed: victim start: run command not found: ...;
+        rollback failed: victim start: run command not found: ...
+```
+
+The "previous plan" is the same file, so the rollback re-read the bytes that had
+just failed — after `stopPlanInternal` had stopped every component in the plan.
+
+Fixed with `canRollBackTo` (`plan_reconcile.go`): a rollback needs a *different*
+previous plan. The path decides, not the plan mapping, because the rollback
+loads the plan from disk — the same path with edited contents still rolls back
+into the failure.
+
+What this does **not** change: a failed apply still unwinds the components it
+started in the failing layer, which is `StartStack`'s own behaviour. Components
+the apply reused and never touched return `nil` from their stop hook
+(`agent.go`, `stopFn` under `skipStart`) — those are the ones the total stop
+would have taken down, and they are the reason the fix matters.
