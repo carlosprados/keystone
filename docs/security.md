@@ -186,8 +186,8 @@ production** — it turns the fail-closed posture back into fail-open.
 
 ## Signing
 
-Signatures are **RSA (PKCS#1 v1.5), ECDSA (ASN.1) or Ed25519**, and the signed
-message is always the file's **32-byte SHA-256 digest**. For Ed25519 that means
+Signatures are **Ed25519 (the default), RSA (PKCS#1 v1.5) or ECDSA (ASN.1)**,
+and the signed message is always the file's **32-byte SHA-256 digest**. For Ed25519 that means
 the digest is the message: the scheme is **not** Ed25519ph, because Ed25519
 already hashes its input with SHA-512 internally. Signer and verifier must agree
 on that exactly, so it is stated here rather than inferred from the code

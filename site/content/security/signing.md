@@ -43,8 +43,11 @@ export KEYSTONE_TRUST_BUNDLE=/etc/keystone/trust/ca.pem
 keystone --http 127.0.0.1:8080
 ```
 
-Signatures are **RSA, ECDSA or Ed25519**, verified against a leaf certificate
-that must chain to the bundle. The leaf can be provisioned on the device or
+Signatures are **Ed25519 (the default), RSA or ECDSA**, verified against a leaf
+certificate that must chain to the bundle. Ed25519 is what the tooling now
+generates: 32-byte keys, and verification is far cheaper on an ARMv7 gateway
+than RSA-3072. The other two keep working, so material generated earlier is
+unaffected. The leaf can be provisioned on the device or
 fetched per artifact with `cert_uri`.
 
 ### The scheme, exactly
@@ -60,7 +63,14 @@ the code.
 Support for Ed25519 was added after RSA and ECDSA. An agent from before it
 rejects an Ed25519 signature as an unsupported key type — correctly, failing
 closed. Do not start signing with Ed25519 until the fleet runs a build that
-understands it.
+understands it. Nothing forces the move: sign with RSA or ECDSA until it has.
+{{% /notice %}}
+
+{{% notice style="warning" title="openssl cannot sign with an Ed25519 key the usual way" %}}
+`openssl dgst -sha256 -sign` does not work with an Ed25519 key — that needs
+`pkeyutl -rawin` over the digest, and getting it subtly wrong produces a
+signature that only fails on a device. Use `keystonectl sign`, which is the code
+the agent verifies with.
 {{% /notice %}}
 
 ## Signing

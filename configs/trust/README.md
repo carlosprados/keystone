@@ -29,13 +29,18 @@ production.
 ### 1. Create a CA and a leaf signer (development only)
 
 ```bash
-openssl genrsa -out ca.key 4096
-openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 -out ca.pem -subj "/CN=KeystoneDevCA"
+# Ed25519: 32-byte keys, and much cheaper to verify on an ARMv7 gateway than
+# RSA-3072. RSA and ECDSA are still accepted, so existing material keeps working.
+openssl genpkey -algorithm ed25519 -out ca.key
+openssl req -x509 -new -nodes -key ca.key -days 3650 -out ca.pem -subj "/CN=KeystoneDevCA"
 
-openssl genrsa -out leaf.key 3072
+openssl genpkey -algorithm ed25519 -out leaf.key
 openssl req -new -key leaf.key -out leaf.csr -subj "/CN=keystone-signer"
-openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out leaf.pem -days 365 -sha256
+openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out leaf.pem -days 365
 ```
+
+Note there is no `-sha256` on an Ed25519 certificate: the algorithm has its hash
+built in, and openssl rejects the flag.
 
 ### 2. Sign a recipe (detached signature, verified before any hook runs)
 
@@ -54,9 +59,11 @@ raw command, if you would rather not use the CLI:
 openssl dgst -sha256 -sign leaf.key -out com.example.app.recipe.toml.sig com.example.app.recipe.toml
 ```
 
-Both produce the same thing — a signature over the file's SHA-256 digest. For an
-**Ed25519** key use `keystonectl sign`: the scheme must be plain Ed25519 over
-that digest, not Ed25519ph, and the CLI gets that right by construction.
+Both produce the same thing — a signature over the file's SHA-256 digest, **for
+RSA and ECDSA keys only**. An Ed25519 key cannot be used with `openssl dgst
+-sign` at all; it needs `pkeyutl -rawin` over the digest, which is easy to get
+subtly wrong in a way that only fails on a device. With Ed25519 — the default —
+use `keystonectl sign`, which is the same code the agent verifies with.
 
 ### 3. Sign an artifact (detached sig over SHA-256)
 
