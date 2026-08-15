@@ -63,6 +63,13 @@ type CommandHandler interface {
 	DeleteRecipe(name, version string) error
 	ListRecipes() ([]string, error)
 
+	// Datasets
+	DatasetStates() []DatasetInfo
+	// RefreshDatasets checks every dataset for a new version immediately,
+	// rather than waiting for its interval. Signature verification and the
+	// anti-replay rule still apply to each one.
+	RefreshDatasets()
+
 	// Health
 	GetHealth() *HealthStatus
 }
@@ -160,6 +167,29 @@ type HealthStatus struct {
 	// "high-water" (a mark persisted from an earlier run) or "build" (the
 	// binary's own build timestamp).
 	ClockSource string `json:"clock_source"`
+}
+
+// DatasetInfo is what an operator needs to answer "is this device's data
+// current?" without reading logs.
+type DatasetInfo struct {
+	Name        string `json:"name"`
+	Version     string `json:"version,omitempty"`
+	Published   string `json:"published,omitempty"`
+	ManifestURI string `json:"manifestUri,omitempty"`
+	Path        string `json:"path,omitempty"`
+	LastRefresh string `json:"lastRefresh,omitempty"`
+	LastResult  string `json:"lastResult,omitempty"`
+	Refresh     string `json:"refresh,omitempty"`
+	MaxAge      string `json:"maxAge,omitempty"`
+	// AgeSeconds is how old the data is. Stale says it has passed max_age —
+	// a scanner working from a six-week-old feed still answers, which is why
+	// this is reported rather than left to be inferred.
+	AgeSeconds int64 `json:"ageSeconds,omitempty"`
+	Stale      bool  `json:"stale"`
+	// AgeUnknown is true when the device's clock cannot be trusted, so age
+	// cannot be computed. A plausible wrong number would be worse: it would
+	// silence the alert that should have fired.
+	AgeUnknown bool `json:"ageUnknown,omitempty"`
 }
 
 // Registry manages multiple adapters for the agent.

@@ -228,6 +228,19 @@ func copyWithBudget(dst io.Writer, src io.Reader, budget *int64) error {
 	return nil
 }
 
+// LooksLikeArchive reports whether Unpack would know what to do with this file.
+//
+// Datasets need the question asked out loud: one is published as a tar of many
+// files and the next as a single CSV, and the agent has to place both without
+// the recipe having to say which is which.
+func LooksLikeArchive(path string) bool {
+	if isZipFile(path) || isGzipFile(path) {
+		return true
+	}
+	lower := strings.ToLower(path)
+	return strings.HasSuffix(lower, ".tar")
+}
+
 func Unpack(archivePath, targetDir string) error {
 	// Fast-path by extension
 	if strings.HasSuffix(archivePath, ".tar.gz") || strings.HasSuffix(archivePath, ".tgz") {

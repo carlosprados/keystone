@@ -47,6 +47,8 @@ func (s *stubHandler) AddRecipe(string, bool) (string, string, error) { return "
 func (s *stubHandler) DeleteRecipe(string, string) error              { return nil }
 func (s *stubHandler) ListRecipes() ([]string, error)                 { return nil, nil }
 func (s *stubHandler) GetHealth() *adapter.HealthStatus               { return &adapter.HealthStatus{} }
+func (s *stubHandler) DatasetStates() []adapter.DatasetInfo           { return nil }
+func (s *stubHandler) RefreshDatasets()                               {}
 
 // A zero interval means the operator did not ask for periodic reconcile. The
 // adapter must then be completely inert — not a loop that ticks and skips.

@@ -39,6 +39,8 @@ func (m *mockHandler) AddRecipe(content string, force bool) (string, string, err
 func (m *mockHandler) DeleteRecipe(name, version string) error { return nil }
 func (m *mockHandler) ListRecipes() ([]string, error)          { return []string{}, nil }
 func (m *mockHandler) GetHealth() *adapter.HealthStatus        { return m.health }
+func (m *mockHandler) DatasetStates() []adapter.DatasetInfo    { return nil }
+func (m *mockHandler) RefreshDatasets()                        {}
 func (m *mockHandler) ReconcileNow() (*adapter.ReconcileResult, error) {
 	return &adapter.ReconcileResult{Duration: "1ms"}, nil
 }

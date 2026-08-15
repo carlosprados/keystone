@@ -17,6 +17,7 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 - **Secure by default**: loopback API with bearer-token auth, mandatory recipe & artifact signatures (RSA/ECDSA/Ed25519), fail-closed verification — see [docs/security.md](docs/security.md)
 - **Portable**: Linux x86/ARM, single binary, no mandatory Docker/CRI
 - **Frugal on the link**: downloads resume, and an artifact can opt into being *patched* instead of re-downloaded — 13.4 MB becomes 1.0 MB between two adjacent releases, with a full-download fallback whenever patching is not possible
+- **Fresh data, no restarts**: datasets (an OUI list, a vulnerability feed) refresh on their own schedule from a signed manifest, activate atomically and roll back if the component cannot live with them — see [datasets](https://carlosprados.github.io/keystone/concepts/datasets/)
 - **Connected**: HTTP REST, NATS (+ JetStream), MQTT adapters
 - **Operable**: structured logs, Prometheus metrics, health endpoints, persistence
 

@@ -229,6 +229,76 @@ paths:
       summary: Stop one component
       tags:
       - components
+  /v1/datasets:
+    get:
+      description: 'What each refreshable dataset is currently serving: version, when
+        it was published, when it was last refreshed, and how old it is. `stale` means
+        it has passed its max_age. `ageUnknown` means the device''s clock cannot be
+        trusted, so no age is reported rather than a made-up one.'
+      operationId: getDatasets
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/AdapterDatasetInfo'
+                type:
+                - "null"
+                - array
+          description: OK
+        "401":
+          content:
+            text/plain:
+              schema:
+                type:
+                - "null"
+                - string
+          description: Unauthorized
+      security:
+      - bearerAuth: []
+      summary: List datasets
+      tags:
+      - agent
+  /v1/datasets:refresh:
+    post:
+      description: Checks every dataset for a new version immediately, instead of
+        waiting for its refresh interval — for the day a vulnerability feed cannot
+        wait until tonight. Each dataset still goes through signature verification
+        and the anti-replay rule.
+      operationId: postDatasetsRefresh
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/AdapterDatasetInfo'
+                type:
+                - "null"
+                - array
+          description: OK
+        "401":
+          content:
+            text/plain:
+              schema:
+                type:
+                - "null"
+                - string
+          description: Unauthorized
+        "500":
+          content:
+            text/plain:
+              schema:
+                type:
+                - "null"
+                - string
+          description: Internal Server Error
+      security:
+      - bearerAuth: []
+      summary: Refresh datasets now
+      tags:
+      - agent
   /v1/plan/apply:
     post:
       description: 'The body is the plan TOML itself. A JSON body naming a planPath
@@ -584,6 +654,34 @@ paths:
       - recipes
 components:
   schemas:
+    AdapterDatasetInfo:
+      properties:
+        ageSeconds:
+          format: int64
+          type: integer
+        ageUnknown:
+          type: boolean
+        lastRefresh:
+          type: string
+        lastResult:
+          type: string
+        manifestUri:
+          type: string
+        maxAge:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        published:
+          type: string
+        refresh:
+          type: string
+        stale:
+          type: boolean
+        version:
+          type: string
+      type: object
     AdapterGraphInfo:
       properties:
         edges:

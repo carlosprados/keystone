@@ -107,6 +107,30 @@ func TestNoEvidenceIsNotDistrust(t *testing.T) {
 	}
 }
 
+// The mark only ever moves forward: that is what makes putting a clock back
+// useless to an attacker, and it must hold for manifest timestamps too.
+func TestAdvanceOnlyMovesForward(t *testing.T) {
+	s := New(PolicyHighWater, t.TempDir())
+	base := time.Date(2026, 8, 15, 3, 0, 0, 0, time.UTC)
+
+	s.Advance(base)
+	if !s.mark.Equal(base) {
+		t.Fatalf("mark=%s, want %s", s.mark, base)
+	}
+	s.Advance(base.Add(-180 * 24 * time.Hour))
+	if !s.mark.Equal(base) {
+		t.Errorf("a replayed older manifest moved the mark back to %s", s.mark)
+	}
+	s.Advance(base.Add(24 * time.Hour))
+	if !s.mark.Equal(base.Add(24 * time.Hour)) {
+		t.Errorf("mark=%s, want the newer manifest to have advanced it", s.mark)
+	}
+	s.Advance(time.Time{})
+	if !s.mark.Equal(base.Add(24 * time.Hour)) {
+		t.Errorf("the zero time moved the mark to %s", s.mark)
+	}
+}
+
 func TestPersistAndReload(t *testing.T) {
 	dir := t.TempDir()
 	s := New(PolicyHighWater, dir)

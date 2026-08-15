@@ -67,8 +67,8 @@ command = "./api"
 ### 3. Double brackets repeat
 
 `[[artifacts]]` is an **array of tables**: write the header again and you add
-another element. Three tables in Keystone repeat this way — `[[artifacts]]`,
-`[[dependencies]]` and, in a plan, `[[components]]`.
+another element. Four tables in Keystone repeat this way — `[[artifacts]]`,
+`[[datasets]]`, `[[dependencies]]` and, in a plan, `[[components]]`.
 
 ```toml
 [[artifacts]]

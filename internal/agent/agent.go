@@ -21,6 +21,7 @@ import (
 	"github.com/carlosprados/keystone/internal/artifact"
 	"github.com/carlosprados/keystone/internal/clock"
 	"github.com/carlosprados/keystone/internal/config"
+	"github.com/carlosprados/keystone/internal/dataset"
 	"github.com/carlosprados/keystone/internal/deploy"
 	"github.com/carlosprados/keystone/internal/metrics"
 	"github.com/carlosprados/keystone/internal/recipe"
@@ -104,6 +105,14 @@ type Agent struct {
 	clock *clock.Source
 	// recipes
 	recipes *store.RecipeStore
+	// datasets is the on-disk tree of refreshable data, and datasetSpecs /
+	// datasetState are what the current plan asked for and what is actually
+	// being served. Kept separate from components because a dataset outlives
+	// any single apply: the component restarts, the data does not.
+	datasets     *dataset.Store
+	datasetSpecs map[string]dataset.Spec
+	datasetBinds map[string]datasetBinding
+	datasetState map[string]state.DatasetState
 }
 
 // New creates an Agent with the provided options.
@@ -129,6 +138,10 @@ func New(opts Options) *Agent {
 		ctx:            ctx,
 		ctxCancel:      cancel,
 	}
+	a.datasets = dataset.NewStore(filepath.Join("runtime", "datasets"))
+	a.datasetSpecs = map[string]dataset.Spec{}
+	a.datasetBinds = map[string]datasetBinding{}
+	a.datasetState = map[string]state.DatasetState{}
 	a.clock = clock.New(opts.ClockPolicy, a.stateDir)
 	if !a.clock.Trusted() {
 		log.Printf("[agent] WARNING: the system clock reads %s, which is behind known-good time %s. "+
@@ -157,6 +170,9 @@ func New(opts Options) *Agent {
 		a.planStatus = snap.Plan.Status
 		a.planErr = snap.Plan.Error
 		a.planComps = snap.PlanComponents
+		for _, ds := range snap.Datasets {
+			a.datasetState[ds.Name] = ds
+		}
 
 		resume := a.planPath != "" && shouldResumeLastPlan(a.planStatus)
 
@@ -208,6 +224,7 @@ func New(opts Options) *Agent {
 		}
 	}
 	a.startStatePoller()
+	a.startDatasetRefresher()
 	return a
 }
 
@@ -231,6 +248,7 @@ func (a *Agent) startStatePoller() {
 			// Cheap: only writes when the mark has moved on by 15 minutes.
 			a.clock.Tick()
 			metrics.SetClockTrusted(a.clock.Trusted())
+			a.publishDatasetMetrics()
 		}
 	}()
 }
@@ -534,6 +552,12 @@ func (a *Agent) applyPlan(planPath string) error {
 					return err
 				}
 			}
+			// Datasets before the start hook — and before the install script,
+			// which may well want to ingest them. A discovery product must not
+			// come up with no OUI list and start reporting unknown vendors.
+			if err := a.installDatasets(ctx, it.Name, r, workDir); err != nil {
+				return err
+			}
 			// Run install script if any (idempotent via .installed marker)
 			installedMarker := filepath.Join(workDir, ".installed")
 			if r.Lifecycle.Install.Script != "" {
@@ -606,7 +630,7 @@ func (a *Agent) applyPlan(planPath string) error {
 			}
 
 			// Build options
-			opts := buildRunnerOptions(it.Name, r, workDir)
+			opts := buildRunnerOptions(it.Name, r, workDir, a.datasetEnv(r))
 			if runType == "" || runType == "process" {
 				log.Printf("[agent] component=%s type=process cwd=%s cmd=%s args=%v msg=starting component", it.Name, workDir, opts.Command, opts.Args)
 			} else {
@@ -1177,7 +1201,7 @@ func validateRunSecurity(r *recipe.Recipe) error {
 	return nil
 }
 
-func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Options {
+func buildRunnerOptions(name string, r *recipe.Recipe, workDir string, datasetEnv []string) runner.Options {
 	runType := r.Lifecycle.Run.Type
 	if runType == "" || runType == "process" {
 		// Process options
@@ -1185,6 +1209,7 @@ func buildRunnerOptions(name string, r *recipe.Recipe, workDir string) runner.Op
 		for k, v := range r.Lifecycle.Run.Exec.Env {
 			env = append(env, fmt.Sprintf("%s=%s", k, v))
 		}
+		env = append(env, datasetEnv...)
 		return runner.Options{
 			Name:       name,
 			Command:    r.Lifecycle.Run.Exec.Command,
@@ -1320,13 +1345,14 @@ func (a *Agent) persistSnapshot() {
 		},
 		Components:     comps,
 		PlanComponents: a.planComps,
+		Datasets:       a.datasetSnapshot(),
 	}
 
 	// The state poller calls this twice a second and state.Save rewrites and
 	// renames the file every time; skip the write when nothing observable
 	// changed. Updated is deliberately excluded from the fingerprint, or every
 	// tick would look like a change.
-	fingerprint := fmt.Sprintf("%s|%s|%s|%v|%v", a.planPath, a.planStatus, a.planErr, comps, a.planComps)
+	fingerprint := fmt.Sprintf("%s|%s|%s|%v|%v|%v", a.planPath, a.planStatus, a.planErr, comps, a.planComps, snap.Datasets)
 	if fingerprint == a.lastSnapshot {
 		return
 	}
@@ -1436,7 +1462,7 @@ func (a *Agent) restartFromPlan(name string) error {
 	}
 
 	// Build options
-	opts := buildRunnerOptions(name, r, workDir)
+	opts := buildRunnerOptions(name, r, workDir, a.datasetEnv(r))
 	if runType == "" || runType == "process" {
 		log.Printf("[agent] restarting component %s: type=process cwd=%s cmd=%s args=%v", name, workDir, opts.Command, opts.Args)
 	} else {

@@ -20,6 +20,25 @@ type Snapshot struct {
 	Plan           PlanStatus            `json:"plan"`
 	Components     []store.ComponentInfo `json:"components"`
 	PlanComponents []PlanComponent       `json:"plan_components"`
+	// Datasets records what each dataset is currently serving. Published is the
+	// load-bearing field: it is what the anti-replay rule compares against, so
+	// losing it across a restart would let an attacker who can serve the URL
+	// replay an old, validly signed bundle exactly once per reboot.
+	Datasets []DatasetState `json:"datasets,omitempty"`
+}
+
+// DatasetState is one dataset's persisted state.
+type DatasetState struct {
+	Name        string    `json:"name"`
+	Version     string    `json:"version"`
+	Published   time.Time `json:"published"`
+	SHA256      string    `json:"sha256,omitempty"`
+	ManifestURI string    `json:"manifest_uri,omitempty"`
+	LastRefresh time.Time `json:"last_refresh"`
+	// LastResult is "ok", "unchanged", or a short failure description. A device
+	// that has been failing to refresh for weeks looks identical to a healthy
+	// one without it.
+	LastResult string `json:"last_result,omitempty"`
 }
 
 // PlanComponent persists mapping from component name to recipe and deps.

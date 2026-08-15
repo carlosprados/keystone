@@ -363,6 +363,27 @@ func (a *Adapter) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// handleDatasets lists what each dataset is serving.
+func (a *Adapter) handleDatasets(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(a.handler.DatasetStates())
+}
+
+// handleDatasetsRefresh checks every dataset for a new version now.
+func (a *Adapter) handleDatasetsRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	a.handler.RefreshDatasets()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(a.handler.DatasetStates())
+}
+
 // applyStatus maps an apply failure onto a status code by one question: will
 // submitting the same thing again ever work?
 //

@@ -17,18 +17,21 @@
 //
 //   - the build timestamp of this binary, since it cannot be running before it
 //     was built;
+//
 //   - a high-water mark persisted across restarts, so time never goes backwards
 //     between boots.
 //
-// A third source is missing and is worth naming, because the obvious candidate
-// does not work. A verified certificate's NotBefore looks like evidence, but it
-// cannot raise the mark: verification uses max(clock, mark, build) as its
-// reference, so a certificate that validates always has a NotBefore at or below
-// that, by construction. A signed dataset manifest is different — its
-// publication timestamp is independent of the validity window of the
-// certificate that signed it, so a 90-day signing certificate can vouch for
-// manifests that keep proving later and later dates. That is where this gains
-// its third source, and it arrives with the datasets phase.
+//   - the publication timestamp of an accepted dataset manifest, via Advance.
+//
+// That third source is why a fleet which never reaches NTP still tracks time:
+// each nightly manifest proves a later date than the last. Note the candidate
+// that does NOT work, so it is not tried again — a verified certificate's
+// NotBefore looks like evidence but cannot raise the mark, because verification
+// uses max(clock, mark, build) as its reference and a certificate that
+// validates therefore always has a NotBefore at or below it. A manifest's
+// timestamp is independent of the validity window of the certificate that
+// signed it, so one 90-day signing certificate vouches for manifests proving
+// later and later dates.
 //
 // Verification uses max(system clock, high-water mark, build time). Putting the
 // clock back therefore achieves nothing, which closes the attack that matters.
@@ -186,6 +189,26 @@ func (s *Source) VerificationTime() (time.Time, error) {
 			s.policy)
 	}
 	return s.Now(), nil
+}
+
+// Advance raises the high-water mark with a time proven to have passed: the
+// signed publication timestamp of a manifest that has already been verified and
+// has already passed the anti-replay check.
+//
+// Only ever moves forward, and only for authenticated input. Calling it with an
+// unverified timestamp would let an attacker push the mark into the future and
+// expire every certificate on the device — which is why the two callers do it
+// after the signature and the replay rule, never before.
+func (s *Source) Advance(t time.Time) {
+	if t.IsZero() {
+		return
+	}
+	t = t.UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t.After(s.mark) {
+		s.mark = t
+	}
 }
 
 // Tick records the passage of time and persists the mark when it has moved on

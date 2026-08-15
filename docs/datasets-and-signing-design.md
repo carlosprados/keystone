@@ -10,10 +10,13 @@ one. The driving use case is a device-discovery product for OT networks that
 must keep two moving datasets fresh: the IEEE OUI/MA-L list, and a
 consolidated vulnerability bundle published daily.
 
-Status: **Part 1 (signing) is implemented; Part 2 (datasets) is not.**
-`internal/signing`, `internal/manifest` and the `keystonectl sign|verify|manifest`
-commands exist and are tested. Nothing in Part 2 does yet — no recipe reads a
-`[[datasets]]` block, and no agent refreshes anything.
+Status: **both parts are implemented.** `internal/signing`, `internal/manifest`
+and the `keystonectl sign|verify|manifest` commands cover Part 1;
+`internal/dataset` plus the dataset lifecycle in `internal/agent` cover Part 2,
+with `[[datasets]]` and `[lifecycle.reload]` in the recipe, `GET /v1/datasets`
+and `POST /v1/datasets:refresh` on the API.
+
+What is still open is listed at the end.
 
 ---
 
@@ -463,6 +466,54 @@ A new `site/content/concepts/datasets.md`; plus `concepts/recipes.md`,
 | **3** | **Datasets** | The use case |
 | 4 | Remote signed plan + rings | The code channel, separate policy |
 | 5 | `keystone-hub` | After 3 and 4 run at a real customer |
+
+## Native ingestion in the hub
+
+Requested while building this phase, and belonging to the hub (phase 5) rather
+than the agent: the hub should be able to **fetch upstream data itself** — IEEE
+OUI, and vulnerability feeds — and turn it into signed, delta-friendly bundles
+on a schedule. Generically, not with IEEE and NVD hard-coded.
+
+The shape that follows from what the agent already expects:
+
+- **A declarative source**, not code per feed. A source is a URL, a cadence, an
+  optional transform, and a bundle name. IEEE OUI is one file. A vulnerability
+  feed is paginated and incremental. Both should be configuration.
+- **Conditional fetching is the whole point of the cache.** `ETag` /
+  `If-None-Match` and `If-Modified-Since` on every poll, honouring `Retry-After`
+  and backing off hard on 429. This is what keeps one hub per plant from
+  becoming the thing that gets an API key throttled — and note the agent does
+  *not* do conditional requests today, because its manifests are tiny and its
+  artifacts are immutable; the hub's fetches are neither.
+- **Incremental where the upstream supports it.** A feed with a
+  "modified since" parameter should be pulled as a window, not re-downloaded
+  whole, with the last successful window persisted.
+- **Bundle as an uncompressed tar, versioned by publication date**, then
+  generate a patch against the previous version with `ota-updater/pkg/delta`.
+  Publishing gzipped would throw the delta away (98% vs 3%, measured).
+- **Retention that matches the agent's**: keep enough versions to serve a patch
+  to a device that has been offline for a while.
+
+**The open question is signing, and it is the important one.** The rule so far
+is that the hub never holds a signing key — a hub that signs is a hub that,
+compromised, signs malware for the whole fleet. But a hub that *generates*
+bundles produces artifacts that must be signed by someone. Three ways out, and
+this needs a decision before any of it is built:
+
+1. **The hub generates, a separate signer signs.** The hub publishes a
+   candidate; a signing host (or CI) picks it up, verifies it, signs the
+   manifest and publishes it. Keeps the rule intact, adds a moving part.
+2. **A distinct, lower-privilege ingestion key**, trusted only for dataset
+   manifests and never for recipes, plans or releases. Simpler; makes the trust
+   bundle's meaning conditional on what is being verified.
+3. **Ingestion stays in the backend**, and the hub only mirrors and serves. The
+   cleanest, and it gives up the "hub in an air-gapped plant ingests locally"
+   case.
+
+Worth noting that (2) is only tolerable if the agent can express "this key may
+sign datasets but not code", which it currently cannot — every signature chains
+to one bundle. That is a real change to the trust model, not a configuration
+flag.
 
 ## What stays open
 

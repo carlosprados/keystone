@@ -48,6 +48,20 @@ anything else, so these can live there or in a systemd `EnvironmentFile`.
 | `KEYSTONE_CNI_PLUGIN_DIRS` | — | CNI plugin search path |
 | `KEYSTONE_CNI_NETNS_DIR` | — | CNI network namespace directory |
 
+## Datasets
+
+Datasets are declared per recipe, not by environment variable. What the agent
+exports *to the component* is one variable per dataset:
+
+| Variable | Value |
+|---|---|
+| `KEYSTONE_DATASET_<NAME>` | Absolute path to the dataset's `current` symlink |
+
+The name is upper-cased with anything that is not a letter or digit replaced by
+an underscore, so `cve-bundle` becomes `KEYSTONE_DATASET_CVE_BUNDLE`. The path
+is absolute because a component runs with its own working directory. See
+[datasets]({{% relref "/concepts/datasets" %}}).
+
 ## Clock
 
 | Variable | Flag | Default |
