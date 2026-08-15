@@ -76,6 +76,10 @@ Usage of keystone:
     	NATS server URL (empty to disable NATS adapter)
   -nats-user string
     	NATS username
+  -reconcile-interval duration
+    	Re-apply the plan in effect on this interval so dead components are restarted (0 disables it)
+  -reconcile-jitter duration
+    	Spread reconcile passes across a fleet by this much (defaults to 10% of the interval)
   -version
     	Print version and exit
 ```

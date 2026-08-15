@@ -72,6 +72,12 @@ type Agent struct {
 	// predate the field — but it is the difference between a typo that is
 	// invisible and one an operator can see without reading the logs.
 	planUnknown []string
+	// lastReconcile and lastReconcileResult record the most recent ReconcileNow
+	// pass. They are reported on the plan status so that a periodic reconcile is
+	// visible without reading the logs: a timer nobody can observe is a timer
+	// nobody trusts.
+	lastReconcile       time.Time
+	lastReconcileResult string
 	// persistence
 	stateDir string
 	// lastSnapshot fingerprints the last snapshot actually written, so an idle

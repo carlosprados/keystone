@@ -36,6 +36,7 @@ source <(keystonectl completion bash)   # or zsh, fish, powershell
 | `apply <plan.toml>` | Upload and apply a deployment plan |
 | `apply-dry <plan.toml>` | Apply a plan in dry-run mode and show the reconcile |
 | `graph` | Show the dependency graph and a valid start order |
+| `reconcile` | Repair the plan in effect |
 | `status` | Show the applied plan, its status and its components |
 | `stop-plan` | Stop every component in the plan |
 

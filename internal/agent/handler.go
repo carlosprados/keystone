@@ -29,13 +29,18 @@ func (a *Agent) GetPlanStatus() *adapter.PlanStatus {
 			components = append(components, ci)
 		}
 	}
-	return &adapter.PlanStatus{
+	ps := &adapter.PlanStatus{
 		PlanPath:      a.planPath,
 		Status:        a.planStatus,
 		Error:         a.planErr,
 		UnknownFields: append([]string(nil), a.planUnknown...),
 		Components:    components,
 	}
+	if !a.lastReconcile.IsZero() {
+		ps.LastReconcile = a.lastReconcile.Format(time.RFC3339)
+		ps.LastReconcileResult = a.lastReconcileResult
+	}
+	return ps
 }
 
 // GetPlanGraph returns the dependency graph and topological order.

@@ -19,6 +19,7 @@ the agent will refuse a non-loopback bind without a token.
 | `GET` | `/v1/plan/status` | Plan path, status, last error |
 | `GET` | `/v1/plan/graph` | Nodes, edges and topological start order |
 | `POST` | `/v1/plan/apply` | Apply a plan (body = plan TOML). `?dry=true` to preview |
+| `POST` | `/v1/plan/reconcile` | Repair the plan in effect: restart components that died and ran out of retries |
 | `POST` | `/v1/plan/stop` | Stop every component |
 | `GET` | `/v1/recipes` | List recipes in the store |
 | `POST` | `/v1/recipes` | Add a recipe (body = recipe TOML) |

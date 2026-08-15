@@ -17,6 +17,10 @@ protects the rest of the HTTP adapter.
 | `keystone_component_healthy` | gauge | `name` | `1` healthy, `0` unhealthy |
 | `keystone_component_cpu_percent` | gauge | `name` | CPU percent, process components only |
 | `keystone_component_memory_rss_bytes` | gauge | `name` | Resident memory, process components only |
+| `keystone_reconcile_total` | counter | `result` | Reconcile passes, by outcome: `ok`, `skipped`, `failed` |
+| `keystone_reconcile_duration_seconds` | histogram | — | How long a pass takes |
+| `keystone_reconcile_repairs_total` | counter | `component` | Components brought back to running by a pass |
+| `keystone_reconcile_last_timestamp_seconds` | gauge | — | When the last pass ran, whatever its outcome |
 
 Plus the Go runtime and process collectors Prometheus adds by default.
 
@@ -40,6 +44,17 @@ because of the [state guarantees](../../concepts/component-state/):
 - alert: KeystoneComponentFlapping
   expr: increase(keystone_component_restarts_total[15m]) > 5
   for: 5m
+```
+
+**Repaired repeatedly.** Periodic reconcile restarting the same component night
+after night is a component with a problem nobody has looked at. The repair is
+working; that is exactly why the underlying fault stays invisible:
+
+```yaml
+- alert: KeystoneComponentRepeatedlyRepaired
+  expr: increase(keystone_reconcile_repairs_total[24h]) > 2
+  annotations:
+    summary: "{{ $labels.component }} keeps being repaired by reconcile"
 ```
 
 **Unhealthy but running.** The process is alive and failing its own probe — often

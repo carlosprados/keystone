@@ -466,6 +466,8 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES` | Max size of `runtime/artifacts` (default: 2GiB).                       |
 | `KEYSTONE_DELTA_MAX_BASE_BYTES`       | Largest artifact the delta path will attempt (default: 256 MiB; 0 = no limit). |
 | `KEYSTONE_ARTIFACT_DOWNLOAD_TIMEOUT`  | Artifact download timeout (default: 30m). Supports "5m", "1h", etc.    |
+| `KEYSTONE_RECONCILE_INTERVAL`         | Re-apply the plan in effect on this interval (default: unset, disabled). |
+| `KEYSTONE_RECONCILE_JITTER`           | Fleet spread for reconcile passes (default: 10% of the interval).      |
 | `KEYSTONE_TRUST_BUNDLE`               | Path to CA trust bundle (PEM) for signature verification.              |
 | `KEYSTONE_LEAF_CERT`                  | Default certificate (PEM) for signature verification if not in recipe. |
 | `KEYSTONE_IMAGE_VOLUME_DIR`           | Where container image volumes are materialised.                        |
@@ -616,6 +618,8 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 | `--http` | `127.0.0.1:8080` | HTTP listen address (empty to disable) |
 | `--api-token` | (empty) | Bearer token for the API (or `KEYSTONE_API_TOKEN`); required for a non-loopback bind |
 | `--insecure-skip-verify` | `false` | Disable mandatory artifact/recipe verification — dev/demo only (or `KEYSTONE_INSECURE_SKIP_VERIFY=true`) |
+| `--reconcile-interval` | `0` (off) | Re-apply the plan in effect on this interval, restarting components that died and ran out of retries |
+| `--reconcile-jitter` | 10% of the interval | Spread reconcile passes across a fleet; the offset is derived from the device ID, not random |
 | `--demo` | `false` | Run the built-in mock 3-component stack (db → cache → api) |
 | `--version` | — | Print version and commit, then exit |
 

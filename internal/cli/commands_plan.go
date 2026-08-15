@@ -13,6 +13,7 @@ func planCommands() []*cobra.Command {
 		graphCommand(),
 		applyCommand(),
 		applyDryCommand(),
+		reconcileCommand(),
 		stopPlanCommand(),
 	}
 }
@@ -121,6 +122,35 @@ func applyPlan(path string, dry bool) error {
 		q.Set("dry", "true")
 	}
 	return upload(agentAddr+"/v1/plan/apply"+encode(q), path)
+}
+
+func reconcileCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:     "reconcile",
+		Short:   "Repair the plan in effect",
+		GroupID: groupPlan,
+		Args:    cobra.NoArgs,
+		Long: `Re-apply the plan that is already applied, so components that died and
+ran out of restart attempts are started again. Components that are alive and
+supervised are left running.
+
+This is what ` + "`--reconcile-interval`" + ` does on a timer; run it by hand to
+repair a device now.
+
+It answers with skipped=true, and changes nothing, when no plan has been
+applied, when an apply is already running, or when you stopped the plan — the
+agent does not resurrect a plan an operator stopped.
+
+Unlike ` + "`apply`" + `, it never rolls back. The plan in effect is its own
+predecessor, so rolling back would stop healthy components and re-apply the
+failure.
+
+` + apiNote(http.MethodPost, "/v1/plan/reconcile"),
+		Example: `  keystonectl reconcile`,
+		RunE: runs(func(*cobra.Command, []string) error {
+			return request(http.MethodPost, agentAddr+"/v1/plan/reconcile", nil)
+		}),
+	}
 }
 
 func stopPlanCommand() *cobra.Command {

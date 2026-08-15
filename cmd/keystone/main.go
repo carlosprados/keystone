@@ -16,11 +16,29 @@ import (
 	httpadapter "github.com/carlosprados/keystone/internal/adapter/http"
 	mqttadapter "github.com/carlosprados/keystone/internal/adapter/mqtt"
 	natsadapter "github.com/carlosprados/keystone/internal/adapter/nats"
+	reconcileadapter "github.com/carlosprados/keystone/internal/adapter/reconcile"
 	"github.com/carlosprados/keystone/internal/agent"
 	"github.com/carlosprados/keystone/internal/config"
 	"github.com/carlosprados/keystone/internal/runner"
 	"github.com/carlosprados/keystone/internal/version"
 )
+
+// resolveDeviceID settles on a name for this device: what the caller asked for,
+// then KEYSTONE_DEVICE_ID, then the hostname, then a constant. Every adapter
+// that labels its traffic per device resolves it the same way, so a device does
+// not answer to one name over NATS and another over MQTT.
+func resolveDeviceID(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if v := os.Getenv("KEYSTONE_DEVICE_ID"); v != "" {
+		return v
+	}
+	if hostname, _ := os.Hostname(); hostname != "" {
+		return hostname
+	}
+	return "keystone-agent"
+}
 
 func main() {
 	// The agent re-executes this binary as a privilege-dropping shim when a
@@ -79,6 +97,10 @@ func main() {
 	mqttStateInterval := flag.Duration("mqtt-state-interval", 10*time.Second, "Interval for publishing state events (0 to disable)")
 	mqttHealthInterval := flag.Duration("mqtt-health-interval", 30*time.Second, "Interval for publishing health events (0 to disable)")
 	mqttQoS := flag.Int("mqtt-qos", 1, "Default QoS level for commands and responses (0, 1, or 2)")
+
+	// Periodic reconcile flags
+	reconcileInterval := flag.Duration("reconcile-interval", 0, "Re-apply the plan in effect on this interval so dead components are restarted (0 disables it)")
+	reconcileJitter := flag.Duration("reconcile-jitter", 0, "Spread reconcile passes across a fleet by this much (defaults to 10% of the interval)")
 
 	// General flags
 	demo := flag.Bool("demo", false, "Run a built-in demo: start a mock 3-component stack")
@@ -159,6 +181,15 @@ func main() {
 	applyDurationEnv("mqtt-state-interval", mqttStateInterval, "KEYSTONE_MQTT_STATE_INTERVAL")
 	applyDurationEnv("mqtt-health-interval", mqttHealthInterval, "KEYSTONE_MQTT_HEALTH_INTERVAL")
 
+	// Periodic reconcile env support.
+	applyDurationEnv("reconcile-interval", reconcileInterval, "KEYSTONE_RECONCILE_INTERVAL")
+	applyDurationEnv("reconcile-jitter", reconcileJitter, "KEYSTONE_RECONCILE_JITTER")
+	// Jitter follows the interval unless someone asked for a specific value —
+	// including 0, which is a legitimate ask for a single device.
+	if !setFlags["reconcile-jitter"] && os.Getenv("KEYSTONE_RECONCILE_JITTER") == "" {
+		*reconcileJitter = *reconcileInterval / 10
+	}
+
 	if *showVersion {
 		fmt.Printf("keystone %s (%s)\n", version.Version, version.Commit)
 		return
@@ -189,18 +220,7 @@ func main() {
 
 	// Register NATS adapter (if configured)
 	if *natsURL != "" {
-		if *natsDeviceID == "" {
-			// Try to get device ID from environment or generate one
-			*natsDeviceID = os.Getenv("KEYSTONE_DEVICE_ID")
-			if *natsDeviceID == "" {
-				hostname, _ := os.Hostname()
-				if hostname != "" {
-					*natsDeviceID = hostname
-				} else {
-					*natsDeviceID = "keystone-agent"
-				}
-			}
-		}
+		*natsDeviceID = resolveDeviceID(*natsDeviceID)
 
 		natsCfg := natsadapter.DefaultConfig()
 		natsCfg.URL = *natsURL
@@ -239,18 +259,7 @@ func main() {
 
 	// Register MQTT adapter (if configured)
 	if *mqttBroker != "" {
-		if *mqttDeviceID == "" {
-			// Try to get device ID from environment or generate one
-			*mqttDeviceID = os.Getenv("KEYSTONE_DEVICE_ID")
-			if *mqttDeviceID == "" {
-				hostname, _ := os.Hostname()
-				if hostname != "" {
-					*mqttDeviceID = hostname
-				} else {
-					*mqttDeviceID = "keystone-agent"
-				}
-			}
-		}
+		*mqttDeviceID = resolveDeviceID(*mqttDeviceID)
 
 		mqttCfg := mqttadapter.DefaultConfig()
 		mqttCfg.Broker = *mqttBroker
@@ -272,6 +281,19 @@ func main() {
 		mqtt := mqttadapter.New(mqttCfg, a)
 		registry.Register(mqtt)
 		log.Printf("[main] MQTT adapter configured for %s (device: %s)", *mqttBroker, *mqttDeviceID)
+	}
+
+	// Register the periodic reconcile adapter (if configured). Off unless asked
+	// for: switching it on by default would change how every device in a fleet
+	// behaves the moment the binary is updated.
+	if *reconcileInterval > 0 {
+		reconcileCfg := reconcileadapter.Config{
+			Interval: *reconcileInterval,
+			Jitter:   *reconcileJitter,
+			DeviceID: resolveDeviceID(""),
+		}
+		registry.Register(reconcileadapter.New(reconcileCfg, a))
+		log.Printf("[main] periodic reconcile configured every %s (jitter %s)", *reconcileInterval, *reconcileJitter)
 	}
 
 	// Start all adapters

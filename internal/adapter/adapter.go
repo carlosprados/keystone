@@ -37,6 +37,21 @@ type CommandHandler interface {
 	GetPlanStatus() *PlanStatus
 	GetPlanGraph() *GraphInfo
 
+	// ReconcileNow re-applies the plan already in effect, so components that
+	// died and exhausted their restart budget are started again.
+	//
+	// It is deliberately not "call ApplyPlan with the current path". That path
+	// enables the rollback, whose "previous plan" would be the very plan that
+	// just failed — so a failing pass would stop every healthy component and
+	// re-apply the failure. The implementation applies with rollback disabled,
+	// and refuses to resurrect a plan an operator stopped. See
+	// docs/periodic-reconcile-design.md.
+	//
+	// A pass that decides to do nothing returns a result with Skipped set and
+	// a nil error: "an apply is already running" is an ordinary outcome for a
+	// timer, not a failure anyone should act on.
+	ReconcileNow() (*ReconcileResult, error)
+
 	// Component operations
 	GetComponents() []store.ComponentInfo
 	StopComponent(name string) error
@@ -73,8 +88,28 @@ type PlanStatus struct {
 	// here so that a typo — which is the same thing seen from the other side —
 	// is visible without reading the agent's logs. A dry-run apply refuses
 	// outright instead.
-	UnknownFields []string              `json:"unknownFields,omitempty"`
-	Components    []store.ComponentInfo `json:"components"`
+	UnknownFields []string `json:"unknownFields,omitempty"`
+	// LastReconcile and LastReconcileResult report the most recent reconcile
+	// pass, so a periodic reconcile can be seen working — or seen skipping —
+	// without reading the agent's logs. Empty until one has run.
+	LastReconcile       string                `json:"lastReconcile,omitempty"`
+	LastReconcileResult string                `json:"lastReconcileResult,omitempty"`
+	Components          []store.ComponentInfo `json:"components"`
+}
+
+// ReconcileResult reports what one reconcile pass did.
+type ReconcileResult struct {
+	// Skipped is true when the pass deliberately changed nothing.
+	Skipped bool `json:"skipped"`
+	// Reason says why it was skipped, in words an operator can act on.
+	Reason string `json:"reason,omitempty"`
+	// Repaired names the components that were not running before the pass and
+	// are running after it. This is the number that says whether periodic
+	// reconcile is earning its keep: a device that repairs nothing and one that
+	// repairs the same component nightly are very different situations.
+	Repaired []string `json:"repaired,omitempty"`
+	// Duration of the pass, as a Go duration string.
+	Duration string `json:"duration"`
 }
 
 // GraphInfo represents the dependency graph of the current plan.

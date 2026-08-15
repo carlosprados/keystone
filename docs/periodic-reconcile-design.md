@@ -10,7 +10,9 @@ periodic reconcile cannot do that on its own. The two phases share one piece:
 the monotonic scheduler and its device-derived jitter, introduced here and
 reused there.
 
-Status: **design, not implemented.**
+Status: **implemented.** `internal/adapter/reconcile` holds the loop,
+`internal/agent/reconcile_now.go` the pass itself. This document is kept as the
+record of why it is shaped this way.
 
 ---
 
@@ -176,7 +178,7 @@ an explicitly-set flag always beats the environment.
 keystone_reconcile_total{result}          # ok | skipped | failed
 keystone_reconcile_duration_seconds
 keystone_reconcile_repairs_total{component}
-keystone_reconcile_last_timestamp
+keystone_reconcile_last_timestamp_seconds
 ```
 
 `keystone_reconcile_repairs_total` is the one that answers "is this feature
@@ -187,18 +189,29 @@ this counter distinguishes them.
 `PlanStatus` gains `lastReconcile` and `lastReconcileResult`, which means
 `internal/adapter/http/routes.go` changes and `task openapi` must be run.
 
-## Tests worth writing
+## Tests
 
-- A reconcile pass over a healthy plan restarts **nothing**. This is the test
-  that matters most: the whole feature is only safe because reuse works, and a
-  regression here would restart production stacks on a timer.
-- A component killed out of band is restarted by the next tick.
-- A plan stopped by the operator is not resurrected, at any number of ticks.
-- A tick during an apply reports `skipped`, not an error.
-- A failing reconcile does **not** stop healthy components — the direct
-  regression test for the rollback path described above.
-- Backoff grows on consecutive failures and resets after a success.
-- Jitter is deterministic for a given device ID and stays inside the interval.
+Written (`internal/adapter/reconcile/reconcile_test.go`,
+`internal/agent/reconcile_now_test.go`):
+
+- A plan stopped by the operator, a dry-run state, an absent plan and an apply
+  already running each report `skipped` with a reason and no error.
+- A skipped pass does not release an apply lock it never took.
+- The plan status records when the last pass ran and what it did.
+- `repairedSince` reports a revived component, a container revived with no PID,
+  and a component restarted in place with a new PID — and reports nothing at all
+  when the plan is untouched.
+- Backoff grows per consecutive failure and is capped.
+- The jitter offset is stable per device ID, inside `[0, jitter)`, differs
+  between devices, and is zero without an ID or without jitter.
+- A zero interval leaves the adapter completely inert; `Stop` is safe without
+  `Start` and is idempotent.
+
+**Not covered, and worth adding as an integration test:** a full pass over a
+real plan of live processes, asserting that healthy components keep their PIDs
+and that a component killed out of band comes back. The reuse preconditions
+that make this safe are exercised directly in `stale_state_test.go`, but the
+composition of them is not.
 
 ## Documentation this touches
 

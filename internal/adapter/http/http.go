@@ -381,6 +381,26 @@ func (a *Adapter) handlePlanStop(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handlePlanReconcile repairs the plan in effect.
+//
+// A pass that decided to change nothing is a success with skipped=true, not an
+// error: "an apply is already running" is an ordinary answer, and reporting it
+// as a failure would train callers to ignore real ones.
+func (a *Adapter) handlePlanReconcile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	res, err := a.handler.ReconcileNow()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
+}
+
 func parseDurationDefault(s string, d time.Duration) time.Duration {
 	if s == "" {
 		return d

@@ -39,6 +39,9 @@ func (m *mockHandler) AddRecipe(content string, force bool) (string, string, err
 func (m *mockHandler) DeleteRecipe(name, version string) error { return nil }
 func (m *mockHandler) ListRecipes() ([]string, error)          { return []string{}, nil }
 func (m *mockHandler) GetHealth() *adapter.HealthStatus        { return m.health }
+func (m *mockHandler) ReconcileNow() (*adapter.ReconcileResult, error) {
+	return &adapter.ReconcileResult{Duration: "1ms"}, nil
+}
 
 func TestIsLoopbackAddr(t *testing.T) {
 	loopback := []string{"127.0.0.1:8080", "localhost:8080", "[::1]:8080"}

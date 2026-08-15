@@ -200,6 +200,17 @@ func (a *Adapter) routes() []Route {
 			handler: a.handlePlanApply,
 		},
 		{
+			Pattern:       "/v1/plan/reconcile",
+			Path:          "/v1/plan/reconcile",
+			Methods:       []string{http.MethodPost},
+			Summary:       "Repair the plan in effect",
+			Description:   "Re-applies the plan already applied, restarting components that died and exhausted their restart budget. Components that are alive and supervised are left running. It changes nothing when no plan has been applied, when an apply is already running, or when an operator stopped the plan — those answer 200 with skipped=true and a reason. Unlike apply, it never rolls back: the plan in effect is its own predecessor, so a rollback would stop healthy components and re-apply the failure.",
+			Response:      new(adapter.ReconcileResult),
+			SuccessStatus: http.StatusOK,
+			Errors:        []int{http.StatusInternalServerError},
+			handler:       a.handlePlanReconcile,
+		},
+		{
 			Pattern:       "/v1/plan/stop",
 			Path:          "/v1/plan/stop",
 			Methods:       []string{http.MethodPost},

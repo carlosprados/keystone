@@ -310,6 +310,44 @@ paths:
       summary: Dependency graph
       tags:
       - plan
+  /v1/plan/reconcile:
+    post:
+      description: 'Re-applies the plan already applied, restarting components that
+        died and exhausted their restart budget. Components that are alive and supervised
+        are left running. It changes nothing when no plan has been applied, when an
+        apply is already running, or when an operator stopped the plan — those answer
+        200 with skipped=true and a reason. Unlike apply, it never rolls back: the
+        plan in effect is its own predecessor, so a rollback would stop healthy components
+        and re-apply the failure.'
+      operationId: postPlanReconcile
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdapterReconcileResult'
+          description: OK
+        "401":
+          content:
+            text/plain:
+              schema:
+                type:
+                - "null"
+                - string
+          description: Unauthorized
+        "500":
+          content:
+            text/plain:
+              schema:
+                type:
+                - "null"
+                - string
+          description: Internal Server Error
+      security:
+      - bearerAuth: []
+      summary: Repair the plan in effect
+      tags:
+      - plan
   /v1/plan/status:
     get:
       description: The applied plan, its status, the last error if any, and the component
@@ -590,6 +628,10 @@ components:
           - "null"
         error:
           type: string
+        lastReconcile:
+          type: string
+        lastReconcileResult:
+          type: string
         planPath:
           type: string
         status:
@@ -598,6 +640,19 @@ components:
           items:
             type: string
           type: array
+      type: object
+    AdapterReconcileResult:
+      properties:
+        duration:
+          type: string
+        reason:
+          type: string
+        repaired:
+          items:
+            type: string
+          type: array
+        skipped:
+          type: boolean
       type: object
     AdapterRestartDryResult:
       properties:
