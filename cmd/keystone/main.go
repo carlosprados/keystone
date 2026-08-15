@@ -18,6 +18,7 @@ import (
 	natsadapter "github.com/carlosprados/keystone/internal/adapter/nats"
 	reconcileadapter "github.com/carlosprados/keystone/internal/adapter/reconcile"
 	"github.com/carlosprados/keystone/internal/agent"
+	"github.com/carlosprados/keystone/internal/clock"
 	"github.com/carlosprados/keystone/internal/config"
 	"github.com/carlosprados/keystone/internal/runner"
 	"github.com/carlosprados/keystone/internal/version"
@@ -97,6 +98,8 @@ func main() {
 	mqttStateInterval := flag.Duration("mqtt-state-interval", 10*time.Second, "Interval for publishing state events (0 to disable)")
 	mqttHealthInterval := flag.Duration("mqtt-health-interval", 30*time.Second, "Interval for publishing health events (0 to disable)")
 	mqttQoS := flag.Int("mqtt-qos", 1, "Default QoS level for commands and responses (0, 1, or 2)")
+
+	clockPolicy := flag.String("clock-policy", "high-water", "What to do when the system clock is behind known-good time: high-water (verify against the later of the two) or strict (refuse to verify)")
 
 	// Periodic reconcile flags
 	reconcileInterval := flag.Duration("reconcile-interval", 0, "Re-apply the plan in effect on this interval so dead components are restarted (0 disables it)")
@@ -181,6 +184,8 @@ func main() {
 	applyDurationEnv("mqtt-state-interval", mqttStateInterval, "KEYSTONE_MQTT_STATE_INTERVAL")
 	applyDurationEnv("mqtt-health-interval", mqttHealthInterval, "KEYSTONE_MQTT_HEALTH_INTERVAL")
 
+	applyStringEnv("clock-policy", clockPolicy, "KEYSTONE_CLOCK_POLICY")
+
 	// Periodic reconcile env support.
 	applyDurationEnv("reconcile-interval", reconcileInterval, "KEYSTONE_RECONCILE_INTERVAL")
 	applyDurationEnv("reconcile-jitter", reconcileJitter, "KEYSTONE_RECONCILE_JITTER")
@@ -201,7 +206,11 @@ func main() {
 
 	// Create agent
 	skipVerify := *insecureSkipVerify || strings.EqualFold(os.Getenv("KEYSTONE_INSECURE_SKIP_VERIFY"), "true")
-	a := agent.New(agent.Options{HTTPAddr: *httpAddr, InsecureSkipVerify: skipVerify})
+	policy, err := clock.ParsePolicy(*clockPolicy)
+	if err != nil {
+		log.Fatalf("[main] %v", err)
+	}
+	a := agent.New(agent.Options{HTTPAddr: *httpAddr, InsecureSkipVerify: skipVerify, ClockPolicy: policy})
 
 	// Create adapter registry
 	registry := adapter.NewRegistry()

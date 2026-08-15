@@ -14,6 +14,8 @@ running. This is that output:
 Usage of keystone:
   -api-token string
     	Bearer token required for the HTTP API (or KEYSTONE_API_TOKEN); required to bind a non-loopback address
+  -clock-policy string
+    	What to do when the system clock is behind known-good time: high-water (verify against the later of the two) or strict (refuse to verify) (default "high-water")
   -demo
     	Run a built-in demo: start a mock 3-component stack
   -http string

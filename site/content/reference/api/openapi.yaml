@@ -609,6 +609,10 @@ components:
       type: object
     AdapterHealthStatus:
       properties:
+        clock_source:
+          type: string
+        clock_trusted:
+          type: boolean
         closed:
           type: boolean
         status:

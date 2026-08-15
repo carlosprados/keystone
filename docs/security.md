@@ -214,6 +214,29 @@ Dataset manifests are signed the same way, through `keystonectl manifest
 new|sign|verify`; `manifest verify --since` additionally applies the anti-replay
 rule an agent enforces.
 
+### Devices without a reliable clock
+
+A gateway with no RTC boots at 1970, so every valid certificate reads "not yet
+valid" and the device rejects everything it needs — sometimes before it can
+reach NTP at all. Ignoring validity is not an option: expiry is what limits a
+compromised signer, and disabling it lets an attacker who can set the clock back
+revive a certificate you revoked.
+
+The agent therefore keeps its own lower bound on the current time, from evidence
+rather than trust: the binary's build timestamp (it cannot run before it was
+built) and a high-water mark persisted in `runtime/state/clock`. Certificate
+validity is judged against the later of that and the system clock, so putting a
+clock back achieves nothing.
+
+| `--clock-policy` | Behaviour |
+|---|---|
+| `high-water` (default) | Verify against the later of system clock and evidence |
+| `strict` | Refuse to verify while the clock is behind the evidence; the error is retryable (HTTP 503) because NTP fixes it |
+
+There is no policy that ignores expiry. `/healthz` reports `clock_trusted` and
+`clock_source`, and `keystone_clock_trusted` exports the same thing — worth an
+alert, because a device on approximate time looks healthy in every other way.
+
 ## Signing walkthrough
 
 A dev helper generates a throwaway CA and signs files for you:

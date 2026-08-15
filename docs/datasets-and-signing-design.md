@@ -123,12 +123,28 @@ offline root CA that never touches a network, signing certificates valid for 90
 days, means a compromised signer expires on its own. With a bare pinned key, a
 compromise is permanent until someone touches every device by hand.
 
-That choice creates one problem worth naming now: **a gateway without an RTC
-boots in 1970 and rejects every valid certificate as "not yet valid"** — unable
-to accept updates exactly when it most needs to. The same clock problem as
-periodic scheduling, one layer up. Either validity is checked only when the
-clock is known-synchronised, or the manifest's signed timestamp becomes the
-time reference. This must be decided before the first certificate is issued.
+That choice creates one problem worth naming: **a gateway without an RTC boots
+in 1970 and rejects every valid certificate as "not yet valid"** — unable to
+accept updates exactly when it most needs to. The same clock problem as periodic
+scheduling, one layer up.
+
+**Resolved, and implemented in `internal/clock`.** The agent keeps its own lower
+bound on the current time from evidence rather than trust: the binary's build
+timestamp (it cannot run before it was built) and a high-water mark persisted in
+`runtime/state/clock`. Validity is judged against the later of that and the
+system clock, so setting a clock back achieves nothing — which is the attack
+that matters, since it would otherwise revive a revoked certificate. Setting it
+forward only expires certificates early.
+
+Two policies, `high-water` (default) and `strict`; deliberately none that
+ignores expiry. Under `strict` the failure is reported as retryable, because NTP
+clears it. `/healthz` and `keystone_clock_trusted` expose the state, since a
+device on approximate time looks healthy in every other way.
+
+Still to come in the datasets phase: `Source.Advance` exists but nothing calls
+it. An accepted manifest's signed `published` timestamp is proof that time is at
+least that late, so applying one should raise the mark — a fleet that never sees
+NTP would then still track time through its update channel.
 
 ## Commands
 
@@ -443,8 +459,6 @@ A new `site/content/concepts/datasets.md`; plus `concepts/recipes.md`,
   the trust bundle. Short-lived certificates limit the blast radius; they do not
   answer the question. TUF and Uptane solved rotation, threshold signing and
   metadata expiry, and are worth reading before designing this.
-- **Certificate validity versus a wrong clock**, per Part 1. Needs a decision
-  before the first production certificate.
 - **Publication format** for each dataset — uncompressed tar for delta
   efficiency against first-fetch cost.
 - **Whether datasets should be fetched by non-consuming components at all**, or

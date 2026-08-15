@@ -110,6 +110,50 @@ A dev CA is a dev CA. For real fleets the signing key belongs in an HSM or a
 CI-managed KMS, and the private key should never touch a developer laptop.
 {{% /notice %}}
 
+## Devices whose clock cannot be trusted
+
+A gateway with no RTC boots with its clock at 1970. Every valid certificate is
+then "not yet valid", and the device rejects the recipes, artifacts and
+manifests it needs — often before it can reach NTP, because the component that
+gives it a network is in the plan it just refused.
+
+Turning off the validity check is not the answer: expiry is what makes a
+compromised signer stop working on its own, and switching it off hands an
+attacker a way to revive a certificate you revoked. So the agent keeps its own
+lower bound on the real time, built from evidence:
+
+- **the build timestamp of the binary**, since it cannot be running before it
+  was built;
+- **a high-water mark** persisted across restarts, so time never goes backwards
+  between boots.
+
+Certificates are checked against the later of the system clock and that
+evidence. Setting a device's clock back therefore achieves nothing, which closes
+the attack that matters. Setting it forward only expires certificates early —
+noisy, and not a bypass.
+
+```bash
+keystone --clock-policy high-water   # default
+keystone --clock-policy strict       # refuse to verify while the clock is behind
+```
+
+Under `strict` a verification failure is reported as retryable (HTTP 503), since
+it clears by itself once NTP runs.
+
+Either way the agent says so, and it is worth alerting on — a device checking
+expiry against an approximate time looks perfectly healthy otherwise:
+
+```bash
+curl -s localhost:8080/healthz | jq '{clock_trusted, clock_source}'
+# { "clock_trusted": false, "clock_source": "high-water" }
+```
+
+{{% notice style="note" %}}
+If you specify the hardware, fit an RTC with a battery. All of the above is a
+good mitigation for saving a euro on the bill of materials, and it is still
+needed for hardware you do not control.
+{{% /notice %}}
+
 ## Rotating
 
 The trust bundle is a file of CA certificates, so rotation is: add the new CA to

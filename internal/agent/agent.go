@@ -17,7 +17,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/carlosprados/keystone/internal/adapter"
 	"github.com/carlosprados/keystone/internal/artifact"
+	"github.com/carlosprados/keystone/internal/clock"
 	"github.com/carlosprados/keystone/internal/config"
 	"github.com/carlosprados/keystone/internal/deploy"
 	"github.com/carlosprados/keystone/internal/metrics"
@@ -36,6 +38,9 @@ type Options struct {
 	// InsecureSkipVerify disables the mandatory artifact integrity policy
 	// (sha256 + signature). Intended for local development/demo only.
 	InsecureSkipVerify bool
+	// ClockPolicy decides what happens when the system clock is behind the
+	// agent's own evidence of the current time. Empty means high-water.
+	ClockPolicy clock.Policy
 }
 
 // Agent is the top-level runtime handle for Keystone.
@@ -93,6 +98,10 @@ type Agent struct {
 	trustPool          *x509.CertPool
 	trustPath          string
 	insecureSkipVerify bool
+	// clock decides what time certificate validity is judged against. A gateway
+	// with no RTC boots at 1970 and would otherwise reject every valid
+	// certificate as not yet valid.
+	clock *clock.Source
 	// recipes
 	recipes *store.RecipeStore
 }
@@ -119,6 +128,13 @@ func New(opts Options) *Agent {
 		stateDir:       filepath.Join("runtime", "state"),
 		ctx:            ctx,
 		ctxCancel:      cancel,
+	}
+	a.clock = clock.New(opts.ClockPolicy, a.stateDir)
+	if !a.clock.Trusted() {
+		log.Printf("[agent] WARNING: the system clock reads %s, which is behind known-good time %s. "+
+			"Certificate validity is being checked against the later of the two (source: %s). "+
+			"A device with no RTC needs its clock set, or signatures will keep looking wrong.",
+			time.Now().UTC().Format(time.RFC3339), a.clock.Now().Format(time.RFC3339), a.clock.Origin())
 	}
 	// Set artifact cache limit from env (bytes). Default: 2 GiB.
 	a.artifactCacheLimit = 2 * 1024 * 1024 * 1024
@@ -212,6 +228,9 @@ func (a *Agent) startStatePoller() {
 			}
 			a.refreshComponentStates()
 			a.persistSnapshot()
+			// Cheap: only writes when the mark has moved on by 15 minutes.
+			a.clock.Tick()
+			metrics.SetClockTrusted(a.clock.Trusted())
 		}
 	}()
 }
@@ -267,6 +286,13 @@ func (a *Agent) Close() error {
 	// the last applied plan automatically.
 	if err := a.stopPlanInternal(false); err != nil {
 		log.Printf("[agent] warning: stop plan during close failed: %v", err)
+	}
+	// Record how far time has got before we lose the chance: this mark is what
+	// stops the clock going backwards across a restart.
+	if a.clock != nil {
+		if err := a.clock.Persist(); err != nil {
+			log.Printf("[agent] warning: could not persist the clock mark: %v", err)
+		}
 	}
 	// Cancel the agent context to signal all operations to stop
 	if a.ctxCancel != nil {
@@ -629,6 +655,12 @@ func (a *Agent) applyPlan(planPath string) error {
 						a.handles[it.Name] = h
 						ci, ok2 := a.comps.Get(it.Name)
 						if ok2 {
+							// Record it running here, rather than waiting for
+							// refreshComponentStates to notice on its next 500ms
+							// pass. That gap was long enough for a reconcile
+							// arriving right after an apply to judge every
+							// component un-reusable and restart the whole stack.
+							ci.State = "running"
 							// Extract PID for process handles
 							if ph, ok := h.(*runner.ProcessHandle); ok {
 								ci.PID = ph.PID()
@@ -813,6 +845,24 @@ func (a *Agent) applyPlan(planPath string) error {
 
 // stageArtifactToWorkDir copies a downloaded artifact into the component workDir
 // using the artifact basename. Existing files are overwritten.
+// verificationTime is the time certificate validity is judged against: the
+// later of the system clock and the agent's own evidence that time has already
+// passed. Under the strict clock policy it returns an error instead, refusing
+// to verify anything while the clock is behind that evidence.
+func (a *Agent) verificationTime() (time.Time, error) {
+	if a.clock == nil {
+		// Only reachable from tests that build an Agent literal. The zero time
+		// tells x509 to use the system clock, which is the old behaviour.
+		return time.Time{}, nil
+	}
+	at, err := a.clock.VerificationTime()
+	if err != nil {
+		// Retrying is right here: the clock fixes itself the moment NTP runs.
+		return time.Time{}, fmt.Errorf("%w: %v", adapter.ErrNotReady, err)
+	}
+	return at, nil
+}
+
 // verifyRecipeFileSignature enforces that a recipe loaded from a filesystem
 // path carries a valid detached signature before any of its lifecycle hooks
 // (install/run/shutdown scripts — arbitrary shell) can run. The signature is a
@@ -840,8 +890,14 @@ func (a *Agent) verifyRecipeFileSignature(recipePath string) error {
 	if certPath == "" {
 		return fmt.Errorf("recipe %q rejected: no certificate for signature verification (set KEYSTONE_LEAF_CERT or provide %s.crt)", recipePath, filepath.Base(recipePath))
 	}
-	if err := security.VerifyDetached(recipePath, sigPath, certPath, a.trustPool); err != nil {
-		return fmt.Errorf("recipe signature verify failed for %s: %w", filepath.Base(recipePath), err)
+	now, err := a.verificationTime()
+	if err != nil {
+		return fmt.Errorf("recipe %q rejected: %w", recipePath, err)
+	}
+	if err := security.VerifyDetachedAt(recipePath, sigPath, certPath, a.trustPool, now); err != nil {
+		// The caller's fault, not the device's: a signature that does not
+		// validate will not start validating on a retry.
+		return fmt.Errorf("%w: recipe signature verify failed for %s: %v", adapter.ErrInvalidInput, filepath.Base(recipePath), err)
 	}
 	return nil
 }
@@ -860,10 +916,10 @@ func (a *Agent) ensureAndVerifyArtifact(artDir, workDir string, adef recipe.Arti
 
 	if !a.insecureSkipVerify {
 		if strings.TrimSpace(adef.SHA256) == "" {
-			return fmt.Errorf("artifact %q rejected: sha256 is required (use --insecure-skip-verify for dev)", adef.URI)
+			return fmt.Errorf("%w: artifact %q rejected: sha256 is required (use --insecure-skip-verify for dev)", adapter.ErrInvalidInput, adef.URI)
 		}
 		if adef.SigURI == "" {
-			return fmt.Errorf("artifact %q rejected: sig_uri is required (use --insecure-skip-verify for dev)", adef.URI)
+			return fmt.Errorf("%w: artifact %q rejected: sig_uri is required (use --insecure-skip-verify for dev)", adapter.ErrInvalidInput, adef.URI)
 		}
 		if a.trustPool == nil {
 			return fmt.Errorf("artifact %q rejected: no trust bundle configured; set KEYSTONE_TRUST_BUNDLE (or --insecure-skip-verify for dev)", adef.URI)
@@ -897,8 +953,12 @@ func (a *Agent) ensureAndVerifyArtifact(artDir, workDir string, adef recipe.Arti
 		if certPath == "" {
 			return fmt.Errorf("no certificate specified for signature verification")
 		}
-		if err := security.VerifyDetached(path, sigPath, certPath, a.trustPool); err != nil {
-			return fmt.Errorf("signature verify failed for %s: %w", filepath.Base(path), err)
+		now, err := a.verificationTime()
+		if err != nil {
+			return fmt.Errorf("artifact %q rejected: %w", adef.URI, err)
+		}
+		if err := security.VerifyDetachedAt(path, sigPath, certPath, a.trustPool, now); err != nil {
+			return fmt.Errorf("%w: signature verify failed for %s: %v", adapter.ErrInvalidInput, filepath.Base(path), err)
 		}
 	}
 

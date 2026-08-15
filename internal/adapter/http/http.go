@@ -357,14 +357,30 @@ func (a *Adapter) handlePlanApply(w http.ResponseWriter, r *http.Request) {
 		// A plan the caller got wrong is a 4xx. The distinction is not cosmetic:
 		// a 500 tells automation to retry, and a file with a typo in it will
 		// still have that typo on the next attempt.
-		status := http.StatusInternalServerError
-		if errors.Is(err, adapter.ErrInvalidInput) {
-			status = http.StatusBadRequest
-		}
-		http.Error(w, err.Error(), status)
+		http.Error(w, err.Error(), applyStatus(err))
 		return
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// applyStatus maps an apply failure onto a status code by one question: will
+// submitting the same thing again ever work?
+//
+//   - No, the content is wrong (a typo, a signature that does not validate):
+//     400, so automation stops rather than retrying a file that will not fix
+//     itself.
+//   - Yes, the device is not ready yet (its clock is behind known-good time
+//     under the strict policy): 503, which is precisely "try again later".
+//   - Anything else is the agent's problem: 500.
+func applyStatus(err error) int {
+	switch {
+	case errors.Is(err, adapter.ErrInvalidInput):
+		return http.StatusBadRequest
+	case errors.Is(err, adapter.ErrNotReady):
+		return http.StatusServiceUnavailable
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 // handlePlanStop stops all running components.

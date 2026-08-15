@@ -75,6 +75,17 @@ var (
 		},
 		[]string{"component"},
 	)
+	// clockTrusted is worth alerting on: a device verifying certificates against
+	// an approximate time is not enforcing expiry the way its configuration
+	// suggests, and nothing else about it looks wrong.
+	clockTrusted = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "keystone",
+			Subsystem: "clock",
+			Name:      "trusted",
+			Help:      "1 when the system clock is at least as late as the agent's own evidence, 0 when it is behind it.",
+		},
+	)
 	reconcileLast = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "keystone",
@@ -91,6 +102,7 @@ func init() {
 		prometheus.MustRegister(
 			componentState, componentStateHealth, componentRestarts, componentHealthy,
 			reconcileTotal, reconcileDuration, reconcileRepairs, reconcileLast,
+			clockTrusted,
 		)
 	})
 }
@@ -117,6 +129,15 @@ func ObserveReconcile(result string, d time.Duration, repaired []string) {
 	for _, name := range repaired {
 		reconcileRepairs.WithLabelValues(name).Inc()
 	}
+}
+
+// SetClockTrusted publishes whether the system clock can be believed.
+func SetClockTrusted(trusted bool) {
+	if trusted {
+		clockTrusted.Set(1)
+		return
+	}
+	clockTrusted.Set(0)
 }
 
 func IncRestarts(name string) { componentRestarts.WithLabelValues(name).Inc() }

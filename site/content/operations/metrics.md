@@ -21,6 +21,7 @@ protects the rest of the HTTP adapter.
 | `keystone_reconcile_duration_seconds` | histogram | — | How long a pass takes |
 | `keystone_reconcile_repairs_total` | counter | `component` | Components brought back to running by a pass |
 | `keystone_reconcile_last_timestamp_seconds` | gauge | — | When the last pass ran, whatever its outcome |
+| `keystone_clock_trusted` | gauge | — | `1` when the system clock is at least as late as the agent's evidence, `0` when it is behind it |
 
 Plus the Go runtime and process collectors Prometheus adds by default.
 
@@ -55,6 +56,18 @@ working; that is exactly why the underlying fault stays invisible:
   expr: increase(keystone_reconcile_repairs_total[24h]) > 2
   annotations:
     summary: "{{ $labels.component }} keeps being repaired by reconcile"
+```
+
+**Untrusted clock.** The device is checking certificate expiry against an
+approximate time, so a revoked or expired signer may still be accepted. Nothing
+else about the device looks wrong, which is exactly why this needs an alert:
+
+```yaml
+- alert: KeystoneClockUntrusted
+  expr: keystone_clock_trusted == 0
+  for: 30m
+  annotations:
+    summary: "clock behind known-good time; certificate expiry is not being enforced as configured"
 ```
 
 **Unhealthy but running.** The process is alive and failing its own probe — often

@@ -222,10 +222,17 @@ func (a *Agent) RestartComponentDry(name string) *adapter.RestartDryResult {
 
 // GetHealth returns the agent health status.
 func (a *Agent) GetHealth() *adapter.HealthStatus {
-	return &adapter.HealthStatus{
-		Status:  "ok",
-		Uptime:  time.Since(a.start).String(),
-		Closed:  a.closed.Load(),
-		TimeUTC: time.Now().UTC().Format(time.RFC3339),
+	h := &adapter.HealthStatus{
+		Status:       "ok",
+		Uptime:       time.Since(a.start).String(),
+		Closed:       a.closed.Load(),
+		TimeUTC:      time.Now().UTC().Format(time.RFC3339),
+		ClockTrusted: true,
+		ClockSource:  "system",
 	}
+	if a.clock != nil {
+		h.ClockTrusted = a.clock.Trusted()
+		h.ClockSource = a.clock.Origin()
+	}
+	return h
 }

@@ -14,7 +14,7 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 
 - **Lightweight**: idle CPU ~0%, ~23 MB RAM baseline, ~22 MB binary
 - **Solid**: atomic deployments, checkpoints, rollback, exponential backoff
-- **Secure by default**: loopback API with bearer-token auth, mandatory recipe & artifact signatures (ECDSA/RSA), fail-closed verification — see [docs/security.md](docs/security.md)
+- **Secure by default**: loopback API with bearer-token auth, mandatory recipe & artifact signatures (RSA/ECDSA/Ed25519), fail-closed verification — see [docs/security.md](docs/security.md)
 - **Portable**: Linux x86/ARM, single binary, no mandatory Docker/CRI
 - **Frugal on the link**: downloads resume, and an artifact can opt into being *patched* instead of re-downloaded — 13.4 MB becomes 1.0 MB between two adjacent releases, with a full-download fallback whenever patching is not possible
 - **Connected**: HTTP REST, NATS (+ JetStream), MQTT adapters
@@ -466,6 +466,7 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES` | Max size of `runtime/artifacts` (default: 2GiB).                       |
 | `KEYSTONE_DELTA_MAX_BASE_BYTES`       | Largest artifact the delta path will attempt (default: 256 MiB; 0 = no limit). |
 | `KEYSTONE_ARTIFACT_DOWNLOAD_TIMEOUT`  | Artifact download timeout (default: 30m). Supports "5m", "1h", etc.    |
+| `KEYSTONE_CLOCK_POLICY`               | `high-water` (default) or `strict`; how certificate validity is judged when the clock cannot be trusted. |
 | `KEYSTONE_RECONCILE_INTERVAL`         | Re-apply the plan in effect on this interval (default: unset, disabled). |
 | `KEYSTONE_RECONCILE_JITTER`           | Fleet spread for reconcile passes (default: 10% of the interval).      |
 | `KEYSTONE_TRUST_BUNDLE`               | Path to CA trust bundle (PEM) for signature verification.              |
@@ -618,6 +619,7 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 | `--http` | `127.0.0.1:8080` | HTTP listen address (empty to disable) |
 | `--api-token` | (empty) | Bearer token for the API (or `KEYSTONE_API_TOKEN`); required for a non-loopback bind |
 | `--insecure-skip-verify` | `false` | Disable mandatory artifact/recipe verification — dev/demo only (or `KEYSTONE_INSECURE_SKIP_VERIFY=true`) |
+| `--clock-policy` | `high-water` | What to do when the system clock is behind known-good time: `high-water` verifies against the later of the two, `strict` refuses to verify |
 | `--reconcile-interval` | `0` (off) | Re-apply the plan in effect on this interval, restarting components that died and ran out of retries |
 | `--reconcile-jitter` | 10% of the interval | Spread reconcile passes across a fleet; the offset is derived from the device ID, not random |
 | `--demo` | `false` | Run the built-in mock 3-component stack (db → cache → api) |

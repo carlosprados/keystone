@@ -22,7 +22,7 @@ builds:
     goarm:
       - 7
     ldflags:
-      - -s -w -X github.com/carlosprados/keystone/internal/version.Version={{.Version}} -X github.com/carlosprados/keystone/internal/version.Commit={{.Commit}}
+      - -s -w -X github.com/carlosprados/keystone/internal/version.Version={{.Version}} -X github.com/carlosprados/keystone/internal/version.Commit={{.Commit}} -X github.com/carlosprados/keystone/internal/version.Date={{.Date}}
 
   - id: keystonectl
     main: ./cmd/keystonectl
@@ -38,7 +38,7 @@ builds:
     goarm:
       - 7
     ldflags:
-      - -s -w -X github.com/carlosprados/keystone/internal/version.Version={{.Version}} -X github.com/carlosprados/keystone/internal/version.Commit={{.Commit}}
+      - -s -w -X github.com/carlosprados/keystone/internal/version.Version={{.Version}} -X github.com/carlosprados/keystone/internal/version.Commit={{.Commit}} -X github.com/carlosprados/keystone/internal/version.Date={{.Date}}
 
   - id: keystoneserver
     main: ./cmd/keystoneserver
@@ -54,7 +54,7 @@ builds:
     goarm:
       - 7
     ldflags:
-      - -s -w -X github.com/carlosprados/keystone/internal/version.Version={{.Version}} -X github.com/carlosprados/keystone/internal/version.Commit={{.Commit}}
+      - -s -w -X github.com/carlosprados/keystone/internal/version.Version={{.Version}} -X github.com/carlosprados/keystone/internal/version.Commit={{.Commit}} -X github.com/carlosprados/keystone/internal/version.Date={{.Date}}
 
 archives:
   - format: tar.gz

@@ -15,6 +15,7 @@ import (
 	"io"
 	"math/big"
 	"os"
+	"time"
 )
 
 // LoadTrustBundle loads a PEM bundle of trusted roots into a CertPool.
@@ -36,7 +37,23 @@ func LoadTrustBundle(pemPath string) (*x509.CertPool, error) {
 // VerifyDetached verifies the signature of a file using a provided leaf certificate and trust bundle.
 // The signature is expected to be over the SHA-256 digest of the file content.
 // Signature file may be raw bytes or base64-encoded; both are supported.
+//
+// Certificate validity is judged against the system clock. On a device that may
+// have no reliable clock, use VerifyDetachedAt with a time the caller can
+// defend — see internal/clock.
 func VerifyDetached(filePath, sigPath, leafCertPath string, roots *x509.CertPool) error {
+	return VerifyDetachedAt(filePath, sigPath, leafCertPath, roots, time.Time{})
+}
+
+// VerifyDetachedAt is VerifyDetached with an explicit time for the certificate
+// validity check. The zero time means "use the system clock", which is what
+// x509 does with an unset CurrentTime.
+//
+// This exists because a gateway with no RTC boots at 1970 and would reject every
+// valid certificate as not yet valid. Passing the time in — rather than reading
+// the clock here — also means the decision about what time to believe lives in
+// one place instead of being made implicitly at each call site.
+func VerifyDetachedAt(filePath, sigPath, leafCertPath string, roots *x509.CertPool, now time.Time) error {
 	if roots == nil {
 		return errors.New("nil trust roots")
 	}
@@ -84,8 +101,8 @@ func VerifyDetached(filePath, sigPath, leafCertPath string, roots *x509.CertPool
 	}
 	leaf := certs[0]
 
-	// Verify chain
-	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots}); err != nil {
+	// Verify chain. CurrentTime zero means x509 uses the system clock.
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, CurrentTime: now}); err != nil {
 		return fmt.Errorf("certificate verify failed: %w", err)
 	}
 

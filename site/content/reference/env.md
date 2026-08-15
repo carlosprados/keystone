@@ -48,6 +48,26 @@ anything else, so these can live there or in a systemd `EnvironmentFile`.
 | `KEYSTONE_CNI_PLUGIN_DIRS` | — | CNI plugin search path |
 | `KEYSTONE_CNI_NETNS_DIR` | — | CNI network namespace directory |
 
+## Clock
+
+| Variable | Flag | Default |
+|---|---|---|
+| `KEYSTONE_CLOCK_POLICY` | `--clock-policy` | `high-water` |
+
+`high-water` verifies certificates against the later of the system clock and the
+agent's own evidence that time has passed — a mark persisted across restarts and
+the binary's build timestamp. It is what lets a gateway with no RTC, whose clock
+reads 1970 on first boot, accept a valid certificate instead of calling it "not
+yet valid".
+
+`strict` refuses to verify anything while the system clock is behind that
+evidence. Under it a signature check fails with a retryable error (HTTP 503),
+because the condition clears by itself once NTP runs.
+
+There is deliberately no setting that ignores certificate expiry. Expiry is what
+makes a compromised signer stop working on its own; `--insecure-skip-verify`
+already exists for development.
+
 ## Periodic reconcile
 
 Off unless you ask for it. See [reconcile and reuse]({{% relref "/concepts/reconcile-and-reuse" %}}).

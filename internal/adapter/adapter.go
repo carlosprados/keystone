@@ -76,6 +76,16 @@ type CommandHandler interface {
 // Wrap with %w at the point the input is judged; check with errors.Is.
 var ErrInvalidInput = errors.New("invalid input")
 
+// ErrNotReady marks a failure the device expects to recover from on its own,
+// without anybody changing what they submitted — the clock being behind
+// known-good time under the strict clock policy, for instance, which fixes
+// itself the moment NTP runs.
+//
+// It is the mirror image of ErrInvalidInput and exists for the same reason:
+// retrying is exactly the right thing to do here, and exactly the wrong thing
+// for a signature that will never validate. Transports map it to 503.
+var ErrNotReady = errors.New("not ready")
+
 // PlanStatus represents the current state of the deployment plan.
 type PlanStatus struct {
 	PlanPath string `json:"planPath"`
@@ -140,6 +150,16 @@ type HealthStatus struct {
 	Uptime  string `json:"uptime"`
 	Closed  bool   `json:"closed"`
 	TimeUTC string `json:"time_utc"`
+	// ClockTrusted is false when the system clock is behind what the agent can
+	// prove has already happened — a device with no RTC, or one whose clock was
+	// set back. Signature checks still work (they use the later time), but an
+	// operator needs to see this: a fleet running on approximate time is not
+	// enforcing certificate expiry the way it looks like it is.
+	ClockTrusted bool `json:"clock_trusted"`
+	// ClockSource says where the time being used came from: "system",
+	// "high-water" (a mark persisted from an earlier run) or "build" (the
+	// binary's own build timestamp).
+	ClockSource string `json:"clock_source"`
 }
 
 // Registry manages multiple adapters for the agent.
