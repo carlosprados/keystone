@@ -20,6 +20,16 @@
 //   - a high-water mark persisted across restarts, so time never goes backwards
 //     between boots.
 //
+// A third source is missing and is worth naming, because the obvious candidate
+// does not work. A verified certificate's NotBefore looks like evidence, but it
+// cannot raise the mark: verification uses max(clock, mark, build) as its
+// reference, so a certificate that validates always has a NotBefore at or below
+// that, by construction. A signed dataset manifest is different — its
+// publication timestamp is independent of the validity window of the
+// certificate that signed it, so a 90-day signing certificate can vouch for
+// manifests that keep proving later and later dates. That is where this gains
+// its third source, and it arrives with the datasets phase.
+//
 // Verification uses max(system clock, high-water mark, build time). Putting the
 // clock back therefore achieves nothing, which closes the attack that matters.
 // Putting it forward only expires certificates early: noisy, and not a bypass.
@@ -176,26 +186,6 @@ func (s *Source) VerificationTime() (time.Time, error) {
 			s.policy)
 	}
 	return s.Now(), nil
-}
-
-// Advance raises the high-water mark with a time proven to have passed — the
-// signed publication timestamp of an accepted manifest, for instance. A signed
-// document newer than anything we have seen is evidence that the real time is
-// at least that late, with no NTP involved.
-//
-// Only ever moves forward, and only for already-authenticated input: calling it
-// with an unverified timestamp would let an attacker push the mark into the
-// future and expire every certificate on the device.
-func (s *Source) Advance(t time.Time) {
-	if t.IsZero() {
-		return
-	}
-	t = t.UTC()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if t.After(s.mark) {
-		s.mark = t
-	}
 }
 
 // Tick records the passage of time and persists the mark when it has moved on

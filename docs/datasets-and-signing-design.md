@@ -141,10 +141,23 @@ ignores expiry. Under `strict` the failure is reported as retryable, because NTP
 clears it. `/healthz` and `keystone_clock_trusted` expose the state, since a
 device on approximate time looks healthy in every other way.
 
-Still to come in the datasets phase: `Source.Advance` exists but nothing calls
-it. An accepted manifest's signed `published` timestamp is proof that time is at
-least that late, so applying one should raise the mark — a fleet that never sees
-NTP would then still track time through its update channel.
+One more source of evidence belongs here and is **not** implemented, because
+its only supplier is a dataset manifest. It is worth writing down why the
+obvious alternative was tried and dropped:
+
+- **A verified certificate's `NotBefore` cannot raise the mark.** It looks like
+  evidence — an authority the device trusts issued it, so time must have passed
+  it. But verification uses `max(clock, mark, build)` as its reference, so a
+  certificate that validates always has a `NotBefore` at or below that already.
+  It is arithmetically incapable of teaching the device anything.
+- **A manifest's `published` can.** It is independent of the validity window of
+  the certificate that signed it, so one 90-day signing certificate vouches for
+  manifests that keep proving later and later dates. A fleet that never reaches
+  NTP would then track time through its update channel.
+
+So the datasets phase adds an `Advance(published)` on the clock source, at the
+point a manifest is accepted — after its signature and the anti-replay rule,
+never before.
 
 ## Commands
 

@@ -107,35 +107,13 @@ func TestNoEvidenceIsNotDistrust(t *testing.T) {
 	}
 }
 
-// The mark only ever moves forward: that is the whole point, and it is what
-// makes putting the clock back useless to an attacker.
-func TestAdvanceOnlyMovesForward(t *testing.T) {
-	s := New(PolicyHighWater, t.TempDir())
-	base := time.Date(2026, 8, 15, 3, 0, 0, 0, time.UTC)
-
-	s.Advance(base)
-	if !s.mark.Equal(base) {
-		t.Fatalf("mark=%s, want %s", s.mark, base)
-	}
-	s.Advance(base.Add(-180 * 24 * time.Hour))
-	if !s.mark.Equal(base) {
-		t.Errorf("mark went backwards to %s", s.mark)
-	}
-	s.Advance(base.Add(time.Hour))
-	if !s.mark.Equal(base.Add(time.Hour)) {
-		t.Errorf("mark=%s, want it to have advanced", s.mark)
-	}
-	s.Advance(time.Time{})
-	if !s.mark.Equal(base.Add(time.Hour)) {
-		t.Errorf("the zero time moved the mark to %s", s.mark)
-	}
-}
-
 func TestPersistAndReload(t *testing.T) {
 	dir := t.TempDir()
 	s := New(PolicyHighWater, dir)
 	mark := time.Date(2026, 8, 15, 3, 0, 0, 0, time.UTC)
-	s.Advance(mark)
+	s.mu.Lock()
+	s.mark = mark
+	s.mu.Unlock()
 	if err := s.Persist(); err != nil {
 		t.Fatalf("Persist: %v", err)
 	}
