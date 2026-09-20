@@ -1,0 +1,9 @@
+# Create the network first: docker network create solver-net
+
+[[components]]
+name = "solver"
+recipe = "configs/examples/service-discovery/com.example.solver.recipe.toml"
+
+[[components]]
+name = "api"
+recipe = "configs/examples/service-discovery/com.example.api.recipe.toml"

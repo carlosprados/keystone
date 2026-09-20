@@ -1,0 +1,33 @@
+# A gRPC service reached by its siblings as "solver".
+#
+# The component is named "solver" in the plan, and that name becomes its
+# network alias on solver-net. No extra declaration is needed for
+# solver:50051 to resolve from another component on the same network.
+
+[metadata]
+name = "com.example.solver"
+version = "1.0.0"
+description = "Solver service, reachable at solver:50051"
+publisher = "example"
+type = "container"
+
+[lifecycle.run]
+type = "container"
+restart_policy = "always"
+
+[lifecycle.run.container]
+image = "registry.example.net:5000/solver:sha-abc1234"
+runtime = "docker"
+pull_policy = "if-not-present"
+network_mode = "solver-net"
+# network_aliases = ["solver", "solver.internal"]   # only if the DNS name
+#                                                   # must differ from the
+#                                                   # component name
+
+# The image is built FROM scratch: there is no /bin/sh for a "cmd:" probe to
+# run through, so the probe is an argv handed to the binary directly.
+[lifecycle.run.health]
+exec = ["/solver", "healthcheck"]
+interval = "10s"
+timeout = "3s"
+failure_threshold = 3

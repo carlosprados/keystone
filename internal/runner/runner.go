@@ -65,16 +65,17 @@ type Options struct {
 	Security Security
 
 	// Container-specific fields
-	Image       string            // Container image (e.g., "docker.io/library/nginx:latest")
-	PullPolicy  string            // "always", "never", "if-not-present" (default: "if-not-present")
-	Mounts      []Mount           // Volume mounts
-	Ports       []PortMapping     // Port mappings
-	Resources   ResourceLimits    // CPU/memory limits
-	NetworkMode string            // "host", "bridge", "none" (default: "bridge")
-	User        string            // User to run as (e.g., "1000:1000")
-	Privileged  bool              // Run in privileged mode
-	Hostname    string            // Container hostname
-	Labels      map[string]string // Container labels
+	Image          string            // Container image (e.g., "docker.io/library/nginx:latest")
+	PullPolicy     string            // "always", "never", "if-not-present" (default: "if-not-present")
+	Mounts         []Mount           // Volume mounts
+	Ports          []PortMapping     // Port mappings
+	Resources      ResourceLimits    // CPU/memory limits
+	NetworkMode    string            // "host", "bridge", "none", or a user-defined network name (CLI runtimes)
+	NetworkAliases []string          // Extra DNS names on a user-defined network (CLI runtimes only)
+	User           string            // User to run as (e.g., "1000:1000")
+	Privileged     bool              // Run in privileged mode
+	Hostname       string            // Container hostname
+	Labels         map[string]string // Container labels
 }
 
 // Mount represents a volume mount for containers.
@@ -105,7 +106,10 @@ type ResourceLimits struct {
 
 // HealthConfig defines how to probe a component's health.
 type HealthConfig struct {
-	Check            string        // http://..., tcp://..., cmd:...
+	Check string // http://..., tcp://..., cmd:...
+	// Exec is an argv run directly, with no shell. Set instead of Check when
+	// the workload has no /bin/sh.
+	Exec             []string
 	Interval         time.Duration // Probe interval (default: 10s)
 	Timeout          time.Duration // Probe timeout (default: 3s)
 	FailureThreshold int           // Failures before unhealthy (default: 3)

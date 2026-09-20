@@ -175,6 +175,51 @@ pids_limit = 128
 
 See [Containers](../../internals/runners/) for how the runtime is chosen.
 
+### Reaching another component by name
+
+A container started by Keystone is named `keystone-<component>-<timestamp>`.
+The timestamp is there so a restart never collides with a container still being
+removed, which also means the container name is useless as an address: it is
+different on every start.
+
+The stable name is the **network alias**, and by default it is the component
+name — the same thing a compose service name gives you:
+
+```toml
+# component "solver-service"
+[lifecycle.run.container]
+image        = "registry.example.net:5000/solver:sha-abc1234"
+runtime      = "docker"
+network_mode = "solver-net"          # a network you created beforehand
+
+# component "api", on the same network, reaches it as solver-service:50051
+```
+
+Declare `network_aliases` only when the DNS name has to differ from the
+component name:
+
+```toml
+network_aliases = ["solver", "solver.internal"]
+```
+
+Two limits, both enforced rather than papered over:
+
+- **The network must be user-defined.** `bridge`, `host` and `none` have no
+  embedded resolver, and the CLI rejects an alias there. Keystone refuses the
+  recipe instead of emitting a flag that fails at run time.
+- **`runtime = "containerd"` cannot do this.** CNI knows `host`, `bridge` and
+  `none`, and has no equivalent of a network alias. A recipe that asks
+  containerd for either is refused — without the check it would fall through
+  every branch and start the container on an empty network namespace, with no
+  error at all. Under `runtime = "auto"`, a user-defined network or an alias
+  selects the CLI runtime.
+
+**Keystone does not create the network.** It is machine preparation, not
+deployment: create it with your configuration management (`docker network
+create solver-net`) and Keystone will use it. A plan naming a network that does
+not exist fails when the container starts, with the CLI's own message
+(`network solver-net not found`).
+
 ## Lifecycle: health
 
 ```toml
@@ -190,6 +235,26 @@ Declaring a health check changes two things: the component is only considered
 re-apply while it is healthy.
 
 Without a health check, `last_health` stays `unknown` forever. That is expected.
+
+### Probing a container with no shell
+
+`check = "cmd:…"` is a shell command line: it runs through `/bin/sh -c`. An
+image built `FROM scratch` has no `/bin/sh`, so that probe fails every time —
+and a health probe that never passes takes the deployment down with it, because
+a failed probe rolls the plan back while reporting that it did the right thing.
+
+Use `exec` instead, which is an argv handed to the workload directly:
+
+```toml
+[lifecycle.run.health]
+exec     = ["/rotaflux", "healthcheck"]
+interval = "10s"
+```
+
+It is the equivalent of compose's `test = ["CMD", "/rotaflux", "healthcheck"]`.
+`check` and `exec` are two ways of saying the same thing, so declaring both is
+refused. `exec` works for process components too, where it means "run this argv
+on the host, without a shell in between".
 
 ## Lifecycle: shutdown
 

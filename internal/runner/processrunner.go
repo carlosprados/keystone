@@ -393,6 +393,19 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 // The containerID parameter is used for container exec probes (nil for processes).
 func ProbeHealth(hc HealthConfig, opts Options, containerID *string) bool {
 	u := hc.Check
+
+	// Shell-less exec probe: run the argv directly, no /bin/sh in between.
+	if len(hc.Exec) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), hc.Timeout)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, hc.Exec[0], hc.Exec[1:]...)
+		if opts.WorkingDir != "" {
+			cmd.Dir = opts.WorkingDir
+		}
+		return cmd.Run() == nil
+	}
+
 	if u == "" {
 		return true
 	}

@@ -79,18 +79,24 @@ type LifecycleRunExec struct {
 
 // ContainerConfig holds container-specific configuration.
 type ContainerConfig struct {
-	Image       string             `toml:"image"`        // Container image (e.g., "docker.io/library/nginx:latest")
-	Runtime     string             `toml:"runtime"`      // "auto"(default), "containerd", "cli", "nerdctl", "docker", "podman"
-	PullPolicy  string             `toml:"pull_policy"`  // "always", "never", "if-not-present"
-	NetworkMode string             `toml:"network_mode"` // "host", "bridge", "none"
-	User        string             `toml:"user"`         // User to run as (e.g., "1000:1000")
-	Privileged  bool               `toml:"privileged"`   // Run in privileged mode
-	Hostname    string             `toml:"hostname"`     // Container hostname
-	Mounts      []ContainerMount   `toml:"mounts"`       // Volume mounts
-	Ports       []ContainerPort    `toml:"ports"`        // Port mappings
-	Resources   ContainerResources `toml:"resources"`    // Container resource limits
-	Env         map[string]string  `toml:"env"`          // Environment variables
-	Labels      map[string]string  `toml:"labels"`       // Container labels
+	Image       string `toml:"image"`        // Container image (e.g., "docker.io/library/nginx:latest")
+	Runtime     string `toml:"runtime"`      // "auto"(default), "containerd", "cli", "nerdctl", "docker", "podman"
+	PullPolicy  string `toml:"pull_policy"`  // "always", "never", "if-not-present"
+	NetworkMode string `toml:"network_mode"` // "host", "bridge", "none", or a user-defined network name (CLI runtimes only)
+	// NetworkAliases are extra DNS names the container answers to on a
+	// user-defined network, so sibling components can reach it by name. When
+	// empty the component name is used, which is what a compose service name
+	// does. Only the CLI runtimes implement it; declaring aliases on a
+	// containerd component is refused rather than silently dropped.
+	NetworkAliases []string           `toml:"network_aliases"`
+	User           string             `toml:"user"`       // User to run as (e.g., "1000:1000")
+	Privileged     bool               `toml:"privileged"` // Run in privileged mode
+	Hostname       string             `toml:"hostname"`   // Container hostname
+	Mounts         []ContainerMount   `toml:"mounts"`     // Volume mounts
+	Ports          []ContainerPort    `toml:"ports"`      // Port mappings
+	Resources      ContainerResources `toml:"resources"`  // Container resource limits
+	Env            map[string]string  `toml:"env"`        // Environment variables
+	Labels         map[string]string  `toml:"labels"`     // Container labels
 }
 
 // ContainerMount represents a volume mount for containers.
@@ -258,10 +264,15 @@ type Recipe struct {
 
 // Health probe definition
 type Health struct {
-	Check            string `toml:"check"`    // http://..., tcp://..., cmd:...
-	Interval         string `toml:"interval"` // e.g., "10s"
-	Timeout          string `toml:"timeout"`
-	FailureThreshold int    `toml:"failure_threshold"`
+	Check string `toml:"check"` // http://..., tcp://..., cmd:...
+	// Exec probes by running an argv directly, with no shell between the
+	// agent and the command: the only form that works in an image built
+	// FROM scratch, where "cmd:" cannot find /bin/sh. Mutually exclusive
+	// with Check.
+	Exec             []string `toml:"exec"`
+	Interval         string   `toml:"interval"` // e.g., "10s"
+	Timeout          string   `toml:"timeout"`
+	FailureThreshold int      `toml:"failure_threshold"`
 }
 
 // Resources maps to simple limits for the MVP

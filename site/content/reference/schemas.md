@@ -98,7 +98,8 @@ the trust model, the measured savings and the current limits.
 | `image` | string | — | Required |
 | `runtime` | string | `auto` | `auto`, `containerd`, `cli`, `nerdctl`, `docker`, `podman` |
 | `pull_policy` | string | `if-not-present` | `always`, `never`, `if-not-present` |
-| `network_mode` | string | `bridge` | `host`, `bridge`, `none` |
+| `network_mode` | string | `bridge` | `host`, `bridge`, `none`, or the name of a user-defined network (CLI runtimes only) |
+| `network_aliases` | string list | *the component name* | DNS names the container answers to on a user-defined network. Refused on `runtime = "containerd"` |
 | `user` | string | — | `uid:gid` inside the container |
 | `privileged` | bool | `false` | |
 | `hostname` | string | — | |
@@ -117,7 +118,8 @@ the trust model, the measured savings and the current limits.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `check` | string | — | `http://…` or `https://…` (2xx only), `tcp://…`, `cmd:…` |
+| `check` | string | — | `http://…` or `https://…` (2xx only), `tcp://…`, `cmd:…` (runs through `/bin/sh -c`) |
+| `exec` | string list | — | argv run directly, no shell. Mutually exclusive with `check` |
 | `interval` | duration | `10s` | |
 | `timeout` | duration | `3s` | |
 | `failure_threshold` | int | `3` | |
