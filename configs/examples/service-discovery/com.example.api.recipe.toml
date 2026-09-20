@@ -1,0 +1,36 @@
+# An API that dials the solver by name.
+#
+# SOLVER_ADDR works because both components sit on solver-net and the solver's
+# alias is its component name.
+
+[metadata]
+name = "com.example.api"
+version = "1.0.0"
+description = "API that reaches the solver by name"
+publisher = "example"
+type = "container"
+
+[lifecycle.run]
+type = "container"
+restart_policy = "always"
+
+[lifecycle.run.container]
+image = "registry.example.net:5000/api:sha-def5678"
+runtime = "docker"
+pull_policy = "if-not-present"
+network_mode = "solver-net"
+
+[lifecycle.run.container.env]
+SOLVER_ADDR = "solver:50051"
+
+[[lifecycle.run.container.ports]]
+host_port = 8080
+container_port = 8080
+
+[lifecycle.run.health]
+check = "http://127.0.0.1:8080/healthz"
+interval = "10s"
+
+[[dependencies]]
+name = "com.example.solver"
+type = "hard"

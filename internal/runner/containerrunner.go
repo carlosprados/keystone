@@ -956,7 +956,7 @@ func (r *ContainerRunner) monitorTask(ctx context.Context, h *ContainerHandle) {
 // It supports http://, https://, tcp://, and cmd: probes.
 func ProbeHealthContainer(hc HealthConfig, opts Options, ch *ContainerHandle) bool {
 	u := hc.Check
-	if u == "" {
+	if u == "" && len(hc.Exec) == 0 {
 		return true
 	}
 
@@ -965,9 +965,13 @@ func ProbeHealthContainer(hc HealthConfig, opts Options, ch *ContainerHandle) bo
 		return ProbeHealth(hc, opts, nil)
 	}
 
-	// Command probe - exec into container
-	if hasPrefix(u, "cmd:") {
-		cmdStr := u[len("cmd:"):]
+	// Command probe - exec into container. Either a shell command line
+	// ("cmd:"), or an argv run directly for images without a shell.
+	if len(hc.Exec) > 0 || hasPrefix(u, "cmd:") {
+		args := hc.Exec
+		if len(args) == 0 {
+			args = []string{"/bin/sh", "-c", u[len("cmd:"):]}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), hc.Timeout)
 		defer cancel()
 
@@ -975,7 +979,7 @@ func ProbeHealthContainer(hc HealthConfig, opts Options, ch *ContainerHandle) bo
 		execID := fmt.Sprintf("health-%d", time.Now().UnixNano())
 		proc, err := ch.task.Exec(ctx, execID,
 			&specs.Process{
-				Args: []string{"/bin/sh", "-c", cmdStr},
+				Args: args,
 				Cwd:  "/",
 				Env:  buildHealthExecEnv(opts.Env),
 			},

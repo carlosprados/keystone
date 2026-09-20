@@ -193,7 +193,8 @@ echo "Container stopped"
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `network_mode` | string | `"bridge"` | Network mode: `host`, `bridge`, `none` |
+| `network_mode` | string | `"bridge"` | Network mode: `host`, `bridge`, `none`, or a user-defined network name (CLI runtimes only) |
+| `network_aliases` | array | component name | DNS names on a user-defined network. Not supported by the containerd runtime |
 | `hostname` | string | container ID | Container hostname |
 | `ports` | array | `[]` | Port mappings (bridge mode only) |
 
@@ -212,6 +213,30 @@ echo "Container stopped"
   - Disables networking inside the container.
   - No inbound/outbound connectivity.
   - Useful for strictly offline tasks or batch jobs that should not have network access.
+- **a user-defined network** (CLI runtimes only, e.g. `network_mode = "app-net"`):
+  - The only mode where containers resolve each other **by name**.
+  - Create the network yourself (`docker network create app-net`) before the plan is applied; Keystone does not create it.
+  - `runtime = "containerd"` cannot join one — CNI only knows the three modes above, so a named network there is refused instead of leaving the container on an empty network namespace.
+
+**Reaching another component by name.** A managed container is named
+`keystone-<component>-<timestamp>`, which changes on every start and is
+therefore useless as an address. The stable name is the network alias, and it
+defaults to the component name:
+
+```toml
+# component "solver-service"
+[lifecycle.run.container]
+image        = "registry.example.net:5000/solver:sha-abc1234"
+runtime      = "docker"
+network_mode = "app-net"
+# siblings on app-net reach it as solver-service
+
+# override only when the DNS name must differ from the component name
+network_aliases = ["solver", "solver.internal"]
+```
+
+Aliases require a user-defined network: `bridge`, `host` and `none` have no
+embedded resolver, and a recipe that declares one there is refused.
 
 ### Security Settings
 
@@ -273,13 +298,21 @@ Health checks work the same for containers and processes:
 [lifecycle.run.health]
 check = "http://localhost:8080/health"  # HTTP probe
 # check = "tcp://localhost:3306"        # TCP probe
-# check = "cmd:curl -f http://localhost/health"  # Command probe
+# check = "cmd:curl -f http://localhost/health"  # Command probe, needs a shell
+# exec = ["/app", "healthcheck"]        # argv probe, no shell required
 interval = "10s"
 timeout = "3s"
 failure_threshold = 3
 ```
 
 **Command probes** execute inside the container via `exec`.
+
+**`check = "cmd:…"` requires a shell in the image.** The command line runs
+through `/bin/sh -c`, so in an image built `FROM scratch` it fails on every
+probe — and because a failed probe rolls the deployment back, the symptom is a
+deployment that reverts itself and reports success. Use `exec` for those
+images: it is an argv handed to the workload directly, the equivalent of
+compose's `test = ["CMD", …]`. `check` and `exec` are mutually exclusive.
 
 ## Environment Variables
 

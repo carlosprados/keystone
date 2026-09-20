@@ -610,6 +610,9 @@ func (a *Agent) applyPlan(planPath string) error {
 			if err := validateRunSecurity(r); err != nil {
 				return fmt.Errorf("component %s: %w", it.Name, err)
 			}
+			if err := validateRunShape(r); err != nil {
+				return fmt.Errorf("component %s: %w", it.Name, err)
+			}
 			if runType == "" || runType == "process" {
 				// Validate command availability for processes
 				cmdPath := r.Lifecycle.Run.Exec.Command
@@ -1125,6 +1128,21 @@ func (a *Agent) createRunner(r *recipe.Recipe) (runner.Runner, func(), error) {
 		runtimePref := strings.ToLower(strings.TrimSpace(r.Lifecycle.Run.Container.Runtime))
 		switch runtimePref {
 		case "", "auto":
+			// A user-defined network and its aliases are CLI-only, and
+			// validateRunShape has already refused them for
+			// runtime = "containerd". Under "auto" the honest reading is that
+			// the recipe asked for something only the CLI can deliver, so go
+			// straight there instead of handing containerd a network mode it
+			// would silently ignore.
+			cc := r.Lifecycle.Run.Container
+			if len(cc.NetworkAliases) > 0 || isUserDefinedNetworkName(cc.NetworkMode) {
+				clir, err := runner.NewCLIRunner()
+				if err != nil {
+					return nil, nil, fmt.Errorf("run.container.network_mode = %q needs a container CLI (docker/podman/nerdctl): %w", cc.NetworkMode, err)
+				}
+				log.Printf("[agent] component-runtime=auto msg=using the %s CLI: a user-defined network is not something containerd/CNI can join", clir.CLI())
+				return clir, nil, nil
+			}
 			// Try containerd first, then CLI fallback.
 			cfg := runner.ContainerRunnerConfigFromEnv()
 			cr, err := runner.NewContainerRunner(cfg)
@@ -1201,6 +1219,65 @@ func validateRunSecurity(r *recipe.Recipe) error {
 	return nil
 }
 
+// validateRunShape rejects recipes whose declarations cannot all be honoured
+// by the runner that will execute them.
+//
+// Same rule as validateRunSecurity: a field an operator writes either takes
+// effect or is refused. A network alias silently dropped is worse than a
+// refusal, because the symptom lands in a sibling component as a name that
+// does not resolve.
+func validateRunShape(r *recipe.Recipe) error {
+	h := r.Lifecycle.Run.Health
+	if h.Check != "" && len(h.Exec) > 0 {
+		return fmt.Errorf("health.check and health.exec are two ways to say the same thing; declare one")
+	}
+	for _, a := range h.Exec {
+		if strings.TrimSpace(a) == "" {
+			return fmt.Errorf("health.exec contains an empty argument")
+		}
+	}
+
+	runType := r.Lifecycle.Run.Type
+	c := r.Lifecycle.Run.Container
+	if runType == "" || runType == "process" {
+		if len(c.NetworkAliases) > 0 {
+			return fmt.Errorf("run.container.network_aliases only applies to container components and would be ignored here")
+		}
+		return nil
+	}
+
+	containerd := strings.ToLower(strings.TrimSpace(c.Runtime)) == "containerd"
+
+	// A user-defined network is a CLI concept. The containerd runner only
+	// branches on "host" and "bridge", so a named network there would fall
+	// through both and start the container on an empty network namespace —
+	// with no error, which is the worst of both worlds: a green deployment
+	// with an unreachable service.
+	if containerd && isUserDefinedNetworkName(c.NetworkMode) {
+		return fmt.Errorf("run.container.network_mode = %q names a user-defined network, which the containerd runtime cannot join (CNI only knows host, bridge and none); use runtime = \"docker\", \"podman\", \"nerdctl\" or \"cli\"", c.NetworkMode)
+	}
+
+	if len(c.NetworkAliases) > 0 {
+		if containerd {
+			return fmt.Errorf("run.container.network_aliases is not supported by the containerd runtime (CNI has no equivalent); use runtime = \"docker\", \"podman\", \"nerdctl\" or \"cli\"")
+		}
+		if !isUserDefinedNetworkName(c.NetworkMode) {
+			return fmt.Errorf("run.container.network_aliases requires network_mode to name a user-defined network; %q has no embedded DNS resolver", defaultString(c.NetworkMode, "bridge"))
+		}
+	}
+	return nil
+}
+
+// isUserDefinedNetworkName mirrors the runner-side check: only a named network
+// resolves sibling containers by name.
+func isUserDefinedNetworkName(mode string) bool {
+	switch mode {
+	case "", "host", "none", "bridge", "default":
+		return false
+	}
+	return !strings.HasPrefix(mode, "container:")
+}
+
 func buildRunnerOptions(name string, r *recipe.Recipe, workDir string, datasetEnv []string) runner.Options {
 	runType := r.Lifecycle.Run.Type
 	if runType == "" || runType == "process" {
@@ -1257,14 +1334,15 @@ func buildRunnerOptions(name string, r *recipe.Recipe, workDir string, datasetEn
 		Env:        env,
 		// Do not propagate host workDir to containers. OCI cwd must be a valid
 		// absolute path inside the container filesystem.
-		WorkingDir:  "",
-		Mounts:      mounts,
-		Ports:       ports,
-		NetworkMode: c.NetworkMode,
-		User:        c.User,
-		Privileged:  c.Privileged,
-		Hostname:    c.Hostname,
-		Labels:      c.Labels,
+		WorkingDir:     "",
+		Mounts:         mounts,
+		Ports:          ports,
+		NetworkMode:    c.NetworkMode,
+		NetworkAliases: c.NetworkAliases,
+		User:           c.User,
+		Privileged:     c.Privileged,
+		Hostname:       c.Hostname,
+		Labels:         c.Labels,
 		Resources: runner.ResourceLimits{
 			MemoryMB:   c.Resources.MemoryMB,
 			CPUShares:  c.Resources.CPUShares,
@@ -1282,6 +1360,7 @@ func buildHealthConfig(r *recipe.Recipe) runner.HealthConfig {
 	if r.Lifecycle.Run.Health.Check != "" {
 		hc.Check = r.Lifecycle.Run.Health.Check
 	}
+	hc.Exec = r.Lifecycle.Run.Health.Exec
 	if d, err := time.ParseDuration(defaultString(r.Lifecycle.Run.Health.Interval, "10s")); err == nil {
 		hc.Interval = d
 	}
@@ -1450,6 +1529,9 @@ func (a *Agent) restartFromPlan(name string) error {
 	// Determine run type and validate
 	runType := r.Lifecycle.Run.Type
 	if err := validateRunSecurity(r); err != nil {
+		return fmt.Errorf("component %s: %w", name, err)
+	}
+	if err := validateRunShape(r); err != nil {
 		return fmt.Errorf("component %s: %w", name, err)
 	}
 	if runType == "" || runType == "process" {

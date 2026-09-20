@@ -517,7 +517,8 @@ func (a *Agent) componentChanged(old state.PlanComponent, desired *plannedCompon
 // reported healthy: only components that declare a health check ever get a
 // health verdict, so requiring one from the rest would restart them forever.
 func reuseRequiresHealth(r *recipe.Recipe) bool {
-	return strings.TrimSpace(r.Lifecycle.Run.Health.Check) != ""
+	return strings.TrimSpace(r.Lifecycle.Run.Health.Check) != "" ||
+		len(r.Lifecycle.Run.Health.Exec) > 0
 }
 
 // componentIsReusable reports whether the component named name can be kept

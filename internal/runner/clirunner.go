@@ -74,6 +74,10 @@ func NewCLIRunnerWithCLI(cli string) (*CLIRunner, error) {
 	return &CLIRunner{cli: cli, timeout: 30 * time.Second}, nil
 }
 
+// CLI returns the container CLI this runner drives ("docker", "nerdctl" or
+// "podman").
+func (r *CLIRunner) CLI() string { return r.cli }
+
 // Start launches a container using the CLI and returns a handle.
 func (r *CLIRunner) Start(ctx context.Context, opts Options) (Handle, error) {
 	if opts.Image == "" {
@@ -399,6 +403,23 @@ func (r *CLIRunner) buildRunArgs(opts Options) []string {
 		args = append(args, "--network", opts.NetworkMode)
 	}
 
+	// Network aliases. The container name carries a timestamp so a restart
+	// never collides with a container still being removed, which means the
+	// name is useless as a DNS record. An alias is the stable name siblings
+	// resolve; without one, two components started by Keystone cannot address
+	// each other. Defaults to the component name, as a compose service does.
+	// Only user-defined networks have an embedded resolver: the default
+	// bridge, host and none reject the flag outright.
+	if isUserDefinedNetwork(opts.NetworkMode) {
+		aliases := opts.NetworkAliases
+		if len(aliases) == 0 {
+			aliases = []string{opts.Name}
+		}
+		for _, a := range aliases {
+			args = append(args, "--network-alias", a)
+		}
+	}
+
 	// Labels
 	for k, v := range opts.Labels {
 		args = append(args, "--label", fmt.Sprintf("%s=%s", k, v))
@@ -416,6 +437,16 @@ func (r *CLIRunner) buildRunArgs(opts Options) []string {
 	}
 
 	return args
+}
+
+// isUserDefinedNetwork reports whether mode names a network with an embedded
+// DNS resolver, the only kind that accepts --network-alias.
+func isUserDefinedNetwork(mode string) bool {
+	switch mode {
+	case "", "host", "none", "bridge", "default":
+		return false
+	}
+	return !strings.HasPrefix(mode, "container:")
 }
 
 // monitorContainer monitors the container and sends exit status to done channel.
@@ -440,7 +471,7 @@ func (r *CLIRunner) monitorContainer(ctx context.Context, h *CLIHandle) {
 // probeHealth performs a health check for a CLI-managed container.
 func (r *CLIRunner) probeHealth(ctx context.Context, hc HealthConfig, ch *CLIHandle) bool {
 	u := hc.Check
-	if u == "" {
+	if u == "" && len(hc.Exec) == 0 {
 		return true
 	}
 
@@ -449,18 +480,29 @@ func (r *CLIRunner) probeHealth(ctx context.Context, hc HealthConfig, ch *CLIHan
 		return ProbeHealth(hc, Options{}, nil)
 	}
 
-	// Command probe - exec into container
-	if hasPrefix(u, "cmd:") {
-		cmdStr := u[len("cmd:"):]
+	// Command probe - exec into the container, either as an argv (no shell
+	// required, the only form an image built FROM scratch can answer) or as a
+	// shell command line.
+	if len(hc.Exec) > 0 || hasPrefix(u, "cmd:") {
 		execCtx, cancel := context.WithTimeout(ctx, hc.Timeout)
 		defer cancel()
 
-		execArgs := []string{"exec", ch.containerID, "/bin/sh", "-c", cmdStr}
-		cmd := exec.CommandContext(execCtx, r.cli, execArgs...)
+		cmd := exec.CommandContext(execCtx, r.cli, healthExecArgs(hc, ch.containerID)...)
 		return cmd.Run() == nil
 	}
 
 	return true
+}
+
+// healthExecArgs builds the CLI arguments for a health probe inside a running
+// container. An exec probe is passed through verbatim; a "cmd:" probe is a
+// shell command line and needs an interpreter, which an image built FROM
+// scratch does not have.
+func healthExecArgs(hc HealthConfig, containerID string) []string {
+	if len(hc.Exec) > 0 {
+		return append([]string{"exec", containerID}, hc.Exec...)
+	}
+	return []string{"exec", containerID, "/bin/sh", "-c", strings.TrimPrefix(hc.Check, "cmd:")}
 }
 
 // StreamLogs streams container logs to the log output.
