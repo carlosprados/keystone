@@ -214,6 +214,25 @@ Dataset manifests are signed the same way, through `keystonectl manifest
 new|sign|verify`; `manifest verify --since` additionally applies the anti-replay
 rule an agent enforces.
 
+## Keystone's own releases
+
+Everything above is about what the agent installs. The agent itself is a
+supply-chain risk of the same kind — whoever replaces the agent controls every
+deployment that follows — so from **v0.9.0** each release carries:
+
+- **A signature over `checksums.txt`** (`.sig` + `.pem`), made keyless with
+  cosign through the Actions OIDC token, and recorded in Sigstore's
+  transparency log. `checksums.txt` alone proves integrity; the signature is
+  what proves the bytes came from this repository's release workflow.
+- **An SPDX 2.3 SBOM per archive**, produced by syft, listing every Go module
+  compiled in. Covered by the same signature, because the SBOMs are listed in
+  `checksums.txt`.
+
+There is no key material to hold: the signing identity is the workflow, and the
+certificate is short-lived. The verification commands, and what this does and
+does not prove, are in
+[Verifying a release](../site/content/security/releases.md).
+
 ### Devices without a reliable clock
 
 A gateway with no RTC boots at 1970, so every valid certificate reads "not yet
