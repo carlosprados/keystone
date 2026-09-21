@@ -7,6 +7,11 @@ on:
 
 permissions:
   contents: write
+  # Keyless signing: cosign exchanges this short-lived OIDC token for a
+  # certificate that names THIS workflow in THIS repository. Without it there is
+  # no identity to sign with, and the release step fails rather than publishing
+  # unsigned archives.
+  id-token: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -42,6 +47,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.25.11"
+      # syft produces the SBOMs, cosign signs the checksum file. Both are
+      # invoked by GoReleaser, so a missing binary fails the release loudly
+      # instead of quietly shipping without them.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:

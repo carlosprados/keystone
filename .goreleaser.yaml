@@ -57,18 +57,53 @@ builds:
       - -s -w -X github.com/carlosprados/keystone/internal/version.Version={{.Version}} -X github.com/carlosprados/keystone/internal/version.Commit={{.Commit}} -X github.com/carlosprados/keystone/internal/version.Date={{.Date}}
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
     files:
       - README.md
       - LICENSE*
 
+# One SPDX 2.3 document per archive (syft's default, and the ISO-standardised
+# format), listing every module compiled into the binaries inside it — 78 of
+# them at v0.8.0. The point is answering "does this CVE affect the fleet, and
+# on which devices" with a query instead of an audit. A Go binary does carry
+# its own module list (`go version -m keystone`), but that is not a format a
+# compliance tool or a customer can consume.
+sboms:
+  - id: archive
+    artifacts: archive
+
 checksum:
   name_template: "checksums.txt"
 
+# Sign the checksum file, which covers every artifact listed in it — the
+# archives and the SBOMs alike.
+#
+# checksums.txt on its own proves integrity, not provenance: whoever can
+# replace the archives can replace the checksum file next to them. The
+# signature is what ties these bytes to this repository's release workflow.
+#
+# Keyless, through the Actions OIDC token: the identity is the workflow itself,
+# so there is no private key to store, rotate or leak. The certificate is
+# short-lived and the whole thing is logged in Sigstore's transparency log,
+# which is what makes a forged signature detectable rather than merely
+# difficult. It also means this only works from CI — a local `goreleaser
+# release` has no OIDC token and must skip signing.
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
 snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  version_template: "{{ incpatch .Version }}-next"
 
 changelog:
   sort: asc
