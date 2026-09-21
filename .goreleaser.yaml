@@ -91,12 +91,34 @@ checksum:
 # difficult. It also means this only works from CI — a local `goreleaser
 # release` has no OIDC token and must skip signing.
 signs:
-  - cmd: cosign
+  # The detached form: checksums.txt.sig + checksums.txt.pem.
+  - id: detached
+    cmd: cosign
     certificate: "${artifact}.pem"
     args:
       - sign-blob
       - "--output-certificate=${certificate}"
       - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+  # The same signature as a Sigstore bundle: one file carrying the signature,
+  # the certificate and the transparency-log entry together.
+  #
+  # Current cosign deprecates --signature and --certificate on verify-blob in
+  # favour of --bundle, so the detached pair above is on a path to being
+  # awkward to verify. Both are published: the bundle is what the docs
+  # recommend, and the pair stays for anything already written against it.
+  # GoReleaser only uploads files it knows as `signature` or `certificate`,
+  # which is why this is a second signing block rather than one more flag.
+  - id: bundle
+    cmd: cosign
+    signature: "${artifact}.bundle"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
     artifacts: checksum
@@ -118,3 +140,9 @@ release:
   github:
     owner: carlosprados
     name: keystone
+  # A tag like v0.9.0-rc1 is published as a pre-release, so it never becomes
+  # what `releases/latest` answers with. GoReleaser's default is false, not
+  # auto, and v0.9.0-rc1 shipped as a normal release because of it — an
+  # installer asking for the latest version would have been handed a release
+  # candidate.
+  prerelease: auto
