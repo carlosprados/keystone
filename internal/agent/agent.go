@@ -613,6 +613,7 @@ func (a *Agent) applyPlan(planPath string) error {
 			if err := validateRunShape(r); err != nil {
 				return fmt.Errorf("component %s: %w", it.Name, err)
 			}
+			warnOnMobileImageTag(it.Name, r)
 			if runType == "" || runType == "process" {
 				// Validate command availability for processes
 				cmdPath := r.Lifecycle.Run.Exec.Command
@@ -1147,6 +1148,20 @@ func (a *Agent) createRunner(r *recipe.Recipe) (runner.Runner, func(), error) {
 			cfg := runner.ContainerRunnerConfigFromEnv()
 			cr, err := runner.NewContainerRunner(cfg)
 			if err == nil {
+				// Connecting is not the same as being usable. The socket is
+				// present on every host that runs Docker, but Docker's images
+				// live in its own namespace, so a containerd runner pointed at
+				// an absent namespace would look healthy and then fail to find
+				// images that are right there. "auto" means pick what works.
+				if nsErr := checkContainerdNamespace(cr); nsErr != nil {
+					_ = cr.Close()
+					clir, cliErr := runner.NewCLIRunner()
+					if cliErr != nil {
+						return nil, nil, fmt.Errorf("containerd is reachable but unusable (%v), and no container CLI is available: %w", nsErr, cliErr)
+					}
+					log.Printf("[agent] component-runtime=auto msg=using the %s CLI instead of containerd: %v", clir.CLI(), nsErr)
+					return clir, nil, nil
+				}
 				cleanup := func() { _ = cr.Close() }
 				return cr, cleanup, nil
 			}
@@ -1161,6 +1176,13 @@ func (a *Agent) createRunner(r *recipe.Recipe) (runner.Runner, func(), error) {
 			cr, err := runner.NewContainerRunner(cfg)
 			if err != nil {
 				return nil, nil, fmt.Errorf("container runtime=containerd requested but unavailable: %w", err)
+			}
+			// Asked for containerd explicitly, so there is nowhere to fall back
+			// to: refuse now, with the namespace named, rather than later with
+			// an image that cannot be found.
+			if nsErr := checkContainerdNamespace(cr); nsErr != nil {
+				_ = cr.Close()
+				return nil, nil, fmt.Errorf("container runtime=containerd requested: %w", nsErr)
 			}
 			cleanup := func() { _ = cr.Close() }
 			return cr, cleanup, nil
@@ -1217,6 +1239,59 @@ func validateRunSecurity(r *recipe.Recipe) error {
 		return fmt.Errorf("[lifecycle.run.security] only applies to process components; confine a container through [lifecycle.run.container] (user, privileged) instead")
 	}
 	return nil
+}
+
+// mobileImageTag reports whether ref points at a tag that can be moved under
+// the deployment's feet, and returns the tag it found.
+//
+// This matters because of what rollback means here: a failed apply re-applies
+// the PREVIOUS PLAN, and a plan refers to an image by reference. If that
+// reference is a moving tag, the rollback pulls whatever that tag points at
+// now — quite possibly the same broken image — and reports that it recovered.
+//
+// Parsing is the whole difficulty, and getting it wrong is worse than not
+// warning at all: a registry host carries a port, so "registry:5000/app" has a
+// colon that is not a tag separator. The tag is what follows the last colon
+// only when that colon comes after the last slash. A digest pins harder than
+// any tag, so it is never mobile.
+func mobileImageTag(ref string) (string, bool) {
+	if strings.Contains(ref, "@") {
+		return "", false
+	}
+
+	tag := ""
+	if lastColon := strings.LastIndex(ref, ":"); lastColon > strings.LastIndex(ref, "/") {
+		tag = ref[lastColon+1:]
+	}
+
+	switch tag {
+	case "":
+		// No tag at all: the runtime supplies ":latest".
+		return "latest", true
+	case "latest", "stable", "main", "master", "edge", "dev", "nightly":
+		return tag, true
+	}
+	return tag, false
+}
+
+// warnOnMobileImageTag says once, at apply time, what a moving tag costs.
+func warnOnMobileImageTag(name string, r *recipe.Recipe) {
+	if r.Lifecycle.Run.Type != "container" {
+		return
+	}
+	ref := r.Lifecycle.Run.Container.Image
+	if tag, mobile := mobileImageTag(ref); mobile {
+		log.Printf("[agent] component=%s WARNING image %q uses the moving tag %q: a rollback re-applies the previous plan, which would pull whatever that tag points at then and report success. Pin a digest or an immutable tag",
+			name, ref, tag)
+	}
+}
+
+// checkContainerdNamespace gives the namespace check a deadline of its own: it
+// is a guardrail, and a guardrail that can hang is a new failure mode.
+func checkContainerdNamespace(cr *runner.ContainerRunner) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return cr.CheckNamespace(ctx)
 }
 
 // validateRunShape rejects recipes whose declarations cannot all be honoured
@@ -1534,6 +1609,7 @@ func (a *Agent) restartFromPlan(name string) error {
 	if err := validateRunShape(r); err != nil {
 		return fmt.Errorf("component %s: %w", name, err)
 	}
+	warnOnMobileImageTag(name, r)
 	if runType == "" || runType == "process" {
 		if cmd := r.Lifecycle.Run.Exec.Command; strings.HasPrefix(cmd, "./") {
 			abs := filepath.Join(workDir, strings.TrimPrefix(cmd, "./"))

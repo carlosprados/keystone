@@ -238,6 +238,20 @@ network_aliases = ["solver", "solver.internal"]
 Aliases require a user-defined network: `bridge`, `host` and `none` have no
 embedded resolver, and a recipe that declares one there is refused.
 
+Inside a user-defined network the resolver answers to the container name, the
+alias and the `hostname` alike; on the default `bridge` it answers to none of
+them. The alias is still the right mechanism: a container has one hostname and
+any number of aliases, and the alias is the one Keystone keeps stable across
+restarts.
+
+**Keystone does not create the network**, and a plan naming one that does not
+exist is refused before the container is created:
+
+```
+network "app-net" does not exist; create it on the host before applying the
+plan (e.g. docker network create app-net)
+```
+
 ### Security Settings
 
 | Field | Type | Default | Description |
@@ -321,7 +335,7 @@ compose's `test = ["CMD", …]`. `check` and `exec` are mutually exclusive.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `KEYSTONE_CONTAINERD_SOCKET` | `/run/containerd/containerd.sock` | containerd socket path |
-| `KEYSTONE_CONTAINERD_NAMESPACE` | `keystone` | containerd namespace |
+| `KEYSTONE_CONTAINERD_NAMESPACE` | `keystone` | containerd namespace (see the warning below) |
 | `KEYSTONE_CONTAINER_SNAPSHOTTER` | `overlayfs` | Snapshotter for images |
 | `KEYSTONE_CONTAINER_REGISTRY` | `docker.io` | Default registry |
 | `KEYSTONE_CNI_CONF_DIR` | `/etc/cni/net.d` | CNI network config directory for `network_mode="bridge"` |
@@ -487,6 +501,31 @@ failed to connect to containerd at /run/containerd/containerd.sock: ...
 2. Check socket permissions: `ls -la /run/containerd/containerd.sock`
 3. Add user to containerd group or run as root
 4. Use custom socket path: `KEYSTONE_CONTAINERD_SOCKET=/path/to/socket`
+
+### containerd Namespace Does Not Exist
+
+```
+containerd namespace "keystone" does not exist on this host (namespaces: moby);
+"moby" is Docker's namespace, so this host most likely wants runtime = "docker"
+in the recipe, or KEYSTONE_CONTAINERD_NAMESPACE=moby
+```
+
+Docker runs **on top of** containerd but keeps its images in a namespace of its
+own, `moby`. Keystone's default namespace is `keystone`. On a Docker host those
+are different, empty drawers: connecting to containerd succeeds, the image is
+not found where Keystone looked, and it is pulled from a public registry
+instead — so the symptom is a failed pull against Docker Hub, or an image that
+is somehow not the one you just built locally.
+
+Keystone now checks this when it builds the runtime:
+
+- `runtime = "containerd"` — refused, with the message above.
+- `runtime = "auto"` — falls back to the container CLI and logs why. The
+  deployment works; the log line tells you the configuration is wrong.
+- `runtime = "docker"` (or `podman`/`nerdctl`) — never affected; the CLI talks
+  to its own daemon.
+
+Check what a host actually has with `ctr namespaces list`.
 
 ### Image Pull Failed
 

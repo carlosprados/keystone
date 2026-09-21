@@ -40,7 +40,7 @@ anything else, so these can live there or in a systemd `EnvironmentFile`.
 | Variable | Default | Effect |
 |---|---|---|
 | `KEYSTONE_CONTAINERD_SOCKET` | `/run/containerd/containerd.sock` | containerd endpoint |
-| `KEYSTONE_CONTAINERD_NAMESPACE` | `keystone` | containerd namespace |
+| `KEYSTONE_CONTAINERD_NAMESPACE` | `keystone` | containerd namespace. On a host where Docker runs on top of containerd, the images live in `moby`, not here — see [Containers]({{% relref "/internals/runners" %}}) |
 | `KEYSTONE_CONTAINER_SNAPSHOTTER` | — | Snapshotter override (e.g. `native`, `overlayfs`) |
 | `KEYSTONE_CONTAINER_REGISTRY` | — | Default registry for unqualified image names |
 | `KEYSTONE_IMAGE_VOLUME_DIR` | — | Where image volumes are materialised |
