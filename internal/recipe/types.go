@@ -148,13 +148,40 @@ type SecurityConfig struct {
 }
 
 type LifecycleRun struct {
-	Type          string           `toml:"type"` // "process" (default) or "container"
-	Exec          LifecycleRunExec `toml:"exec"`
-	Container     ContainerConfig  `toml:"container"`
-	Security      SecurityConfig   `toml:"security"`
-	RestartPolicy string           `toml:"restart_policy"`
-	MaxRetries    int              `toml:"max_retries"`
-	Health        Health           `toml:"health"`
+	Type          string            `toml:"type"` // "process" (default) or "container"
+	Exec          LifecycleRunExec  `toml:"exec"`
+	Container     ContainerConfig   `toml:"container"`
+	Security      SecurityConfig    `toml:"security"`
+	RestartPolicy string            `toml:"restart_policy"`
+	MaxRetries    int               `toml:"max_retries"`
+	Health        Health            `toml:"health"`
+	State         LifecycleRunState `toml:"state"`
+}
+
+// LifecycleRunState declares the version of persistent state this build of the
+// component requires: a schema version, a store layout, whatever the component
+// cannot read across.
+//
+// It exists for one decision — whether a rollback is safe. Keystone's rollback
+// reverts binaries and images; it never touches what a component wrote. A
+// component that migrates its data on startup and has no down-migration leaves
+// the previous build facing state it cannot read, which fails in ways that look
+// nothing like a failed deployment.
+//
+// It is DECLARED rather than observed on purpose. The build that migrates is
+// the new one, and by the time a failed apply decides to roll back, the agent
+// has already stopped it — there is nobody left to ask. Two recipes, on the
+// other hand, are both on disk at that moment.
+type LifecycleRunState struct {
+	// Version is monotonic within a component: a build that can read
+	// everything an older build wrote keeps the same number, and one that
+	// migrates past that point raises it.
+	//
+	// A pointer because absent and zero are different answers. Zero is a
+	// legitimate version — state before the first migration — while absent
+	// means the recipe has no opinion, and treating one as the other is how a
+	// guardrail starts lying.
+	Version *int `toml:"version"`
 }
 
 type LifecycleShutdown struct {

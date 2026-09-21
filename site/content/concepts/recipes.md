@@ -265,6 +265,27 @@ It is the equivalent of compose's `test = ["CMD", "/rotaflux", "healthcheck"]`.
 refused. `exec` works for process components too, where it means "run this argv
 on the host, without a shell in between".
 
+## Lifecycle: state version
+
+```toml
+[lifecycle.run.state]
+version = 21
+```
+
+One number, answering one question: **is it safe to roll this component back?**
+
+Keystone's rollback reverts binaries and images. It never touches what a
+component wrote. So for a component that migrates its data on startup and
+cannot go back, reverting the binary is not a recovery — it is a second
+failure, on top of the first, in a shape that looks nothing like a deployment
+problem.
+
+Raise the number in the recipe of the build that introduces a migration; leave
+it alone for a build that reads everything its predecessor wrote. Before rolling
+back, the agent compares the two plans and refuses to cross a migration
+backwards. The details, and what the comparison deliberately does not do, are
+in [Plans and rollback](../plans/#what-rollback-does-not-undo).
+
 ## Lifecycle: shutdown
 
 ```toml

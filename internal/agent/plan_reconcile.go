@@ -164,6 +164,18 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 		return err
 	}
 
+	if blockers, unchecked := a.stateMigrationBlockers(oldPlanPath, desired); len(blockers) > 0 {
+		for _, u := range unchecked {
+			log.Printf("[agent] WARNING %s", u)
+		}
+		return fmt.Errorf("apply failed and the rollback was REFUSED: it would cross a state migration (%s). Rolling back reverts binaries and images, never the data a component wrote, so the previous build would face state it cannot read. Resolve the data side first, then apply the previous plan explicitly: %w",
+			strings.Join(blockers, "; "), err)
+	} else {
+		for _, u := range unchecked {
+			log.Printf("[agent] WARNING %s; rolling back anyway", u)
+		}
+	}
+
 	log.Printf("[agent] apply failed, attempting rollback to previous plan: %s", oldPlanPath)
 	_ = a.stopPlanInternal(false)
 	// Restore previous mapping immediately for API introspection while rollback runs.
@@ -178,6 +190,53 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 		return fmt.Errorf("apply failed: %v; rollback failed: %w", err, rbErr)
 	}
 	return fmt.Errorf("apply failed and rollback was completed: %w", err)
+}
+
+// stateMigrationBlockers reports the components for which rolling back to
+// oldPlanPath would move persistent state backwards past a version the previous
+// build cannot read.
+//
+// The comparison is always a component against ITSELF across two plans. Two
+// different components' numbers never meet: they describe different data with
+// different histories, and comparing them would be meaningless — one project
+// numbers its migrations by timestamp and another by a short sequence, so every
+// cross-component comparison is noise.
+//
+// Returned separately: blockers, which refuse the rollback, and unchecked,
+// which are cases where the answer is "cannot tell" — one side declares a
+// version and the other does not. Those are reported and allowed through. The
+// alternative, refusing on absence, would make the field impossible to adopt:
+// the first plan that declares one always faces a predecessor that does not.
+func (a *Agent) stateMigrationBlockers(oldPlanPath string, desired *plannedState) (blockers []string, unchecked []string) {
+	old, err := a.loadPlannedState(oldPlanPath)
+	if err != nil {
+		return nil, []string{fmt.Sprintf("cannot read the previous plan %s to check for state migrations (%v)", oldPlanPath, err)}
+	}
+
+	for name, newComp := range desired.byName {
+		oldComp, ok := old.byName[name]
+		if !ok {
+			continue
+		}
+		newV := newComp.rec.Lifecycle.Run.State.Version
+		oldV := oldComp.rec.Lifecycle.Run.State.Version
+
+		switch {
+		case newV == nil && oldV == nil:
+			// Neither recipe has an opinion: nothing to check, and saying so
+			// on every apply would be noise.
+		case newV == nil || oldV == nil:
+			unchecked = append(unchecked, fmt.Sprintf(
+				"component %s declares lifecycle.run.state.version on only one side of this rollback, so it cannot be checked", name))
+		case *oldV < *newV:
+			blockers = append(blockers, fmt.Sprintf(
+				"component %s: state version %d -> %d", name, *newV, *oldV))
+		}
+	}
+
+	sort.Strings(blockers)
+	sort.Strings(unchecked)
+	return blockers, unchecked
 }
 
 // canRollBackTo reports whether a failed apply has anywhere to roll back to.

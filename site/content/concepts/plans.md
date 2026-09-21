@@ -222,10 +222,54 @@ that tag points at then and report success. Pin a digest or an immutable tag
 **Rollback is atomic over files and processes, never over data.** It reverts
 the plan — binaries, images, which components run — and it does not touch
 anything a component wrote: databases, volumes, caches, state directories. If a
-component migrates its schema on startup and has no down-migration, rolling the
-binary back leaves the old binary facing a schema it does not understand, which
-can fail in ways that look nothing like a failed deployment. Keystone cannot
-detect that today. Where it matters, gate the deployment outside the agent.
+component migrates its data on startup and has no down-migration, rolling the
+binary back leaves it facing state it cannot read, which fails in ways that look
+nothing like a failed deployment.
+
+Keystone cannot see that by itself, so a recipe declares it:
+
+```toml
+[lifecycle.run.state]
+version = 21        # the state version this build requires
+```
+
+Before rolling back, the agent compares that number for each component against
+the one the previous plan declares **for the same component**. If the previous
+plan is behind, the rollback would move the binaries backwards across a
+migration the data has already gone through, and it is refused:
+
+```
+apply failed and the rollback was REFUSED: it would cross a state migration
+(component api: state version 21 -> 20). Rolling back reverts binaries and
+images, never the data a component wrote, so the previous build would face
+state it cannot read. Resolve the data side first, then apply the previous
+plan explicitly
+```
+
+The way out is to fix the data side and then apply the previous plan as a
+normal apply — an explicit decision by an operator who knows what the data
+looks like, which is the only place that decision can be made.
+
+Four things worth knowing about the comparison:
+
+- **A component is only ever compared with itself.** Two components' numbers
+  never meet: they describe different data with different histories, so one
+  project numbering migrations by timestamp and another by a short sequence
+  never collide.
+- **Absent is not zero.** Zero is a legitimate version — state before the first
+  migration. A recipe that omits the block has no opinion.
+- **A version on only one side is reported, not enforced.** It cannot be
+  compared, and refusing there would make the field impossible to adopt: the
+  first plan to declare one always faces a predecessor that does not.
+- **The number must stay monotonic within a component across its own
+  versions.** Changing numbering scheme midway — a short sequence to a
+  timestamp — breaks the guardrail while every individual number stays
+  correct.
+
+It is a declaration, not an observation, on purpose. The build that migrates
+the data is the *new* one, and by the time a failed apply decides to roll back
+the agent has already stopped it: there is nobody left to ask. Two recipes are
+both on disk at that moment.
 
 ## Stopping
 
