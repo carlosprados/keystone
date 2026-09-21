@@ -2,8 +2,11 @@ package runner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os/exec"
 	"strconv"
@@ -82,6 +85,9 @@ func (r *CLIRunner) CLI() string { return r.cli }
 func (r *CLIRunner) Start(ctx context.Context, opts Options) (Handle, error) {
 	if opts.Image == "" {
 		return nil, fmt.Errorf("empty image")
+	}
+	if err := r.ensureNetworkExists(ctx, opts.NetworkMode); err != nil {
+		return nil, err
 	}
 	if err := r.cleanupStaleManagedContainers(ctx, opts.Name); err != nil {
 		log.Printf("[clirunner] component=%s warning: stale cleanup failed: %v", opts.Name, err)
@@ -437,6 +443,39 @@ func (r *CLIRunner) buildRunArgs(opts Options) []string {
 	}
 
 	return args
+}
+
+// ensureNetworkExists fails before the container is created when the recipe
+// names a network that is not there.
+//
+// Keystone does not create networks: that is machine preparation, and the
+// agent has no sensible moment to remove one. What it can do is say so at the
+// point where the mistake is legible. Without this, the CLI reports it only
+// after pulling the image, and a missing network in a dependency chain reads
+// like a problem with whichever component failed to dial its sibling.
+func (r *CLIRunner) ensureNetworkExists(ctx context.Context, mode string) error {
+	if !isUserDefinedNetwork(mode) {
+		return nil
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
+
+	// Only stderr: `network inspect` prints an empty JSON array on stdout even
+	// when it fails, and splicing that into the message helps nobody.
+	cmd := exec.CommandContext(checkCtx, r.cli, "network", "inspect", mode)
+	var stderr bytes.Buffer
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		msg := fmt.Sprintf("network %q does not exist; create it on the host before applying the plan (e.g. %s network create %s)",
+			mode, r.cli, mode)
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			msg += ": " + detail
+		}
+		return errors.New(msg)
+	}
+	return nil
 }
 
 // isUserDefinedNetwork reports whether mode names a network with an embedded

@@ -217,8 +217,17 @@ Two limits, both enforced rather than papered over:
 **Keystone does not create the network.** It is machine preparation, not
 deployment: create it with your configuration management (`docker network
 create solver-net`) and Keystone will use it. A plan naming a network that does
-not exist fails when the container starts, with the CLI's own message
-(`network solver-net not found`).
+not exist is refused before the container is created, naming the network and
+the command that would create it — rather than after the image has been pulled,
+which is where the runtime would have reported it.
+
+A note on `hostname`, because the distinction is easy to get backwards: inside
+a user-defined network, Docker's embedded resolver answers to the container
+name, the alias **and** the hostname. On the default `bridge` it answers to
+none of them. So the line that matters is the network, not which field you set
+— and the alias is still the right one to use, because a container has exactly
+one hostname and any number of aliases, and the alias is the one Keystone keeps
+stable for you.
 
 ## Lifecycle: health
 

@@ -171,6 +171,50 @@ func (r *ContainerRunner) Close() error {
 	return nil
 }
 
+// NamespaceMissingError reports that the configured containerd namespace does
+// not exist on this host.
+//
+// It earns a dedicated type because the failure it prevents surfaces very far
+// from its cause. Docker runs on top of containerd but keeps its images in a
+// namespace of its own, "moby". An agent pointed at a namespace nobody writes
+// to connects successfully, finds it empty, concludes the image is absent and
+// pulls it from a public registry — so a local configuration mistake presents
+// as a failed pull against Docker Hub, or as an image that is mysteriously not
+// the one that was just built.
+type NamespaceMissingError struct {
+	Configured string
+	Existing   []string
+}
+
+func (e *NamespaceMissingError) Error() string {
+	msg := fmt.Sprintf("containerd namespace %q does not exist on this host (namespaces: %s)",
+		e.Configured, strings.Join(e.Existing, ", "))
+	for _, n := range e.Existing {
+		if n == "moby" {
+			return msg + `; "moby" is Docker's namespace, so this host most likely wants runtime = "docker" in the recipe, or KEYSTONE_CONTAINERD_NAMESPACE=moby`
+		}
+	}
+	return msg
+}
+
+// CheckNamespace verifies that the configured namespace exists.
+//
+// Connecting to containerd proves the socket is there and nothing more: every
+// lookup afterwards succeeds against an empty set. This is the cheapest point
+// at which the difference is still visible.
+func (r *ContainerRunner) CheckNamespace(ctx context.Context) error {
+	names, err := r.client.NamespaceService().List(ctx)
+	if err != nil {
+		return fmt.Errorf("list containerd namespaces: %w", err)
+	}
+	for _, n := range names {
+		if n == r.namespace {
+			return nil
+		}
+	}
+	return &NamespaceMissingError{Configured: r.namespace, Existing: names}
+}
+
 // Start launches a container and returns a handle.
 func (r *ContainerRunner) Start(ctx context.Context, opts Options) (Handle, error) {
 	if opts.Image == "" {

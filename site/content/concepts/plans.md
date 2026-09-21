@@ -202,6 +202,31 @@ was already the plan in effect, so the plan is not stopped and re-applied
 The failed apply still unwinds whatever it started in the layer that failed.
 What it no longer does is stop the components it reused and never touched.
 
+### What rollback does not undo
+
+Two limits, both worth knowing before you rely on a rollback in production.
+
+**A moving tag makes rollback a no-op.** The previous plan names its images by
+reference. If that reference is `:latest` — or no tag at all, or `main`,
+`stable`, `edge` — then re-applying it pulls whatever that tag points at *now*,
+which may well be the image that just failed. The rollback completes and
+reports success, having changed nothing. The agent warns at apply time when a
+container recipe uses one:
+
+```
+component=api WARNING image "registry.example:5000/api" uses the moving tag
+"latest": a rollback re-applies the previous plan, which would pull whatever
+that tag points at then and report success. Pin a digest or an immutable tag
+```
+
+**Rollback is atomic over files and processes, never over data.** It reverts
+the plan — binaries, images, which components run — and it does not touch
+anything a component wrote: databases, volumes, caches, state directories. If a
+component migrates its schema on startup and has no down-migration, rolling the
+binary back leaves the old binary facing a schema it does not understand, which
+can fail in ways that look nothing like a failed deployment. Keystone cannot
+detect that today. Where it matters, gate the deployment outside the agent.
+
 ## Stopping
 
 ```bash
