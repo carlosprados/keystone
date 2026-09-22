@@ -11,12 +11,11 @@ import (
 
 // ApplyRequest is the payload for cmd.apply.
 type ApplyRequest struct {
-	// PlanPath is the path to a plan file on the agent's filesystem.
-	// If empty, Content should contain the plan TOML.
-	PlanPath string `json:"planPath,omitempty"`
-
 	// Content is the raw TOML content of the plan.
-	// Used when PlanPath is empty.
+	//
+	// There is deliberately no planPath: letting a remote publisher name a file
+	// on the device and have it executed is a local-file-inclusion vector, and
+	// the HTTP adapter has refused it for that reason for some time.
 	Content string `json:"content,omitempty"`
 
 	// Dry indicates a dry-run (no actual execution).

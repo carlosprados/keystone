@@ -128,8 +128,8 @@ func TestMessages_Response(t *testing.T) {
 func TestMessages_Serialization(t *testing.T) {
 	// Test ApplyRequest serialization
 	req := ApplyRequest{
-		PlanPath: "test.toml",
-		Dry:      true,
+		Content: "[[components]]\nname = \"api\"\n",
+		Dry:     true,
 	}
 	data, err := json.Marshal(req)
 	if err != nil {
@@ -140,7 +140,7 @@ func TestMessages_Serialization(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("failed to unmarshal ApplyRequest: %v", err)
 	}
-	if decoded.PlanPath != req.PlanPath || decoded.Dry != req.Dry {
+	if decoded.Content != req.Content || decoded.Dry != req.Dry {
 		t.Errorf("decoded request doesn't match: %+v", decoded)
 	}
 
@@ -274,7 +274,7 @@ func TestAdapter_Integration(t *testing.T) {
 	}
 
 	// Test cmd.apply
-	applyReq := ApplyRequest{PlanPath: "/tmp/test.toml", Dry: true}
+	applyReq := ApplyRequest{Content: "[[components]]\nname = \"api\"\nrecipe = \"api.toml\"\n", Dry: true}
 	applyData, _ := json.Marshal(applyReq)
 
 	resp, err = client.Request(subjects.CmdApply, applyData, 2*time.Second)
@@ -320,7 +320,7 @@ func TestJetStreamConfig_Defaults(t *testing.T) {
 }
 
 func TestJob_Serialization(t *testing.T) {
-	applyPayload, _ := json.Marshal(ApplyRequest{PlanPath: "/tmp/plan.toml", Dry: false})
+	applyPayload, _ := json.Marshal(ApplyRequest{Content: "[[components]]\nname = \"api\"\nrecipe = \"api.toml\"\n", Dry: false})
 
 	job := Job{
 		ID:        "job-123",

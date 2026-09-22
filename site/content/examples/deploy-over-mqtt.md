@@ -64,10 +64,34 @@ Fields (`ApplyRequest`):
 | Field | Meaning |
 |---|---|
 | `correlationId` | Echoed back in the response, so you can match them |
+| `commandId` | Identifies the command. A second delivery of the same id is ignored |
 | `content` | The plan TOML |
-| `planPath` | A plan file already on the device. Use `content` instead |
 | `recipes` | Recipe TOML documents, stored (with force) before reconciling |
 | `dry` | `true` validates and reports without changing anything |
+
+There is no `planPath`. It named a file on the device for the agent to read and
+execute, which is a local-file-inclusion vector, and it was removed — the HTTP
+adapter had refused it for the same reason for some time. A request that still
+carries one is rejected by name rather than falling through to "content
+required".
+
+### Duplicates and retained messages
+
+Two things about MQTT that matter more for commands than for telemetry:
+
+- **A command must never be published with `retain`.** A retained message is
+  redelivered on every subscribe, so a device that has been offline for weeks
+  executes the order the moment it reconnects — including one that was
+  withdrawn in the meantime. The agent refuses retained commands outright.
+- **QoS 1 is at-least-once by design.** A duplicate delivery is the protocol
+  working correctly, not a broker fault. For a status query that is noise; for
+  an apply it is a second deployment. Send a `commandId` and the agent executes
+  it once. Without one it cannot tell a retry from a deliberate repeat, and
+  will run both.
+
+Both checks apply to the commands that change something — apply, stop, restart,
+stop-comp, add-recipe — and not to the read-only ones, which are the commands an
+operator reaches for when things are already going wrong.
 
 ## Building and publishing it
 
@@ -146,6 +170,8 @@ because applying the same plan twice changes nothing — but if you wrap Keyston
 your own automation, keep that property.
 
 **Broker ACLs are part of your security.** Restrict each device's credentials to
-its own `keystone/{deviceId}/#` subtree. Otherwise one compromised device can
-command every other device on the broker — and note that this adapter still accepts
-`planPath`, so its ACLs are load-bearing.
+its own `keystone/{deviceId}/#` subtree, and make each device **subscribe-only**
+on its command topics. A device publishes responses and events; it never issues
+commands. If a compromised gateway can publish to a command topic — its own or
+another's — the ACL is decoration, and that is the property that makes sharing a
+broker with the data plane acceptable.

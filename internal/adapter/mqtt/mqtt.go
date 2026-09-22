@@ -22,6 +22,7 @@ type Adapter struct {
 	cfg     Config
 	handler adapter.CommandHandler
 	topics  *Topics
+	deduper *commandDeduper
 
 	mu     sync.RWMutex
 	client pahomqtt.Client
@@ -61,6 +62,12 @@ type Config struct {
 	AutoReconnect    bool          // Auto reconnect on disconnect (default: true)
 	MaxReconnectWait time.Duration // Max wait between reconnects (default: 5m)
 
+	// CommandDedupeTTL is how long a commandId is remembered, so a duplicate
+	// delivery of the same command is executed once. QoS 1 is at-least-once by
+	// design, so duplicates are the protocol working correctly, not a fault.
+	// Default: 10m.
+	CommandDedupeTTL time.Duration
+
 	// QoS levels
 	CommandQoS  byte // QoS for command subscriptions (default: 1)
 	ResponseQoS byte // QoS for response publishing (default: 1)
@@ -87,6 +94,7 @@ func DefaultConfig() Config {
 		CleanSession:          true,
 		AutoReconnect:         true,
 		MaxReconnectWait:      5 * time.Minute,
+		CommandDedupeTTL:      10 * time.Minute,
 		CommandQoS:            1,
 		ResponseQoS:           1,
 		EventQoS:              0,
@@ -104,6 +112,7 @@ func New(cfg Config, handler adapter.CommandHandler) *Adapter {
 		cfg:     cfg,
 		handler: handler,
 		topics:  NewTopics(cfg.DeviceID),
+		deduper: newCommandDeduper(cfg.CommandDedupeTTL),
 	}
 }
 
@@ -274,16 +283,16 @@ func (a *Adapter) setupSubscriptionsWithClient(client pahomqtt.Client) error {
 	}
 
 	subs := map[string]pahomqtt.MessageHandler{
-		a.topics.CmdApply:      a.handleApply,
-		a.topics.CmdStop:       a.handleStop,
+		a.topics.CmdApply:      a.guardMutating(a.topics.RespApply, a.handleApply),
+		a.topics.CmdStop:       a.guardMutating(a.topics.RespStop, a.handleStop),
 		a.topics.CmdStatus:     a.handleStatus,
 		a.topics.CmdComponents: a.handleComponents,
 		a.topics.CmdGraph:      a.handleGraph,
-		a.topics.CmdRestart:    a.handleRestart,
-		a.topics.CmdStopComp:   a.handleStopComponent,
+		a.topics.CmdRestart:    a.guardMutating(a.topics.RespRestart, a.handleRestart),
+		a.topics.CmdStopComp:   a.guardMutating(a.topics.RespStopComp, a.handleStopComponent),
 		a.topics.CmdHealth:     a.handleHealth,
 		a.topics.CmdRecipes:    a.handleRecipes,
-		a.topics.CmdAddRecipe:  a.handleAddRecipe,
+		a.topics.CmdAddRecipe:  a.guardMutating(a.topics.RespAddRecipe, a.handleAddRecipe),
 	}
 
 	for topic, handler := range subs {
@@ -309,7 +318,12 @@ func (a *Adapter) handleApply(client pahomqtt.Client, msg pahomqtt.Message) {
 		return
 	}
 
-	log.Printf("[mqtt] cmd/apply planPath=%s recipes=%d dry=%v", req.PlanPath, len(req.Recipes), req.Dry)
+	if rejected := rejectPlanPath(msg.Payload()); rejected != nil {
+		a.respond(a.topics.RespApply, req.CorrelationID, NewErrorResponse(req.CorrelationID, rejected))
+		return
+	}
+
+	log.Printf("[mqtt] cmd/apply recipes=%d dry=%v", len(req.Recipes), req.Dry)
 
 	// Store any inline recipes BEFORE reconciling the plan, so a plan and the
 	// recipes it references arrive atomically in one apply (no add-recipe→apply
@@ -322,12 +336,10 @@ func (a *Adapter) handleApply(client pahomqtt.Client, msg pahomqtt.Message) {
 	}
 
 	var err error
-	if req.PlanPath != "" {
-		err = a.handler.ApplyPlan(req.PlanPath, req.Dry)
-	} else if req.Content != "" {
+	if req.Content != "" {
 		err = a.handler.ApplyPlanContent(req.Content, req.Dry)
 	} else {
-		err = fmt.Errorf("planPath or content required")
+		err = fmt.Errorf("content required: the plan TOML must be supplied in the message")
 	}
 
 	if err != nil {

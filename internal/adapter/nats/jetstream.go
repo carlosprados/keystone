@@ -270,12 +270,13 @@ func (a *Adapter) processJob(ctx context.Context, data []byte) *JobResult {
 		if err = json.Unmarshal(job.Payload, &req); err != nil {
 			break
 		}
-		if req.PlanPath != "" {
-			err = a.handler.ApplyPlan(req.PlanPath, req.Dry)
-		} else if req.Content != "" {
+		if err = rejectPlanPath(job.Payload); err != nil {
+			break
+		}
+		if req.Content != "" {
 			err = a.handler.ApplyPlanContent(req.Content, req.Dry)
 		} else {
-			err = fmt.Errorf("planPath or content required")
+			err = fmt.Errorf("content required: the plan TOML must be supplied in the job payload")
 		}
 		if err == nil {
 			resultData = a.handler.GetPlanStatus()
