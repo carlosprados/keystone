@@ -114,6 +114,12 @@ the trust model, the measured savings and the current limits.
 `[lifecycle.run.container.resources]`: `memory_mb`, `memory_swap`, `cpu_shares`,
 `cpu_quota`, `cpu_period`, `pids_limit`.
 
+### `[lifecycle.run.state]`
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `version` | int | *absent* | The state version this build requires. Absent and `0` are different: `0` is state before the first migration. A rollback to a plan declaring a lower number for the same component is refused — see [rollback]({{% relref "/concepts/plans" %}}) |
+
 ### `[lifecycle.run.health]`
 
 | Field | Type | Default | Notes |

@@ -1312,6 +1312,10 @@ func validateRunShape(r *recipe.Recipe) error {
 		}
 	}
 
+	if v := r.Lifecycle.Run.State.Version; v != nil && *v < 0 {
+		return fmt.Errorf("lifecycle.run.state.version must not be negative, got %d", *v)
+	}
+
 	runType := r.Lifecycle.Run.Type
 	c := r.Lifecycle.Run.Container
 	if runType == "" || runType == "process" {
