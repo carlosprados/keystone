@@ -8,6 +8,7 @@ import (
 	"github.com/carlosprados/keystone/internal/adapter"
 	"github.com/carlosprados/keystone/internal/runner"
 	"github.com/carlosprados/keystone/internal/store"
+	"github.com/carlosprados/keystone/internal/version"
 )
 
 // Ensure Agent implements adapter.CommandHandler at compile time.
@@ -229,6 +230,8 @@ func (a *Agent) GetHealth() *adapter.HealthStatus {
 		TimeUTC:      time.Now().UTC().Format(time.RFC3339),
 		ClockTrusted: true,
 		ClockSource:  "system",
+		AgentVersion: version.Version,
+		AgentCommit:  version.Commit,
 	}
 	if a.clock != nil {
 		h.ClockTrusted = a.clock.Trusted()

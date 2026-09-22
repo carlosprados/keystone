@@ -124,6 +124,11 @@ type StateEvent struct {
 	Components []store.ComponentInfo `json:"components"`
 	PlanStatus string                `json:"planStatus"`
 	PlanPath   string                `json:"planPath,omitempty"`
+	// AgentVersion is the build running on the device. On a device reachable
+	// only outbound it is the only way to know what is deployed there, so it
+	// rides along with the state the device already reports rather than
+	// waiting to be asked.
+	AgentVersion string `json:"agentVersion,omitempty"`
 }
 
 // HealthEvent is published periodically with health status.

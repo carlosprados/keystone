@@ -167,6 +167,15 @@ type HealthStatus struct {
 	// "high-water" (a mark persisted from an earlier run) or "build" (the
 	// binary's own build timestamp).
 	ClockSource string `json:"clock_source"`
+	// AgentVersion and AgentCommit identify the build that is running.
+	//
+	// They matter most where nobody can log in to look: on a device reachable
+	// only outbound, this is the only way to answer "what is deployed here",
+	// which is the input to deciding what to upgrade, to knowing whether an
+	// upgrade landed at all, and to noticing that a device has been sitting on
+	// a withdrawn build for months.
+	AgentVersion string `json:"agent_version"`
+	AgentCommit  string `json:"agent_commit,omitempty"`
 }
 
 // DatasetInfo is what an operator needs to answer "is this device's data
