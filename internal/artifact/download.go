@@ -109,6 +109,32 @@ func (pw *progressWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// newTransport builds the HTTP transport used for artifact downloads.
+//
+// Proxy is set explicitly, and that is the whole reason this is a function
+// worth testing. A hand-built Transport inherits nothing from
+// http.DefaultTransport, so omitting the field silently ignores HTTPS_PROXY,
+// HTTP_PROXY and NO_PROXY. On a network that requires egress through a proxy —
+// a hospital, most corporate sites — the download then does not take a
+// different route: it times out, with an error that never mentions a proxy.
+func newTransport(cfg DownloadConfig) *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   cfg.ConnectTimeout,
+			KeepAlive: cfg.KeepAlive,
+		}).DialContext,
+		TLSHandshakeTimeout:   cfg.TLSTimeout,
+		ResponseHeaderTimeout: cfg.ReadTimeout,
+		IdleConnTimeout:       cfg.IdleTimeout,
+		ExpectContinueTimeout: cfg.ExpectContinue,
+		MaxIdleConns:          10,
+		MaxIdleConnsPerHost:   5,
+		MaxConnsPerHost:       10,
+		ForceAttemptHTTP2:     true,
+	}
+}
+
 // DownloadWithResume downloads a file with resume support and robust retry logic.
 func DownloadWithResume(ctx context.Context, destDir, uri string, cfg DownloadConfig) (*DownloadResult, error) {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
@@ -128,24 +154,8 @@ func DownloadWithResume(ctx context.Context, destDir, uri string, cfg DownloadCo
 	destPath := filepath.Join(destDir, base)
 	partialPath := destPath + cfg.PartialSuffix
 
-	// Create HTTP client with proper timeouts
-	transport := &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   cfg.ConnectTimeout,
-			KeepAlive: cfg.KeepAlive,
-		}).DialContext,
-		TLSHandshakeTimeout:   cfg.TLSTimeout,
-		ResponseHeaderTimeout: cfg.ReadTimeout,
-		IdleConnTimeout:       cfg.IdleTimeout,
-		ExpectContinueTimeout: cfg.ExpectContinue,
-		MaxIdleConns:          10,
-		MaxIdleConnsPerHost:   5,
-		MaxConnsPerHost:       10,
-		ForceAttemptHTTP2:     true,
-	}
-
 	client := &http.Client{
-		Transport: transport,
+		Transport: newTransport(cfg),
 		Timeout:   0, // We handle timeout via context
 	}
 
