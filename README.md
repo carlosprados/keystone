@@ -20,6 +20,8 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 - **Fresh data, no restarts**: datasets (an OUI list, a vulnerability feed) refresh on their own schedule from a signed manifest, activate atomically and roll back if the component cannot live with them — see [datasets](https://carlosprados.github.io/keystone/concepts/datasets/)
 - **Connected**: HTTP REST, NATS (+ JetStream), MQTT adapters
 - **Operable**: structured logs, Prometheus metrics, health endpoints, persistence
+- **Verifiable from the outside in**: every release is signed with cosign (keyless, recorded in Sigstore's transparency log) and ships an SPDX SBOM per archive — see [Verifying a release](https://carlosprados.github.io/keystone/security/releases/)
+- **Refuses what it cannot honour**: a declaration that a runtime cannot implement is rejected rather than dropped — and a rollback that would drag a component back across a state migration is refused instead of silently corrupting what it reverts to
 
 ### Keystone vs. AWS Greengrass
 
@@ -137,17 +139,17 @@ See everything running at a glance:
 
 ## Project Status
 
-**Released and in production evaluation.** Latest release: **v0.4.0** (August 2026) — see [releases](https://github.com/carlosprados/keystone/releases). Each release publishes a `tar.gz` per architecture (Linux `amd64`, `arm64`, `armv7`) containing all three binaries: `keystone`, `keystonectl` and `keystoneserver`.
+**Released and in production evaluation.** See [releases](https://github.com/carlosprados/keystone/releases) for the current version — this file deliberately does not name one, because a version written here goes stale the moment a tag is cut. Each release publishes a `tar.gz` per architecture (Linux `amd64`, `arm64`, `armv7`) containing all three binaries: `keystone`, `keystonectl` and `keystoneserver`, plus a signature and an SBOM (below).
 
-What is done: supervisor with DAG deployments and rollback, process and container runners, artifact manager with resume and optional delta downloads, signature verification that fails closed, privilege dropping, and three control-plane adapters (HTTP, NATS, MQTT). Documentation is published at [carlosprados.github.io/keystone](https://carlosprados.github.io/keystone/) and the OpenAPI document is generated from the route table, so it cannot drift from the code.
+What is done: supervisor with DAG deployments and rollback, process and container runners, artifact manager with resume and optional delta downloads, signature verification that fails closed, privilege dropping, three control-plane adapters (HTTP, NATS, MQTT), and a signed release pipeline. Documentation is published at [carlosprados.github.io/keystone](https://carlosprados.github.io/keystone/) and the OpenAPI document is generated from the route table, so it cannot drift from the code.
 
 Known limitations, stated plainly:
 
-- **Released binaries are not signed.** No cosign signature and no SBOM yet. Verify the published checksums and fetch over HTTPS.
+- **No self-update.** The agent does not replace its own binary; upgrades are driven from outside (configuration management, an image, a package). See Phase 7 below.
 - **No built-in TLS for the HTTP API.** Terminate at a reverse proxy, use a VPN, or tunnel with `keystonectl --ssh`. NATS and MQTT do support TLS natively.
 - **cgroups are a no-op placeholder.** ProcessRunner applies `RLIMIT_NOFILE` only; container resource limits do work.
 - **The NATS and MQTT adapters still accept `planPath`**, which the HTTP API deliberately rejects. Treat those transports as trusted.
-- **Self-update and canary rings are not implemented** (Phase 7 below).
+- **Canary rings are not implemented** (Phase 7 below).
 
 ## Install
 
@@ -155,7 +157,7 @@ Every release publishes one archive per architecture, containing all three
 binaries:
 
 ```bash
-tar xzf keystone_0.4.0_linux_arm64.tar.gz
+tar xzf keystone_<version>_linux_arm64.tar.gz
 sudo install -m 0755 keystone keystonectl keystoneserver /usr/local/bin/
 keystone --version
 ```
@@ -166,7 +168,9 @@ keystone --version
 | `keystonectl` | CLI client, talks to an agent over its HTTP API |
 | `keystoneserver` | Tiny static file server, for serving test artifacts while developing |
 
-Binaries are not signed yet — check the published checksums and fetch over HTTPS.
+Verify before installing: every release from v0.9.0 carries a cosign signature
+over `checksums.txt` and an SBOM per archive — see
+[Verifying what you downloaded](#verifying-what-you-downloaded).
 From source: `task build`.
 
 ## Quick Start
@@ -222,8 +226,9 @@ curl -s localhost:8080/metrics | head
 - [x] **Phase 5**: Robustness — download resume, exponential backoff, graceful shutdown
 - [x] **Phase 6**: ContainerRunner — containerd client, CLI fallback (docker/nerdctl/podman)
 - [x] **Phase 6.5**: Delta (patch) artifact downloads, privilege dropping, published documentation site
+- [x] **Phase 6.6**: Container service discovery (network aliases), shell-free health probes, container misconfiguration guardrails
+- [x] **Phase 8**: Signed releases (cosign keyless + SPDX SBOM)
 - [ ] **Phase 7**: Self-update and canary rings
-- [ ] **Phase 8**: Signed releases (cosign + SBOM)
 
 See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 
@@ -232,11 +237,11 @@ See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 | Category | Features |
 |----------|----------|
 | **Supervisor** | DAG execution, parallel layer startup, FSM lifecycle, dependency ordering |
-| **ProcessRunner** | Process management, log streaming, health probes (HTTP/TCP/cmd), restart policies, exponential backoff |
-| **ContainerRunner** | containerd client, CLI fallback (docker/nerdctl/podman), image pull, mounts, ports, resource limits |
-| **Deployment Engine** | TOML plans and recipes, environment variable substitution, dry-run mode |
+| **ProcessRunner** | Process management, log streaming, health probes (HTTP/TCP/cmd/exec), restart policies, exponential backoff, privilege dropping |
+| **ContainerRunner** | containerd client, CLI fallback (docker/nerdctl/podman), image pull, mounts, ports, resource limits, network aliases for service discovery, network pre-flight, moving-tag and containerd-namespace warnings |
+| **Deployment Engine** | TOML plans and recipes, environment variable substitution, dry-run mode, rollback refused across a declared state migration |
 | **Artifact Manager** | Secure download with resume, SHA-256 verification, detached signatures, GC, cache limits, optional delta (patch) updates |
-| **Security** | Trust bundles (PEM), ECDSA/RSA signature verification, mTLS support |
+| **Security** | Trust bundles (PEM), Ed25519/ECDSA/RSA signature verification, mTLS support, signed releases (cosign keyless) with an SPDX SBOM per archive |
 | **Observability** | Prometheus metrics, structured logging, health endpoints, per-process metrics |
 | **Persistence** | Automatic state snapshotting, recovery on restart, atomic writes |
 | **Control Plane** | HTTP REST API, NATS adapter (+ JetStream jobs), MQTT adapter (QoS, LWT) |
@@ -436,7 +441,22 @@ task release:tag RELEASE=v0.3.1       # tags origin/main and pushes the tag
 
 `tag` waits for that documentation deployment to finish before tagging, and **stops if it failed**: releasing binaries beside a site that still names the previous version is not fixable afterwards, because the repository rules forbid moving or deleting a `v*` tag. A deployment that is merely slow or has not started yet is not treated as a failure — it warns and proceeds. Override with `SKIP_DOCS_WAIT=1`, or adjust `DOCS_APPEAR_TIMEOUT` (180 s) and `DOCS_FINISH_TIMEOUT` (600 s).
 
-Pushing the tag triggers GoReleaser, which builds the binaries for multiple architectures (`amd64`, `arm64`, `armv7`) and creates a GitHub Release with the artifacts. `release.yml` re-checks the version match server-side, so cutting a tag by hand cannot skip the step either. Pre-release tags (`v0.4.0-rc1`) are exempt: the site stays on the last stable version, so tag those directly.
+Pushing the tag triggers GoReleaser, which builds the binaries for multiple architectures (`amd64`, `arm64`, `armv7`) and creates a GitHub Release with the artifacts. `release.yml` re-checks the version match server-side, so cutting a tag by hand cannot skip the step either. Pre-release tags (`v0.4.0-rc1`) are exempt: the site stays on the last stable version, so tag those directly, and they are published as pre-releases so nothing asking for the latest version is handed one.
+
+### Verifying what you downloaded
+
+Every release from **v0.9.0** carries a cosign signature over `checksums.txt` and an SPDX 2.3 SBOM per archive. The checksum proves integrity; the signature proves the bytes came from this repository's release workflow, which is the property that matters for an agent whose job is installing software on other machines.
+
+```bash
+cosign verify-blob checksums.txt \
+  --bundle checksums.txt.bundle \
+  --certificate-identity-regexp '^https://github\.com/carlosprados/keystone/\.github/workflows/release\.yml@refs/tags/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+sha256sum --check --ignore-missing checksums.txt
+```
+
+Do not drop `--certificate-identity-regexp`: without it the verification accepts a signature from any workflow in any repository, an attacker's fork included. Signing is keyless, so there is no key to hold, and the signature is recorded in Sigstore's transparency log. Full details, including what this does **not** prove, are in [Verifying a release](https://carlosprados.github.io/keystone/security/releases/).
 
 ## Configuration
 
