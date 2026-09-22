@@ -148,7 +148,6 @@ Known limitations, stated plainly:
 - **No self-update.** The agent does not replace its own binary; upgrades are driven from outside (configuration management, an image, a package). See Phase 7 below.
 - **No built-in TLS for the HTTP API.** Terminate at a reverse proxy, use a VPN, or tunnel with `keystonectl --ssh`. NATS and MQTT do support TLS natively.
 - **cgroups are a no-op placeholder.** ProcessRunner applies `RLIMIT_NOFILE` only; container resource limits do work.
-- **The NATS and MQTT adapters still accept `planPath`**, which the HTTP API deliberately rejects. Treat those transports as trusted.
 - **Canary rings are not implemented** (Phase 7 below).
 
 ## Install
@@ -244,7 +243,7 @@ See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 | **Security** | Trust bundles (PEM), Ed25519/ECDSA/RSA signature verification, mTLS support, signed releases (cosign keyless) with an SPDX SBOM per archive |
 | **Observability** | Prometheus metrics, structured logging, health endpoints, per-process metrics |
 | **Persistence** | Automatic state snapshotting, recovery on restart, atomic writes |
-| **Control Plane** | HTTP REST API, NATS adapter (+ JetStream jobs), MQTT adapter (QoS, LWT) |
+| **Control Plane** | HTTP REST API, NATS adapter (+ JetStream jobs), MQTT adapter (QoS, LWT), content-only plans on every transport, retained-command refusal and command deduplication, agent version reported over all three |
 | **CLI** | `keystonectl`: full parity with the HTTP API, self-documenting help with examples, SSH tunnelling, shell completion |
 | **Robustness** | Download resume (HTTP Range), exponential backoff with jitter, context propagation, graceful shutdown |
 
@@ -471,8 +470,12 @@ privileged surface:
 - When a token is set, every endpoint except `/healthz` requires
   `Authorization: Bearer <token>`. `keystonectl` sends it automatically from
   `--token` or `KEYSTONE_API_TOKEN`.
-- The API accepts plans as uploaded content only; the legacy `planPath` field
-  (loading an arbitrary server-side file) is rejected.
+- Plans are accepted as uploaded content only, on **every** transport. The
+  legacy `planPath` field — which named a file on the device for the agent to
+  read and execute — is rejected by HTTP, NATS and MQTT alike.
+- Commands that change state are refused if they arrive **retained**, and are
+  deduplicated by `commandId` where one is supplied: a retained command is
+  redelivered on every reconnect, and QoS 1 is at-least-once by design.
 
 ### Environment Variables
 
