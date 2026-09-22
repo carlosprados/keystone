@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/carlosprados/keystone/internal/adapter"
+	"github.com/carlosprados/keystone/internal/version"
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
@@ -538,11 +539,12 @@ func (a *Adapter) publishState() {
 	status := a.handler.GetPlanStatus()
 
 	event := StateEvent{
-		Timestamp:  time.Now().UTC(),
-		DeviceID:   a.cfg.DeviceID,
-		Components: status.Components,
-		PlanStatus: status.Status,
-		PlanPath:   status.PlanPath,
+		Timestamp:    time.Now().UTC(),
+		DeviceID:     a.cfg.DeviceID,
+		Components:   status.Components,
+		PlanStatus:   status.Status,
+		PlanPath:     status.PlanPath,
+		AgentVersion: version.Version,
 	}
 
 	data, err := json.Marshal(event)

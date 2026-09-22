@@ -707,6 +707,10 @@ components:
       type: object
     AdapterHealthStatus:
       properties:
+        agent_commit:
+          type: string
+        agent_version:
+          type: string
         clock_source:
           type: string
         clock_trusted:

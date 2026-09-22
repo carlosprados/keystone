@@ -35,6 +35,28 @@ Everything under `keystone/{deviceId}/`:
 The command/response split (rather than MQTT 5 request/response) keeps it
 compatible with 3.1.1 brokers, which is what most industrial gear speaks.
 
+## Knowing what build is out there
+
+The periodic state event carries `agentVersion`, and the health response carries
+`agent_version` and `agent_commit`:
+
+```json
+{
+  "timestamp": "2026-09-22T10:00:00Z",
+  "deviceId": "gw-01",
+  "agentVersion": "0.10.0",
+  "planStatus": "running",
+  "components": [ ... ]
+}
+```
+
+It is reported rather than waited for on purpose. On a device that can only
+reach outwards — behind NAT, no VPN, no jump host — this is the only way to
+answer *what is running here*, and that answer is what tells you which devices
+to upgrade, whether an upgrade landed at all, and which one has been sitting on
+a withdrawn build for months. Asking each device would require being able to
+reach it, which is exactly what this deployment shape does not allow.
+
 ## Presence via last will
 
 The agent connects with a last-will message on `keystone/{deviceId}/status`. If it
