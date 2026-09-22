@@ -258,6 +258,22 @@ func (a *Adapter) setupSubscriptions() error {
 	return nil
 }
 
+// rejectPlanPath reports a request that still carries the removed planPath
+// field, instead of letting it fall through to "content required".
+//
+// A controller that has not been updated would otherwise get an error naming
+// the wrong field, and conclude its plan content was malformed. Naming what was
+// removed is the difference between a five-minute fix and an afternoon.
+func rejectPlanPath(payload []byte) error {
+	var legacy struct {
+		PlanPath string `json:"planPath"`
+	}
+	if json.Unmarshal(payload, &legacy) == nil && legacy.PlanPath != "" {
+		return fmt.Errorf("planPath is no longer accepted (it let a publisher execute an arbitrary file on the device); send the plan as content instead")
+	}
+	return nil
+}
+
 // Command handlers
 
 func (a *Adapter) handleApply(msg *nats.Msg) {
@@ -267,15 +283,18 @@ func (a *Adapter) handleApply(msg *nats.Msg) {
 		return
 	}
 
-	log.Printf("[nats] cmd.apply planPath=%s dry=%v", req.PlanPath, req.Dry)
+	if rejected := rejectPlanPath(msg.Data); rejected != nil {
+		a.respond(msg, NewErrorResponse(rejected))
+		return
+	}
+
+	log.Printf("[nats] cmd.apply dry=%v", req.Dry)
 
 	var err error
-	if req.PlanPath != "" {
-		err = a.handler.ApplyPlan(req.PlanPath, req.Dry)
-	} else if req.Content != "" {
+	if req.Content != "" {
 		err = a.handler.ApplyPlanContent(req.Content, req.Dry)
 	} else {
-		err = fmt.Errorf("planPath or content required")
+		err = fmt.Errorf("content required: the plan TOML must be supplied in the message")
 	}
 
 	if err != nil {

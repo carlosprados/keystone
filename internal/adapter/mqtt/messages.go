@@ -14,12 +14,19 @@ type ApplyRequest struct {
 	// CorrelationID is an optional client-provided ID to correlate responses.
 	CorrelationID string `json:"correlationId,omitempty"`
 
-	// PlanPath is the path to a plan file on the agent's filesystem.
-	// If empty, Content should contain the plan TOML.
-	PlanPath string `json:"planPath,omitempty"`
+	// CommandID identifies this command so a duplicate delivery is executed
+	// once. QoS 1 is at-least-once by design: without an id the agent has no
+	// way to tell a retry from a second, deliberate apply, and will run both.
+	// Distinct from CorrelationID, which may legitimately repeat.
+	CommandID string `json:"commandId,omitempty"`
 
 	// Content is the raw TOML content of the plan.
-	// Used when PlanPath is empty.
+	//
+	// There is deliberately no planPath: letting a remote publisher name a file
+	// on the device and have it executed is a local-file-inclusion vector, and
+	// the HTTP adapter has refused it for that reason for some time. Under an
+	// outbound-only deployment this is the control plane, so it is the last
+	// place that should accept it.
 	Content string `json:"content,omitempty"`
 
 	// Recipes are recipe TOML documents to store (add-recipe with force) BEFORE
