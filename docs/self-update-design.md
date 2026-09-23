@@ -145,6 +145,27 @@ power cut at any point leaves either the old version or the new one, never half
 of one — which matters on hardware whose power supply has already been a
 problem.
 
+**Implemented** in `internal/selfupdate`. Three properties are worth naming
+because each closes a way of ending up with no agent at all:
+
+- **The switch never leaves a gap.** `os.Symlink` cannot replace an existing
+  link, and the obvious remove-then-create leaves a window in which `current`
+  does not exist — a restart landing there has nothing to start. Activation
+  builds a temporary link and renames it over the old one. Pinned by a test
+  that hammers the path while 50 activations run underneath it.
+- **A version directory is renamed into place**, so an interrupted install
+  cannot leave a half-populated directory that looks installed.
+- **The architecture is checked before the swap**, from the ELF header. The
+  wrong build for the board is otherwise indistinguishable from a corrupt one:
+  both fail to execute, and both are discovered only afterwards, by burning
+  restarts against the boot counter. Verified against real cross-compiled
+  binaries: `binary is for arm64, this device is amd64`.
+
+Pruning takes the versions to keep by name rather than a count. "Keep the
+newest two" needs a version ordering this package deliberately does not invent
+— the operator chose the scheme — and the two that matter are the running one
+and the one to fall back to, which the caller knows and a sort does not.
+
 ### Who restarts, and who watches
 
 **systemd.** `Type=notify`, `Restart=always`, `ExecStart=/opt/keystone/current/keystone`.
