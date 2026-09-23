@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"errors"
 	"github.com/carlosprados/keystone/internal/adapter"
 	"github.com/carlosprados/keystone/internal/artifact"
 	"github.com/carlosprados/keystone/internal/clock"
@@ -164,8 +165,21 @@ func New(opts Options) *Agent {
 			a.artifactDownloadTimeout = d
 		}
 	}
-	// Best-effort load snapshot
-	if snap, err := state.Load(a.stateDir); err == nil {
+	// Best-effort load snapshot. Best-effort means the agent still starts, not
+	// that it starts quietly: a device that comes up with no plan because its
+	// state could not be read looks exactly like one that was never given a
+	// plan, and the two need different fixing.
+	snap, loadErr := state.Load(a.stateDir)
+	switch {
+	case loadErr == nil:
+	case errors.Is(loadErr, os.ErrNotExist):
+		// First boot, or state deliberately cleared. Nothing to say.
+	case errors.Is(loadErr, state.ErrSnapshotFromNewerAgent):
+		log.Printf("[agent] WARNING starting with NO state: %v. This happens when a newer agent ran here and was then rolled back. The plan in force, component adoption and dataset anti-replay marks are all gone; re-apply the plan to restore them", loadErr)
+	default:
+		log.Printf("[agent] WARNING starting with no state: the snapshot could not be read (%v)", loadErr)
+	}
+	if loadErr == nil {
 		a.planPath = snap.Plan.Path
 		a.planStatus = snap.Plan.Status
 		a.planErr = snap.Plan.Error

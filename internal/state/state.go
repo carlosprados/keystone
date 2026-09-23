@@ -2,6 +2,8 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,7 +18,31 @@ type PlanStatus struct {
 	Updated time.Time `json:"updated"`
 }
 
+// CurrentSchemaVersion is the format this build of the agent writes and can
+// read. Raise it in the same change that makes an older agent unable to read
+// what this one writes.
+//
+// It exists for self-update. Rollback reverts binaries; it does not revert what
+// a component wrote, and the agent's own snapshot is no different — an update
+// that runs, writes state in a new shape and is then rolled back would leave
+// the previous binary reading a file it cannot make sense of. Keystone refuses
+// that for components (a plan declares lifecycle.run.state.version); this is
+// the same guarantee turned on the agent itself.
+const CurrentSchemaVersion = 1
+
+// ErrSnapshotFromNewerAgent reports a snapshot written by a build that knows a
+// format this one does not.
+//
+// Starting clean is the right answer, and misreading it is not: every field
+// here drives a decision — which plan is in force, which components to adopt,
+// what a dataset last published (which is what the anti-replay rule compares
+// against). Guessing at any of them is worse than admitting the state is gone.
+var ErrSnapshotFromNewerAgent = errors.New("state snapshot was written by a newer agent")
+
 type Snapshot struct {
+	// SchemaVersion is 0 in snapshots written before versioning existed. Those
+	// are readable: the format did not change, it only became explicit.
+	SchemaVersion  int                   `json:"schema_version,omitempty"`
 	Plan           PlanStatus            `json:"plan"`
 	Components     []store.ComponentInfo `json:"components"`
 	PlanComponents []PlanComponent       `json:"plan_components"`
@@ -68,6 +94,11 @@ func Save(dir string, snap Snapshot) error {
 	path := filepath.Join(dir, "snapshot.json")
 	tmp := path + ".tmp"
 
+	// Stamped on write rather than trusted from the caller: a snapshot that
+	// claims a version it was not written by is worse than one with no version
+	// at all.
+	snap.SchemaVersion = CurrentSchemaVersion
+
 	// Marshal with validation
 	b, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
@@ -108,6 +139,10 @@ func Load(dir string) (Snapshot, error) {
 	}
 	if err := json.Unmarshal(b, &snap); err != nil {
 		return snap, err
+	}
+	if snap.SchemaVersion > CurrentSchemaVersion {
+		return Snapshot{}, fmt.Errorf("%w: snapshot is version %d, this agent reads up to %d",
+			ErrSnapshotFromNewerAgent, snap.SchemaVersion, CurrentSchemaVersion)
 	}
 	return snap, nil
 }
