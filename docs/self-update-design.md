@@ -248,6 +248,36 @@ a plan, and the two need different fixing. Snapshots written before versioning
 carry no field and are still read: the format did not change, it only became
 explicit, so refusing them would wipe every existing device on upgrade.
 
+### Download before stopping anything
+
+Measured in the lab, on an ordinary component: Keystone stops the running
+component **before** downloading the new artifact, and leaves it stopped for the
+whole retry window. A plan whose artifact URL was mistyped took the component
+out of service for **3 minutes 6 seconds** — the time the download spent
+failing, not the time an install takes.
+
+```
+17:26:21  the failing apply stops the component
+17:29:27  the download gives up after 10 attempts; rollback restarts it
+```
+
+The command channel answers throughout — that was fixed separately — but the
+device is not doing its job.
+
+Self-update must not inherit that shape. Here the sequence is naturally the
+right way round, and it should stay that way: the new binary is downloaded,
+verified and installed **beside** the running one, which never stops. The only
+outage is the restart itself, and it happens after the bytes are on disk and
+checked. Download time, however long the link makes it, costs nothing.
+
+Stated as a requirement rather than an observation: **no step of an update may
+stop anything until the artifact it needs is on disk and verified.**
+
+The same correction for ordinary components — download first, stop second — is a
+larger change to the reconcile and is deliberately not part of Phase 7. It is
+recorded here with the number, because a limitation with a measurement attached
+is one somebody can prioritise.
+
 ### Telemetry
 
 Outbound-only means a successful rollback is silent. Reliable rollback plus total
