@@ -168,8 +168,13 @@ func (a *Adapter) Start(ctx context.Context) error {
 	opts.SetAutoReconnect(a.cfg.AutoReconnect)
 	opts.SetMaxReconnectInterval(a.cfg.MaxReconnectWait)
 
-	// TLS configuration
-	if a.cfg.TLSCert != "" || a.cfg.TLSCA != "" {
+	// TLS configuration.
+	//
+	// !TLSVerify belongs in this condition: without it, asking to skip
+	// verification and nothing else built no TLS config at all, so the flag was
+	// silently ignored and the connection still failed against a self-signed
+	// broker — the one case the flag exists for.
+	if a.cfg.TLSCert != "" || a.cfg.TLSCA != "" || !a.cfg.TLSVerify {
 		tlsCfg, err := a.buildTLSConfig()
 		if err != nil {
 			return fmt.Errorf("failed to configure TLS: %w", err)
@@ -676,6 +681,15 @@ func (a *Adapter) buildTLSConfig() (*tls.Config, error) {
 
 	// Skip verification only if explicitly disabled
 	tlsCfg.InsecureSkipVerify = !a.cfg.TLSVerify
+	if tlsCfg.InsecureSkipVerify {
+		// Said out loud, like --insecure-skip-verify for artifacts. Skipping
+		// verification accepts ANY certificate, so anyone who can intercept the
+		// connection can impersonate the broker — and this is the channel that
+		// carries plans. Pointing --mqtt-tls-ca at the self-signed certificate
+		// keeps the encryption AND the identity check, and is what a device in
+		// the field should use.
+		log.Printf("[mqtt] WARNING: broker certificate verification is DISABLED (--mqtt-tls-verify=false); any certificate is accepted. Prefer --mqtt-tls-ca with the broker's own certificate")
+	}
 
 	return tlsCfg, nil
 }
