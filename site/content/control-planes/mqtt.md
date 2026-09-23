@@ -91,6 +91,23 @@ Username/password (`--mqtt-user`, `--mqtt-pass`) works too. Every MQTT flag has 
 `KEYSTONE_MQTT_*` environment equivalent, which is usually how you configure it
 under systemd — see [Environment variables](../../reference/env/).
 
+### A self-signed broker does not need verification turned off
+
+Point `--mqtt-tls-ca` at the broker's own certificate:
+
+```bash
+keystone --mqtt-broker tls://broker.internal:8883          --mqtt-tls-ca /etc/keystone/broker-cert.pem
+```
+
+That keeps the encryption **and** the identity check. The certificate being
+self-signed is not the problem; not knowing which certificate to expect is.
+
+`--mqtt-tls-verify=false` also exists, for a lab where the certificate changes
+under you. It accepts **any** certificate, so anyone able to intercept the
+connection can impersonate the broker — on the channel that carries plans. The
+agent logs a warning for the whole run when it is set. TLS 1.2 is the floor
+either way.
+
 ## Broker ACLs are part of your security
 
 Restrict each device's credentials to its own `keystone/{deviceId}/#` subtree.
