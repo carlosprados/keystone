@@ -1,0 +1,55 @@
+[Unit]
+Description=Keystone Agent (A/B install, self-updating)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+EnvironmentFile=/etc/keystone/keystone.env
+
+# The pre-start gate decides whether a pending version has had enough chances,
+# and rolls back when it has not. It runs before every start, including the
+# start that follows a binary which failed to execute — which is the whole
+# reason it is a separate script and not part of the agent.
+#
+# It is deliberately NOT under /opt/keystone/current: it must not be replaced by
+# the thing it supervises.
+ExecStartPre=/usr/local/lib/keystone/keystone-update-gate.sh
+
+# Reached through the symlink, resolved afresh at every start. Switching
+# versions is a rename of that link.
+ExecStart=/opt/keystone/current/keystone --http 127.0.0.1:8080
+
+# Always, not on-failure: an agent that installed a new version exits cleanly
+# and expects to be started again into it. With on-failure, a clean exit would
+# leave the device with no agent.
+Restart=always
+RestartSec=3
+
+# StartLimit is deliberately wide. The gate's own counter must be what reverts a
+# bad version — systemd's limit stops restarting and leaves the unit dead, which
+# on a device nobody can reach is the outcome being avoided. Keep this larger
+# than KEYSTONE_UPDATE_MAX_BOOTS so the gate always gets there first.
+StartLimitBurst=20
+StartLimitIntervalSec=300
+
+User=keystone
+Group=keystone
+
+# The agent stages and verifies; it does not need to own the binary it runs.
+# /opt/keystone is root-owned, and the gate — running as root before the agent
+# starts — is what moves the symlink. A compromised agent can therefore propose
+# a version but not install one.
+ReadWritePaths=/opt/keystone/staging /opt/keystone/state /var/lib/keystone
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

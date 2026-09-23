@@ -189,6 +189,31 @@ Deliberately not the new binary, and deliberately not systemd's own
 outcome we are trying to avoid. Our counter must revert *before* systemd's
 limit is reached, so the two numbers have to be set together.
 
+**Implemented** as `configs/systemd/keystone-ab.service` and
+`configs/systemd/keystone-update-gate.sh`, with the state the two exchange in
+`<root>/state/update.env`.
+
+Four decisions in there are worth stating, because each one looks like an
+arbitrary choice until the failure it prevents is named:
+
+- **The gate is a POSIX shell script, not the agent and not a Go helper.** The
+  failure it exists for is a binary that does not execute. Anything that has to
+  run the new binary to decide whether the new binary works cannot help.
+- **It never sources the state file.** That file is written by a process that
+  could in principle be compromised, and the gate runs as root before the agent
+  starts: `.` on it would be arbitrary code execution. It parses instead, and a
+  test writes `$(touch canary)` into the file and fails if the canary appears.
+- **`KEY=value`, not JSON.** The gate cannot depend on `jq` being installed on a
+  gateway, and this is readable with `sed`.
+- **`StartLimitBurst` is set wide on purpose**, larger than the gate's own
+  counter. systemd's limit stops restarting and leaves the unit dead; the
+  gate's reverts. On a device nobody can reach, "stopped trying" is the outcome
+  being avoided, so the gate must always get there first.
+
+The state file survives a power cut mid-write (written atomically) and a garbage
+counter (re-counted from zero rather than refusing to work) — both tested,
+because both are ordinary on hardware with an unreliable supply.
+
 ### Confirmation
 
 The new agent clears the counter only when it has, in order:
