@@ -98,6 +98,7 @@ func main() {
 	mqttStateInterval := flag.Duration("mqtt-state-interval", 10*time.Second, "Interval for publishing state events (0 to disable)")
 	mqttHealthInterval := flag.Duration("mqtt-health-interval", 30*time.Second, "Interval for publishing health events (0 to disable)")
 	mqttQoS := flag.Int("mqtt-qos", 1, "Default QoS level for commands and responses (0, 1, or 2)")
+	mqttDedupeTTL := flag.Duration("mqtt-command-dedupe-ttl", 10*time.Minute, "How long a commandId is remembered, so a redelivery of the same command is executed once. Raise it on links where a device can be offline longer than this")
 
 	clockPolicy := flag.String("clock-policy", "high-water", "What to do when the system clock is behind known-good time: high-water (verify against the later of the two) or strict (refuse to verify)")
 
@@ -181,6 +182,7 @@ func main() {
 	applyStringEnv("mqtt-user", mqttUser, "KEYSTONE_MQTT_USER")
 	applyStringEnv("mqtt-pass", mqttPass, "KEYSTONE_MQTT_PASS")
 	applyIntEnv("mqtt-qos", mqttQoS, "KEYSTONE_MQTT_QOS")
+	applyDurationEnv("mqtt-command-dedupe-ttl", mqttDedupeTTL, "KEYSTONE_MQTT_COMMAND_DEDUPE_TTL")
 	applyDurationEnv("mqtt-state-interval", mqttStateInterval, "KEYSTONE_MQTT_STATE_INTERVAL")
 	applyDurationEnv("mqtt-health-interval", mqttHealthInterval, "KEYSTONE_MQTT_HEALTH_INTERVAL")
 
@@ -282,6 +284,7 @@ func main() {
 		mqttCfg.Password = *mqttPass
 		mqttCfg.PublishStateInterval = *mqttStateInterval
 		mqttCfg.PublishHealthInterval = *mqttHealthInterval
+		mqttCfg.CommandDedupeTTL = *mqttDedupeTTL
 		if *mqttQoS >= 0 && *mqttQoS <= 2 {
 			mqttCfg.CommandQoS = byte(*mqttQoS)
 			mqttCfg.ResponseQoS = byte(*mqttQoS)

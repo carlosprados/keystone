@@ -507,6 +507,7 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_MQTT_USER`                  | MQTT username.                                                          |
 | `KEYSTONE_MQTT_PASS`                  | MQTT password.                                                          |
 | `KEYSTONE_MQTT_QOS`                   | MQTT QoS for command/response (0, 1, 2).                               |
+| `KEYSTONE_MQTT_COMMAND_DEDUPE_TTL`    | How long a `commandId` is remembered (default `10m`).                  |
 | `KEYSTONE_MQTT_STATE_INTERVAL`        | MQTT state event interval (e.g. `10s`, `0` to disable).                |
 | `KEYSTONE_MQTT_HEALTH_INTERVAL`       | MQTT health event interval (e.g. `30s`, `0` to disable).               |
 | `KEYSTONE_INSTALL_TIMEOUT`            | Install phase timeout (default: 2m). Supports duration strings.        |
@@ -697,7 +698,8 @@ Environment variable equivalents are also supported (flags take precedence):
 `KEYSTONE_MQTT_BROKER`, `KEYSTONE_MQTT_DEVICE_ID`, `KEYSTONE_MQTT_CLIENT_ID`,
 `KEYSTONE_MQTT_TLS_CERT`, `KEYSTONE_MQTT_TLS_KEY`, `KEYSTONE_MQTT_TLS_CA`,
 `KEYSTONE_MQTT_TLS_VERIFY`, `KEYSTONE_MQTT_USER`, `KEYSTONE_MQTT_PASS`,
-`KEYSTONE_MQTT_QOS`, `KEYSTONE_MQTT_STATE_INTERVAL`, `KEYSTONE_MQTT_HEALTH_INTERVAL`.
+`KEYSTONE_MQTT_QOS`, `KEYSTONE_MQTT_COMMAND_DEDUPE_TTL`,
+`KEYSTONE_MQTT_STATE_INTERVAL`, `KEYSTONE_MQTT_HEALTH_INTERVAL`.
 
 </details>
 

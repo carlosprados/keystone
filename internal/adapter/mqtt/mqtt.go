@@ -144,6 +144,23 @@ func (a *Adapter) Start(ctx context.Context) error {
 		opts.SetPassword(a.cfg.Password)
 	}
 
+	// Each message handler runs in its own goroutine.
+	//
+	// Paho defaults this to true, and its own documentation says that with
+	// true "handlers must not block" — ours do: an apply downloads artifacts,
+	// which can take minutes over a bad link. With a single routing goroutine
+	// that stalls every other command, and it stalls the PINGRESP processing
+	// too, so after KeepAlive the client concludes the connection is dead and
+	// reconnects. Measured: a 3m13s download made status queries unanswerable,
+	// then produced "response publish timeout" and a reconnect, while HTTP on
+	// loopback answered normally throughout. The agent was not down; the only
+	// channel able to reach it was.
+	//
+	// That matters most in exactly the deployment this exists for: where MQTT
+	// is the only way in, and where the artifact being downloaded during a
+	// self-update is the agent's own binary.
+	opts.SetOrderMatters(false)
+
 	// Connection settings
 	opts.SetKeepAlive(a.cfg.KeepAlive)
 	opts.SetConnectTimeout(a.cfg.ConnectTimeout)
