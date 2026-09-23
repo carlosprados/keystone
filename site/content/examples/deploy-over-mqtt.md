@@ -83,6 +83,18 @@ Two things about MQTT that matter more for commands than for telemetry:
   redelivered on every subscribe, so a device that has been offline for weeks
   executes the order the moment it reconnects — including one that was
   withdrawn in the meantime. The agent refuses retained commands outright.
+
+  **Testing this needs the agent stopped.** MQTT only sets the retained flag on
+  delivery to a client that subscribes *afterwards*; publishing to a topic an
+  agent is already subscribed to delivers an ordinary message with the flag
+  clear. So publishing with `-r` while the agent runs does not exercise the
+  guard at all — the command is simply executed, and any refusal you see came
+  from somewhere else. To see it work, stop the agent, publish the retained
+  message, then start it. That is also the situation the guard exists for: a
+  gateway reconnecting to an order that has been sitting on the broker.
+
+  Remember to clear a retained message afterwards (`mosquitto_pub -r -t <topic>
+  -n`), or every reconnect keeps meeting it.
 - **QoS 1 is at-least-once by design.** A duplicate delivery is the protocol
   working correctly, not a broker fault. For a status query that is noise; for
   an apply it is a second deployment. Send a `commandId` and the agent executes
