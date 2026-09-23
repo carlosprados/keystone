@@ -39,6 +39,13 @@ func rejectPlanPath(payload []byte) error {
 // "the device misses orders while it has no coverage" is CleanSession=false,
 // and that is precisely the setting that makes replay possible for ordinary
 // publishes too.
+//
+// Note when testing this: MQTT sets the retained flag only when delivering to a
+// client that subscribes AFTERWARDS. Publishing with retain to a topic this
+// agent is already subscribed to arrives as an ordinary message with the flag
+// clear, so it is executed rather than refused — correctly, since it is a
+// first delivery. The refusal happens on the redelivery at the next subscribe,
+// which is the repeat this guard exists to stop.
 func rejectRetained(msg pahomqtt.Message) error {
 	if msg.Retained() {
 		return fmt.Errorf("refusing a retained command on %s: retained commands are redelivered on every reconnect; publish commands with retain=false", msg.Topic())

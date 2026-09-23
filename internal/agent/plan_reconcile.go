@@ -635,7 +635,13 @@ func (a *Agent) resolveRecipeRef(recipeRef string) (*recipe.Recipe, string, stri
 		name, version := parseRecipeStoreRef(recipeRef)
 		path, serr := a.recipes.GetPath(name, version)
 		if serr != nil {
-			return nil, "", "", err
+			// Both lookups failed, and reporting only the path one sends the
+			// reader to look for a file when the reference was meant for the
+			// store. Naming the accepted form matters too: the separator is
+			// ":" and the widespread convention is "@", so a reference written
+			// as name@version fails with a message that would otherwise say
+			// nothing about why.
+			return nil, "", "", fmt.Errorf("recipe %q is neither a readable file (%v) nor in the recipe store (%v); store references are name:version, e.g. com.example.api:1.0.0", recipeRef, err, serr)
 		}
 		// From the store: trusted via the authenticated API, not re-verified.
 		resolvedPath = path
