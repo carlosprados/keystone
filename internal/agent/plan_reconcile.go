@@ -111,13 +111,12 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 	if err != nil {
 		return err
 	}
-	// "plan" is load-bearing in this line. These are the orders computed from
-	// the dependency graph, not a record of what happened: whether a component
-	// is actually reused is decided later, per component, when the supervisor
-	// finds it alive and healthy. A reconcile pass that changes nothing still
-	// prints a component in start_order and an empty no_touch, which reads as
-	// "restarting it every minute" and is not. What was done is in the
-	// per-component "reusing existing running instance" lines below it.
+	// "plan" is load-bearing in this line. These lists are computed before
+	// anything runs, and one of them can still be wrong afterwards: a component
+	// in no_touch is only reused if the supervisor then finds it alive AND
+	// healthy — otherwise reuse is revoked and it is restarted, which the
+	// per-component lines record ("reuse revoked, starting a fresh instance").
+	// So the lists say what was decided, and the lines below say what happened.
 	log.Printf("[agent] reconcile plan stop_order=%v start_order=%v no_touch=%v", actions.stopOrder, actions.startOrder, sortedKeys(actions.noTouch))
 
 	if dry {

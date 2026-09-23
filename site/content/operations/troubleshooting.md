@@ -98,16 +98,21 @@ remembered, a `SIGKILL` is not.
 
 ## Useful one-liners
 
-**Read those two together, in that order.** A reconcile pass that changes
-nothing still prints the component in `start_order` with an empty `no_touch`,
-because those are the orders computed from the dependency graph before anything
-runs. Whether a component is reused is decided afterwards, per component, when
-the supervisor finds it alive and healthy — and that decision is the `reusing
-existing running instance` line.
+**Read those two together, in that order.** The lists are accurate about what
+was decided: a pass that changes nothing prints empty stop/start orders and the
+component in `no_touch`, and a pass that restarts something names it.
 
-So `reconcile plan start_order=[api]` every minute does **not** mean the
-component is restarted every minute. Check the PID: if it is unchanged, it was
-reused.
+What the lists cannot tell you is whether a planned reuse survived. A component
+in `no_touch` is reused only if the supervisor then finds it alive **and**
+healthy; if not, reuse is revoked and it is restarted — and only the
+per-component line says so:
+
+```
+component=api msg=reusing existing running instance (no restart)
+component=api msg=reuse revoked, starting a fresh instance
+```
+
+The PID settles any doubt: unchanged means it was reused.
 
 ```bash
 # States at a glance
