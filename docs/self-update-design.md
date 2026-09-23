@@ -218,6 +218,15 @@ Cheap now, expensive in the field: version the snapshot format, and have startup
 refuse a snapshot from a newer version, starting clean and saying so rather than
 misreading it. It has to ship *with* the binary swap, not after.
 
+**Implemented.** `state.CurrentSchemaVersion` is stamped by `Save` rather than
+trusted from the caller, and `Load` refuses anything newer with
+`ErrSnapshotFromNewerAgent`, returning an empty snapshot rather than a
+half-read one. Startup says so loudly — a device that comes up with no plan
+because its state could not be read looks exactly like one that was never given
+a plan, and the two need different fixing. Snapshots written before versioning
+carry no field and are still read: the format did not change, it only became
+explicit, so refusing them would wipe every existing device on upgrade.
+
 ### Telemetry
 
 Outbound-only means a successful rollback is silent. Reliable rollback plus total
