@@ -35,6 +35,28 @@ Everything under `keystone/{deviceId}/`:
 The command/response split (rather than MQTT 5 request/response) keeps it
 compatible with 3.1.1 brokers, which is what most industrial gear speaks.
 
+## A slow command does not silence the channel
+
+Each command handler runs in its own goroutine (`SetOrderMatters(false)`).
+That is not a performance tweak — it is what keeps the device reachable.
+
+An apply downloads artifacts, which can take minutes on a bad link. Paho's
+default routes every message through one goroutine and its documentation is
+explicit that handlers must not block; with that default, a long download makes
+the agent stop answering **every** other command, stops the PINGRESP being
+processed, and after `KeepAlive` the client decides the connection is dead and
+reconnects. Measured on a 3m13s download: status queries unanswered, then
+`response publish timeout`, then a reconnect — while HTTP on loopback answered
+normally the whole time. The agent was never down; the only channel that could
+reach it was.
+
+Where MQTT is the only way in, that is the difference between watching an
+update and waiting blind for it.
+
+Concurrent commands are still safe: the agent refuses a second apply while one
+is running (`apply already in progress`) rather than interleaving them, and the
+read-only commands answer throughout.
+
 ## Knowing what build is out there
 
 The periodic state event carries `agentVersion`, and the health response carries

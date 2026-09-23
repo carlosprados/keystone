@@ -26,6 +26,8 @@ Usage of keystone:
     	MQTT broker URL (empty to disable MQTT adapter)
   -mqtt-client-id string
     	MQTT client ID (defaults to keystone-{device-id})
+  -mqtt-command-dedupe-ttl duration
+    	How long a commandId is remembered, so a redelivery of the same command is executed once. Raise it on links where a device can be offline longer than this (default 10m0s)
   -mqtt-device-id string
     	Device ID for MQTT topics (required if MQTT enabled)
   -mqtt-health-interval duration
