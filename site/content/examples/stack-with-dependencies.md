@@ -193,7 +193,7 @@ unsigned artifact.
 ## What the layers do
 
 ```
-[agent] reconcile stop_order=[] start_order=[influxdb api telemetry web] no_touch=[]
+[agent] reconcile plan stop_order=[] start_order=[influxdb api telemetry web] no_touch=[]
 [supervisor] layer=0 components=[influxdb] msg=starting layer
 [supervisor] component=influxdb state=running
 [supervisor] layer=1 components=[api telemetry] msg=starting layer
@@ -244,7 +244,7 @@ keystonectl apply plan.toml
 ```
 
 ```
-[agent] reconcile stop_order=[web api] start_order=[api web] no_touch=[influxdb telemetry]
+[agent] reconcile plan stop_order=[web api] start_order=[api web] no_touch=[influxdb telemetry]
 [agent] component=influxdb msg=reusing existing running instance (no restart)
 [agent] component=telemetry msg=reusing existing running instance (no restart)
 ```

@@ -93,7 +93,7 @@ The agent uploads and parses the plan, resolves the graph, and starts `clock`
 first, then `reporter`. The log tells the story:
 
 ```
-[agent] reconcile stop_order=[] start_order=[clock reporter] no_touch=[]
+[agent] reconcile plan stop_order=[] start_order=[clock reporter] no_touch=[]
 [supervisor] layer=0 components=[clock] msg=starting layer
 [supervisor] component=clock state=running
 [supervisor] layer=1 components=[reporter] msg=starting layer

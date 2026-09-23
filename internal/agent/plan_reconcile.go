@@ -111,7 +111,14 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 	if err != nil {
 		return err
 	}
-	log.Printf("[agent] reconcile stop_order=%v start_order=%v no_touch=%v", actions.stopOrder, actions.startOrder, sortedKeys(actions.noTouch))
+	// "plan" is load-bearing in this line. These are the orders computed from
+	// the dependency graph, not a record of what happened: whether a component
+	// is actually reused is decided later, per component, when the supervisor
+	// finds it alive and healthy. A reconcile pass that changes nothing still
+	// prints a component in start_order and an empty no_touch, which reads as
+	// "restarting it every minute" and is not. What was done is in the
+	// per-component "reusing existing running instance" lines below it.
+	log.Printf("[agent] reconcile plan stop_order=%v start_order=%v no_touch=%v", actions.stopOrder, actions.startOrder, sortedKeys(actions.noTouch))
 
 	if dry {
 		a.mu.Lock()

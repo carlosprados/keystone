@@ -98,14 +98,26 @@ remembered, a `SIGKILL` is not.
 
 ## Useful one-liners
 
+**Read those two together, in that order.** A reconcile pass that changes
+nothing still prints the component in `start_order` with an empty `no_touch`,
+because those are the orders computed from the dependency graph before anything
+runs. Whether a component is reused is decided afterwards, per component, when
+the supervisor finds it alive and healthy — and that decision is the `reusing
+existing running instance` line.
+
+So `reconcile plan start_order=[api]` every minute does **not** mean the
+component is restarted every minute. Check the PID: if it is unchanged, it was
+reused.
+
 ```bash
 # States at a glance
 curl -s localhost:8080/v1/components | jq -r '.[] | "\(.name)\t\(.state)\t\(.pid)\t\(.last_health)"'
 
-# What the last apply decided
-journalctl -u keystone | grep "reconcile stop_order"
+# What the last apply PLANNED — orders from the dependency graph, not a record
+# of what happened
+journalctl -u keystone | grep "reconcile plan"
 
-# Every reuse decision
+# What it actually DID to each component
 journalctl -u keystone | grep -E "reusing existing|reuse revoked"
 
 # Confirm a component's confinement
