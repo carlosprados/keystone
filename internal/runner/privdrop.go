@@ -414,7 +414,7 @@ func dropBoundingSet(caps []uintptr, noNewPrivs bool) (narrowed bool, err error)
 		case err == nil, err == unix.EINVAL: // EINVAL: unknown to this kernel
 			continue
 		case err == unix.EPERM && noNewPrivs:
-			log.Printf("[runner] privdrop: cannot narrow the capability bounding set without CAP_SETPCAP; no_new_privileges=true already prevents gaining capabilities through execve, continuing")
+			log.Printf("[runner] privdrop: could not narrow the capability bounding set (needs CAP_SETPCAP). The declared capability set IS still applied to the process — permitted, effective and inheritable are set below and verified — so the component runs with what the recipe asked for. What is left unnarrowed is the bounding set, which only limits what could be GAINED later, and no_new_privileges=true closes that route. Continuing")
 			return false, nil
 		case err == unix.EPERM:
 			return false, fmt.Errorf("privdrop: cannot narrow the capability bounding set (%s): CAP_SETPCAP is required. Either run the agent as root or with CAP_SETPCAP, or add no_new_privileges = true, which closes the same hole without it", capabilityName(c))

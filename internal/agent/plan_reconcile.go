@@ -111,7 +111,13 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 	if err != nil {
 		return err
 	}
-	log.Printf("[agent] reconcile stop_order=%v start_order=%v no_touch=%v", actions.stopOrder, actions.startOrder, sortedKeys(actions.noTouch))
+	// "plan" is load-bearing in this line. These lists are computed before
+	// anything runs, and one of them can still be wrong afterwards: a component
+	// in no_touch is only reused if the supervisor then finds it alive AND
+	// healthy — otherwise reuse is revoked and it is restarted, which the
+	// per-component lines record ("reuse revoked, starting a fresh instance").
+	// So the lists say what was decided, and the lines below say what happened.
+	log.Printf("[agent] reconcile plan stop_order=%v start_order=%v no_touch=%v", actions.stopOrder, actions.startOrder, sortedKeys(actions.noTouch))
 
 	if dry {
 		a.mu.Lock()

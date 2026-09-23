@@ -98,14 +98,31 @@ remembered, a `SIGKILL` is not.
 
 ## Useful one-liners
 
+**Read those two together, in that order.** The lists are accurate about what
+was decided: a pass that changes nothing prints empty stop/start orders and the
+component in `no_touch`, and a pass that restarts something names it.
+
+What the lists cannot tell you is whether a planned reuse survived. A component
+in `no_touch` is reused only if the supervisor then finds it alive **and**
+healthy; if not, reuse is revoked and it is restarted — and only the
+per-component line says so:
+
+```
+component=api msg=reusing existing running instance (no restart)
+component=api msg=reuse revoked, starting a fresh instance
+```
+
+The PID settles any doubt: unchanged means it was reused.
+
 ```bash
 # States at a glance
 curl -s localhost:8080/v1/components | jq -r '.[] | "\(.name)\t\(.state)\t\(.pid)\t\(.last_health)"'
 
-# What the last apply decided
-journalctl -u keystone | grep "reconcile stop_order"
+# What the last apply PLANNED — orders from the dependency graph, not a record
+# of what happened
+journalctl -u keystone | grep "reconcile plan"
 
-# Every reuse decision
+# What it actually DID to each component
 journalctl -u keystone | grep -E "reusing existing|reuse revoked"
 
 # Confirm a component's confinement

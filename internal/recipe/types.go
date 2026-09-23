@@ -132,6 +132,17 @@ type ContainerResources struct {
 //
 // Everything declared here is enforced or the component refuses to start: a
 // restriction that cannot be applied is an error, never a silent no-op.
+//
+// One narrowing of that rule, stated here because a rule with an undocumented
+// exception is worth less than one with a documented one. Capabilities are
+// applied in two steps: the declared set is written to the process (permitted,
+// effective, inheritable) and verified, and the bounding set is narrowed to
+// match. The first always happens or the component does not start. The second
+// needs CAP_SETPCAP, and when that is missing AND no_new_privileges is declared,
+// the agent logs it and continues — because the bounding set only limits what a
+// process could GAIN through execve, which is exactly what no_new_privileges
+// forbids. Without no_new_privileges the same situation is an error, since then
+// nothing closes that route.
 type SecurityConfig struct {
 	// User to run the process as: "user", "uid", "user:group" or "uid:gid".
 	// Empty means the agent's own user, which is usually root.
