@@ -562,7 +562,7 @@ func (r *ContainerRunner) RunManaged(ctx context.Context, name string, opts Opti
 				}
 				return err
 			case <-ticker.C:
-				if hc.Check == "" {
+				if !hc.Configured() {
 					continue
 				}
 				ok := ProbeHealthContainer(hc, opts, ch)

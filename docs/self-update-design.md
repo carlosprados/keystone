@@ -404,6 +404,14 @@ leaves the unit dead. We need a revert, not a stop.
 - **No systemd, no self-update.** The design leans on PID 1 as the watchdog. On
   a device without it the feature should be refused rather than half-implemented
   — the project's existing rule: a declaration is honoured or refused.
+- **The agent leaves components running only when it knows it is coming
+  back.** A signal goes through the ordinary shutdown, which stops components
+  through their hooks: `systemctl stop` and `systemctl restart` send the same
+  SIGTERM and the agent cannot tell them apart, so leaving processes alive that
+  nothing watches would be the worse mistake. Exiting to replace its own binary
+  is different — there the agent knows, and it leaves them for the next start
+  to adopt. Without that distinction re-adoption exists and never fires on the
+  path that matters, which is what a field test found.
 - **`KillMode=process` is a precondition, not a preference.** systemd's default
   kills every process in the unit's cgroup, so restarting the agent would kill
   the components too and there would be nothing left to adopt — the feature

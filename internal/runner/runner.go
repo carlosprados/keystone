@@ -121,6 +121,21 @@ type HealthConfig struct {
 	FailureThreshold int           // Failures before unhealthy (default: 3)
 }
 
+// Configured reports whether this component declares a health probe at all.
+//
+// It exists because the answer was being spelled out as `Check == ""` in six
+// places, and when the argv form was added only the probing code learned about
+// it — every one of those checks kept asking about Check alone. A component
+// with `exec` and no `check` therefore declared a probe that was never run: the
+// agent reported its health as "unknown" forever and nothing supervised it.
+//
+// Worse than the bug it replaced. Before, a probe that could not run failed and
+// the component was restarted; after, there was no probe at all and everything
+// looked fine.
+func (h HealthConfig) Configured() bool {
+	return h.Check != "" || len(h.Exec) > 0
+}
+
 // RestartPolicy defines when to restart a component.
 type RestartPolicy string
 

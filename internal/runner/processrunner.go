@@ -367,7 +367,7 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 				}
 				return err
 			case <-ticker.C:
-				if hc.Check == "" {
+				if !hc.Configured() {
 					continue
 				}
 				ok := ProbeHealth(hc, opts, nil)

@@ -350,10 +350,12 @@ func main() {
 	// afresh. A process that replaces its own image keeps everything it got
 	// wrong — its open descriptors, its memory, and its belief that the binary
 	// on disk is the one it is running.
+	restarting := false
 	select {
 	case <-ctx.Done():
 		log.Println("[main] shutdown signal received, draining...")
 	case reason := <-a.RestartRequests():
+		restarting = true
 		log.Printf("[main] restart requested: %s", reason)
 		// Let an in-flight response reach whoever asked. Without this pause,
 		// the command that ordered the update is the one whose answer never
@@ -371,9 +373,23 @@ func main() {
 		log.Printf("[main] adapter shutdown error: %v", err)
 	}
 
-	// Close agent
-	if err := a.Close(); err != nil {
-		log.Printf("[main] agent close error: %v", err)
+	// Close the agent, stopping its components — unless it is coming straight
+	// back, in which case they are left running for the next start to adopt.
+	// That is what keeps a self-update from restarting everything the agent
+	// supervises.
+	//
+	// A signal goes through the stopping path on purpose: SIGTERM is what
+	// `systemctl stop` sends as well as `systemctl restart`, and the agent
+	// cannot tell them apart. Leaving components alive on a genuine stop would
+	// strand processes that nothing is watching and nothing will report.
+	closeErr := error(nil)
+	if restarting {
+		closeErr = a.CloseForRestart()
+	} else {
+		closeErr = a.Close()
+	}
+	if closeErr != nil {
+		log.Printf("[main] agent close error: %v", closeErr)
 	}
 
 	log.Println("[main] bye")
