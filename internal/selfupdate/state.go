@@ -113,6 +113,33 @@ func (l Layout) SaveState(st UpdateState) error {
 	return nil
 }
 
+// MarkPending records that a version is installed and about to be tried.
+//
+// Boots is reset here, not incremented: this is the start of a trial, and the
+// count belongs to the gate. Confirmed is left alone — it is what the trial
+// falls back to, and overwriting it with the version being tried would remove
+// the only thing a rollback can return to.
+func (l Layout) MarkPending(version string) error {
+	if err := validVersionName(version); err != nil {
+		return err
+	}
+	st, err := l.LoadState()
+	if err != nil {
+		return err
+	}
+	if st.Confirmed == "" {
+		// First update on a device that has never confirmed anything. Whatever
+		// is running now is, by definition, working — record it so there is
+		// somewhere to go back to.
+		if current, cerr := l.Current(); cerr == nil && current != "" && current != version {
+			st.Confirmed = current
+		}
+	}
+	st.Pending = version
+	st.Boots = 0
+	return l.SaveState(st)
+}
+
 // sanitiseValue keeps a value on one line and out of the parser's way. A
 // newline in a version string or a failure message would otherwise inject a
 // second key, which is how a "reason" field turns into a way to set the

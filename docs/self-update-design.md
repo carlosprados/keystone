@@ -269,6 +269,19 @@ restart also restarts everything it supervises, so "converged" is the startup
 time of the whole plan, not of the binary. Tuning the counter against a binary
 start will revert good updates for being slow.
 
+**Implemented** as `Agent.StageSelfUpdate`. It downloads, checks the digest,
+verifies the signature, installs beside the running version, records what to
+fall back to, and moves the symlink — then stops. Restarting is a separate
+decision, taken by whoever knows when the device can afford it, and carried out
+by exiting rather than re-executing: a process that replaces its own image
+keeps everything it got wrong, including its belief about which binary is on
+disk.
+
+One ordering is worth writing down because the obvious one is wrong. The
+fallback version has to be recorded **before** the symlink moves, or it records
+the version being installed as its own fallback and the trial has nowhere to go
+back to. It is also the safer failure: if recording fails, nothing has moved.
+
 ### Verifying the download
 
 Reuse what the agent already has: a **signed manifest verified against the
