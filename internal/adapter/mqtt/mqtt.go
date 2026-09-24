@@ -24,6 +24,9 @@ type Adapter struct {
 	handler adapter.CommandHandler
 	topics  *Topics
 	deduper *commandDeduper
+	// brokerLocal is true when the broker runs on this same device, which
+	// changes what counts as proof that a control plane can still reach it.
+	brokerLocal bool
 
 	mu     sync.RWMutex
 	client pahomqtt.Client
@@ -110,10 +113,11 @@ func DefaultConfig() Config {
 // New creates a new MQTT adapter.
 func New(cfg Config, handler adapter.CommandHandler) *Adapter {
 	return &Adapter{
-		cfg:     cfg,
-		handler: handler,
-		topics:  NewTopics(cfg.DeviceID),
-		deduper: newCommandDeduper(cfg.CommandDedupeTTL),
+		cfg:         cfg,
+		handler:     handler,
+		topics:      NewTopics(cfg.DeviceID),
+		deduper:     newCommandDeduper(cfg.CommandDedupeTTL),
+		brokerLocal: brokerIsLoopback(cfg.Broker),
 	}
 }
 
@@ -198,6 +202,12 @@ func (a *Adapter) Start(ctx context.Context) error {
 	// Connection handlers
 	opts.SetOnConnectHandler(func(c pahomqtt.Client) {
 		log.Printf("[mqtt] connected to %s as %s", a.cfg.Broker, clientID)
+		if a.brokerLocal {
+			// Said out loud because the configuration looks right and is not,
+			// for this one purpose: a broker on this device cannot witness
+			// that the device is reachable from anywhere else.
+			log.Printf("[mqtt] NOTE the broker runs on this device, so publishing proves nothing about being reachable from outside; a self-update will confirm only once a command ARRIVES over this channel")
+		}
 		// Re-subscribe on reconnect
 		if err := a.setupSubscriptionsWithClient(c); err != nil {
 			log.Printf("[mqtt] failed to setup subscriptions: %v", err)
@@ -316,6 +326,7 @@ func (a *Adapter) setupSubscriptionsWithClient(client pahomqtt.Client) error {
 		a.topics.CmdHealth:     a.handleHealth,
 		a.topics.CmdRecipes:    a.handleRecipes,
 		a.topics.CmdAddRecipe:  a.guardMutating(a.topics.RespAddRecipe, a.handleAddRecipe),
+		a.topics.CmdSelfUpdate: a.guardMutating(a.topics.RespSelfUpdate, a.handleSelfUpdate),
 	}
 
 	for topic, handler := range subs {
@@ -371,6 +382,51 @@ func (a *Adapter) handleApply(client pahomqtt.Client, msg pahomqtt.Message) {
 	}
 
 	a.respond(a.topics.RespApply, req.CorrelationID, NewSuccessResponse(req.CorrelationID, a.handler.GetPlanStatus()))
+}
+
+// handleSelfUpdate replaces the agent's own binary.
+//
+// The response is published BEFORE the restart is requested, and the agent
+// waits a moment before exiting: otherwise the command that ordered the update
+// is the one whose answer never arrives, and the controller cannot tell "it
+// worked and went away" from "it died".
+func (a *Adapter) handleSelfUpdate(client pahomqtt.Client, msg pahomqtt.Message) {
+	var req SelfUpdateRequest
+	if err := json.Unmarshal(msg.Payload(), &req); err != nil {
+		a.respond(a.topics.RespSelfUpdate, "", NewErrorResponse("", fmt.Errorf("invalid request: %w", err)))
+		return
+	}
+
+	updater, ok := a.handler.(selfUpdater)
+	if !ok {
+		a.respond(a.topics.RespSelfUpdate, req.CorrelationID,
+			NewErrorResponse(req.CorrelationID, fmt.Errorf("this agent does not support self-update")))
+		return
+	}
+
+	log.Printf("[mqtt] cmd/self-update version=%s uri=%s", req.Version, req.URI)
+
+	if err := updater.StageSelfUpdate(a.ctx, adapter.SelfUpdateSpec{
+		Version: req.Version,
+		URI:     req.URI,
+		SHA256:  req.SHA256,
+		SigURI:  req.SigURI,
+		CertURI: req.CertURI,
+	}); err != nil {
+		a.respond(a.topics.RespSelfUpdate, req.CorrelationID, NewErrorResponse(req.CorrelationID, err))
+		return
+	}
+
+	restart := req.Restart == nil || *req.Restart
+	a.respond(a.topics.RespSelfUpdate, req.CorrelationID, NewSuccessResponse(req.CorrelationID, &SelfUpdateResponse{
+		Version:    req.Version,
+		Installed:  true,
+		Restarting: restart,
+	}))
+
+	if restart {
+		updater.RequestRestart(fmt.Sprintf("self-update to %s", req.Version))
+	}
 }
 
 func (a *Adapter) handleStop(client pahomqtt.Client, msg pahomqtt.Message) {
@@ -605,10 +661,14 @@ func (a *Adapter) publishState() {
 	// Proof that the way back in still works, which is the other half of
 	// confirming a self-update: a version that supervises correctly but broke
 	// its own reconnect is healthy by its own account and unreachable to the
-	// operator. Declared as a small optional interface so the adapter does not
-	// have to know about self-update at all.
-	if r, ok := a.handler.(interface{ MarkUpdateReported() }); ok {
-		r.MarkUpdateReported()
+	// operator.
+	//
+	// Publishing only counts as proof when the broker is somewhere else. To a
+	// broker on this same device it proves nothing — the device would confirm
+	// with its cable pulled out — so there the proof has to be a command
+	// ARRIVING from outside, which markReachable() is called for instead.
+	if !a.brokerLocal {
+		a.markReachable()
 	}
 }
 

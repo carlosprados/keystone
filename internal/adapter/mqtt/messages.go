@@ -40,6 +40,45 @@ type ApplyRequest struct {
 	Dry bool `json:"dry,omitempty"`
 }
 
+// SelfUpdateRequest is the payload for cmd/self-update: replace the agent's
+// own binary.
+//
+// It is the most dangerous message in this protocol — it installs code that
+// will run as the agent, on a device nobody can reach — so every field that
+// makes it verifiable is required rather than optional.
+type SelfUpdateRequest struct {
+	CorrelationID string `json:"correlationId,omitempty"`
+	CommandID     string `json:"commandId,omitempty"`
+
+	// Version names the new build. It becomes a directory name and the value
+	// reported in telemetry, and it is what a rollback points back at.
+	Version string `json:"version"`
+	// URI is where the binary is fetched from.
+	URI string `json:"uri"`
+	// SHA256 of the binary. Required: this is the one artifact where "could
+	// not check it" must never mean "install it anyway".
+	SHA256 string `json:"sha256"`
+	// SigURI and CertURI locate the detached signature. Empty means
+	// "<uri>.sig" and the device's configured leaf certificate.
+	SigURI  string `json:"sigUri,omitempty"`
+	CertURI string `json:"certUri,omitempty"`
+
+	// Restart asks the agent to exit once the new version is installed, so the
+	// supervisor starts it. Default true: an update that is installed but
+	// never started is a trial that never begins, and the device would report
+	// the old version indefinitely while looking updated to whoever sent this.
+	Restart *bool `json:"restart,omitempty"`
+}
+
+// SelfUpdateResponse reports what was staged.
+type SelfUpdateResponse struct {
+	Version   string `json:"version"`
+	Installed bool   `json:"installed"`
+	// Restarting says whether the agent is about to exit. When true, this is
+	// the last message on this connection until it comes back.
+	Restarting bool `json:"restarting"`
+}
+
 // RestartRequest is the payload for cmd/restart.
 type RestartRequest struct {
 	// CorrelationID is an optional client-provided ID to correlate responses.

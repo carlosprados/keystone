@@ -239,6 +239,15 @@ The new agent clears the counter only when it has, in order:
 1. Converged — the plan applied and its components healthy.
 2. **Reconnected to the broker and published its status.**
 
+**What counts as being heard from.** Publishing to a broker on the *same
+device* proves nothing: the agent would confirm with its network cable pulled
+out, and the guardrail would be certifying itself. This is not hypothetical —
+the lab Pi runs a mosquitto bound to `127.0.0.1` only. So publishing counts as
+proof only when the broker is somewhere else; where it is local, the proof is a
+command **arriving**, which required someone on the other side. A command
+arriving counts either way, because it is the stronger evidence: it is the
+direction a rollback order would have to travel.
+
 The second condition is not optional, and it is the one that a design written
 for a normal network would omit. A new version can start correctly, supervise
 correctly, and have broken its MQTT reconnect — a library bump, a stricter TLS
