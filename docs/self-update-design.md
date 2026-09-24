@@ -395,11 +395,19 @@ leaves the unit dead. We need a revert, not a stop.
 - **No systemd, no self-update.** The design leans on PID 1 as the watchdog. On
   a device without it the feature should be refused rather than half-implemented
   — the project's existing rule: a declaration is honoured or refused.
-- **Component re-adoption is separate work.** Until it exists, updating the
-  agent restarts everything it supervises. That is acceptable for a poller with
-  backfill and unacceptable for a component holding unrecoverable in-memory
-  state, and it must be documented as known behaviour of this feature rather
-  than discovered.
+- **Component re-adoption** is implemented, with limits worth knowing. A
+  process that outlived the previous agent is supervised again instead of being
+  restarted, but only when it is alive **and** reparented to init — the two
+  facts that together identify a process this agent started and lost — and only
+  when the reconcile classified that component as unchanged. A component whose
+  recipe moved is restarted, because adopting the survivor there would leave
+  the old build running while the agent reports the new one.
+
+  Two things an adopted process does not get back, neither recoverable: its
+  **log stream**, whose pipes belonged to the agent that died, and its **exit
+  status**, which the kernel hands to init rather than to us — so an exit is
+  noticed by polling and reported as "it exited", never "it exited with 3". Its
+  health probe still reports on it, which is what matters for supervision.
 - **A compromised control plane can push a signed-but-hostile version** if it
   also holds the signing key. Self-update narrows the blast radius of a lost
   device and widens the blast radius of a lost key. That trade is the reason the
