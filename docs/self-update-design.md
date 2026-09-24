@@ -212,10 +212,21 @@ arbitrary choice until the failure it prevents is named:
   test writes `$(touch canary)` into the file and fails if the canary appears.
 - **`KEY=value`, not JSON.** The gate cannot depend on `jq` being installed on a
   gateway, and this is readable with `sed`.
-- **`StartLimitBurst` is set wide on purpose**, larger than the gate's own
-  counter. systemd's limit stops restarting and leaves the unit dead; the
-  gate's reverts. On a device nobody can reach, "stopped trying" is the outcome
-  being avoided, so the gate must always get there first.
+- **`StartLimitBurst` and `StartLimitIntervalSec` go in `[Unit]`, not
+  `[Service]`**, and they are set wide on purpose. systemd's limit stops
+  restarting and leaves the unit dead; the gate's reverts. On a device nobody
+  can reach, "stopped trying" is the outcome being avoided, so the gate must
+  always get there first — it reverts after three starts, about 12 seconds at
+  `RestartSec=3`, and 20 starts in 300s leaves it an order of magnitude of room.
+
+  Placed in `[Service]`, systemd accepts `StartLimitBurst` for backwards
+  compatibility and **silently discards** `StartLimitIntervalSec`, falling back
+  to the system default of 10s. It says so only in the journal of the machine it
+  was deployed to, which is where this was found. The effective window was more
+  permissive rather than less, so nothing failed — but the number had been
+  reasoned against a window that did not exist, and it would have bitten at a
+  small `RestartSec`, where 20 starts do fit in 10s and systemd gives up first.
+  CI now fails any unit file carrying a key systemd would ignore.
 
 The state file survives a power cut mid-write (written atomically) and a garbage
 counter (re-counted from zero rather than refusing to work) — both tested,

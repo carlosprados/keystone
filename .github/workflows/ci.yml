@@ -44,6 +44,22 @@ jobs:
         # response type changed without regenerating it, the published API
         # reference would describe something the binary no longer does.
         run: go run ./cmd/openapi-gen -check -o site/content/reference/api/openapi.yaml
+      # A key in the wrong section of a unit file is accepted, ignored, and
+      # only mentioned in the journal of the machine it was deployed to. One of
+      # those cost a self-update guardrail its restart window, and was found on
+      # a device rather than here.
+      - name: systemd units are valid
+        run: |
+          set -e
+          for u in configs/systemd/*.service; do
+            echo "checking $u"
+            out=$(systemd-analyze verify "$u" 2>&1 || true)
+            echo "$out"
+            if echo "$out" | grep -qi "unknown key"; then
+              echo "::error file=$u::unit has a key systemd will silently ignore"
+              exit 1
+            fi
+          done
       - name: CLI reference is in sync with the code
         # The page is generated from the agent's flag set and keystonectl's
         # command tree. A new command or flag that never reached the docs would
