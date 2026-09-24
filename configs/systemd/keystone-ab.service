@@ -3,6 +3,25 @@ Description=Keystone Agent (A/B install, self-updating)
 After=network-online.target
 Wants=network-online.target
 
+# These belong in [Unit]. Put in [Service], systemd accepts StartLimitBurst for
+# backwards compatibility and silently DISCARDS StartLimitIntervalSec —
+# "Unknown key ... ignoring" — leaving the system default of 10s. Found on a
+# real device, because the warning only exists in its journal.
+#
+# The numbers matter and have to be reasoned against the real window. The gate
+# reverts after KEYSTONE_UPDATE_MAX_BOOTS starts, which with RestartSec=3 takes
+# about 12 seconds. systemd's limit must stay far above that, because reaching
+# it means systemd stops restarting and leaves the unit dead — on a device
+# nobody can reach, "stopped trying" is the outcome the whole design avoids.
+# 20 starts in 300s leaves the gate an order of magnitude of room.
+#
+# With the discarded setting the effective window was 10s, which is MORE
+# permissive rather than less: at RestartSec=3 only three or four starts fit, so
+# a burst of 20 was never reached. It would have bitten with a small or zero
+# RestartSec, where 20 starts do fit in 10s and systemd would give up first.
+StartLimitBurst=20
+StartLimitIntervalSec=300
+
 [Service]
 Type=simple
 
@@ -44,13 +63,6 @@ ExecStart=/opt/keystone/current/keystone --http 127.0.0.1:8080
 # leave the device with no agent.
 Restart=always
 RestartSec=3
-
-# StartLimit is deliberately wide. The gate's own counter must be what reverts a
-# bad version — systemd's limit stops restarting and leaves the unit dead, which
-# on a device nobody can reach is the outcome being avoided. Keep this larger
-# than KEYSTONE_UPDATE_MAX_BOOTS so the gate always gets there first.
-StartLimitBurst=20
-StartLimitIntervalSec=300
 
 User=keystone
 Group=keystone
