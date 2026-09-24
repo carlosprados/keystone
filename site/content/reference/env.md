@@ -111,6 +111,7 @@ it under systemd:
 | `KEYSTONE_MQTT_TLS_VERIFY` | `--mqtt-tls-verify` |
 | `KEYSTONE_MQTT_QOS` | `--mqtt-qos` |
 | `KEYSTONE_MQTT_COMMAND_DEDUPE_TTL` | `--mqtt-command-dedupe-ttl` |
+| `KEYSTONE_SELF_UPDATE_ROOT` | `--self-update-root` |
 | `KEYSTONE_MQTT_STATE_INTERVAL` | `--mqtt-state-interval` |
 | `KEYSTONE_MQTT_HEALTH_INTERVAL` | `--mqtt-health-interval` |
 
