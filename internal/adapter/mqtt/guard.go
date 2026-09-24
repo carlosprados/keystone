@@ -1,14 +1,69 @@
 package mqtt
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/carlosprados/keystone/internal/adapter"
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 )
+
+// brokerIsLoopback reports whether the configured broker lives on this device.
+//
+// It matters for exactly one thing: a self-update confirms itself partly on
+// "a control plane has heard from me", and publishing to a broker running on
+// the same box proves nothing about that. The device would confirm with its
+// network cable pulled out — the guardrail would be certifying itself.
+//
+// A loopback broker is not wrong: bridging a local mosquitto to a remote one is
+// an ordinary IoT arrangement. But then the proof of reachability is a message
+// arriving FROM outside, not one leaving.
+func brokerIsLoopback(broker string) bool {
+	s := strings.TrimSpace(broker)
+	if s == "" {
+		return false
+	}
+	if !strings.Contains(s, "//") {
+		s = "tcp://" + s
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+
+	host := u.Hostname()
+	switch strings.ToLower(host) {
+	case "localhost", "ip6-localhost", "ip6-loopback":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// markReachable tells the agent a control plane can still reach this device,
+// which is half of what a pending self-update has to prove.
+func (a *Adapter) markReachable() {
+	if r, ok := a.handler.(interface{ MarkUpdateReported() }); ok {
+		r.MarkUpdateReported()
+	}
+}
+
+// selfUpdater is the part of the agent this adapter needs for cmd/self-update.
+// Declared here rather than added to adapter.CommandHandler so that an install
+// which never updates itself is not forced to grow the methods.
+type selfUpdater interface {
+	StageSelfUpdate(ctx context.Context, spec adapter.SelfUpdateSpec) error
+	RequestRestart(reason string)
+}
 
 // updateStatus asks the handler for its self-update state, when it has one.
 // Declared as a small optional interface so the adapter does not have to know
@@ -139,6 +194,12 @@ func (a *Adapter) guardMutating(respTopic string, h pahomqtt.MessageHandler) pah
 			a.respond(respTopic, env.CorrelationID, NewErrorResponse(env.CorrelationID, err))
 			return
 		}
+
+		// A command that arrived is the strongest evidence there is that the
+		// way in still works — stronger than anything this device can publish,
+		// because it required someone on the other side. It counts even when
+		// the broker is local: whatever bridged it in came from outside.
+		a.markReachable()
 
 		if !a.deduper.firstSight(env.CommandID) {
 			err := fmt.Errorf("command %q was already executed; ignoring a duplicate delivery", env.CommandID)

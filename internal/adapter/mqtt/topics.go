@@ -6,16 +6,17 @@ import "fmt"
 // All topics are prefixed with "keystone/{deviceId}/" for multi-tenancy.
 const (
 	// Command topics (agent subscribes to these)
-	TopicCmdApply      = "keystone/%s/cmd/apply"      // Apply a deployment plan
-	TopicCmdStop       = "keystone/%s/cmd/stop"       // Stop all components
-	TopicCmdStatus     = "keystone/%s/cmd/status"     // Get plan status
-	TopicCmdComponents = "keystone/%s/cmd/components" // Get components list
-	TopicCmdGraph      = "keystone/%s/cmd/graph"      // Get dependency graph
-	TopicCmdRestart    = "keystone/%s/cmd/restart"    // Restart a component
-	TopicCmdStopComp   = "keystone/%s/cmd/stop-comp"  // Stop a component
-	TopicCmdHealth     = "keystone/%s/cmd/health"     // Get health status
-	TopicCmdRecipes    = "keystone/%s/cmd/recipes"    // List recipes
-	TopicCmdAddRecipe  = "keystone/%s/cmd/add-recipe" // Add a recipe
+	TopicCmdApply      = "keystone/%s/cmd/apply"       // Apply a deployment plan
+	TopicCmdStop       = "keystone/%s/cmd/stop"        // Stop all components
+	TopicCmdStatus     = "keystone/%s/cmd/status"      // Get plan status
+	TopicCmdComponents = "keystone/%s/cmd/components"  // Get components list
+	TopicCmdGraph      = "keystone/%s/cmd/graph"       // Get dependency graph
+	TopicCmdRestart    = "keystone/%s/cmd/restart"     // Restart a component
+	TopicCmdStopComp   = "keystone/%s/cmd/stop-comp"   // Stop a component
+	TopicCmdHealth     = "keystone/%s/cmd/health"      // Get health status
+	TopicCmdRecipes    = "keystone/%s/cmd/recipes"     // List recipes
+	TopicCmdAddRecipe  = "keystone/%s/cmd/add-recipe"  // Add a recipe
+	TopicCmdSelfUpdate = "keystone/%s/cmd/self-update" // Replace the agent's own binary
 
 	// Response topics (agent publishes responses here)
 	// The response topic is derived from the command: cmd/X -> resp/X
@@ -29,6 +30,7 @@ const (
 	TopicRespHealth     = "keystone/%s/resp/health"
 	TopicRespRecipes    = "keystone/%s/resp/recipes"
 	TopicRespAddRecipe  = "keystone/%s/resp/add-recipe"
+	TopicRespSelfUpdate = "keystone/%s/resp/self-update"
 
 	// Event topics (agent publishes these)
 	TopicEventState  = "keystone/%s/events/state"  // State changes
@@ -53,6 +55,7 @@ type Topics struct {
 	CmdHealth     string
 	CmdRecipes    string
 	CmdAddRecipe  string
+	CmdSelfUpdate string
 	CmdWildcard   string
 
 	// Responses (agent publishes to these)
@@ -66,6 +69,7 @@ type Topics struct {
 	RespHealth     string
 	RespRecipes    string
 	RespAddRecipe  string
+	RespSelfUpdate string
 
 	// Events (agent publishes to these)
 	EventState  string
@@ -87,6 +91,7 @@ func NewTopics(deviceID string) *Topics {
 		CmdHealth:     fmt.Sprintf(TopicCmdHealth, deviceID),
 		CmdRecipes:    fmt.Sprintf(TopicCmdRecipes, deviceID),
 		CmdAddRecipe:  fmt.Sprintf(TopicCmdAddRecipe, deviceID),
+		CmdSelfUpdate: fmt.Sprintf(TopicCmdSelfUpdate, deviceID),
 		CmdWildcard:   fmt.Sprintf(TopicCmdWildcard, deviceID),
 
 		RespApply:      fmt.Sprintf(TopicRespApply, deviceID),
@@ -99,6 +104,7 @@ func NewTopics(deviceID string) *Topics {
 		RespHealth:     fmt.Sprintf(TopicRespHealth, deviceID),
 		RespRecipes:    fmt.Sprintf(TopicRespRecipes, deviceID),
 		RespAddRecipe:  fmt.Sprintf(TopicRespAddRecipe, deviceID),
+		RespSelfUpdate: fmt.Sprintf(TopicRespSelfUpdate, deviceID),
 
 		EventState:  fmt.Sprintf(TopicEventState, deviceID),
 		EventHealth: fmt.Sprintf(TopicEventHealth, deviceID),
@@ -133,6 +139,8 @@ func (t *Topics) ResponseTopic(cmdTopic string) string {
 		return t.RespRecipes
 	case t.CmdAddRecipe:
 		return t.RespAddRecipe
+	case t.CmdSelfUpdate:
+		return t.RespSelfUpdate
 	default:
 		return ""
 	}

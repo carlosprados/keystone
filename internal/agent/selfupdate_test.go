@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/carlosprados/keystone/internal/adapter"
 	"github.com/carlosprados/keystone/internal/selfupdate"
 )
 
@@ -57,7 +58,7 @@ func TestStageSelfUpdateInstallsBeside(t *testing.T) {
 	url, sum := binaryServer(t)
 	a := selfUpdateAgent(t, root)
 
-	if err := a.StageSelfUpdate(context.Background(), SelfUpdateSpec{
+	if err := a.StageSelfUpdate(context.Background(), adapter.SelfUpdateSpec{
 		Version: "v2", URI: url, SHA256: sum,
 	}); err != nil {
 		t.Fatalf("stage: %v", err)
@@ -95,7 +96,7 @@ func TestStageSelfUpdateRejectsABadDigest(t *testing.T) {
 	url, _ := binaryServer(t)
 	a := selfUpdateAgent(t, root)
 
-	err := a.StageSelfUpdate(context.Background(), SelfUpdateSpec{
+	err := a.StageSelfUpdate(context.Background(), adapter.SelfUpdateSpec{
 		Version: "v2", URI: url,
 		SHA256: strings.Repeat("0", 64),
 	})
@@ -118,7 +119,7 @@ func TestStageSelfUpdateRejectsABadDigest(t *testing.T) {
 func TestStageSelfUpdateRefusesTheRunningVersion(t *testing.T) {
 	a := selfUpdateAgent(t, t.TempDir())
 
-	err := a.StageSelfUpdate(context.Background(), SelfUpdateSpec{
+	err := a.StageSelfUpdate(context.Background(), adapter.SelfUpdateSpec{
 		Version: "0.1.0-dev", URI: "http://example.invalid/x", SHA256: strings.Repeat("a", 64),
 	})
 	if err == nil || !strings.Contains(err.Error(), "already running") {
@@ -131,7 +132,7 @@ func TestStageSelfUpdateRefusesTheRunningVersion(t *testing.T) {
 func TestStageSelfUpdateDisabled(t *testing.T) {
 	a := New(Options{InsecureSkipVerify: true})
 
-	err := a.StageSelfUpdate(context.Background(), SelfUpdateSpec{Version: "v2", URI: "http://x", SHA256: "y"})
+	err := a.StageSelfUpdate(context.Background(), adapter.SelfUpdateSpec{Version: "v2", URI: "http://x", SHA256: "y"})
 	if err == nil || !strings.Contains(err.Error(), "not enabled") {
 		t.Fatalf("expected a clear refusal, got %v", err)
 	}

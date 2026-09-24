@@ -151,6 +151,27 @@ type RestartDryResult struct {
 	StartOrder []string `json:"startOrder"`
 }
 
+// SelfUpdateSpec is an instruction to replace the agent's own binary.
+//
+// It lives here rather than in the agent because adapters have to speak it and
+// must not import the agent. It is deliberately not part of CommandHandler: an
+// install that never updates itself should not be made to implement it.
+type SelfUpdateSpec struct {
+	// Version names the new build. It becomes a directory name, the value
+	// reported in telemetry, and what a rollback points back at.
+	Version string
+	// URI is where the binary is fetched from.
+	URI string
+	// SHA256 is mandatory unless verification was explicitly disabled. An
+	// agent binary is the one artifact where "could not check it" must never
+	// mean "install it anyway".
+	SHA256 string
+	// SigURI and CertURI locate the detached signature. Empty means
+	// "<URI>.sig" and the device's configured leaf certificate.
+	SigURI  string
+	CertURI string
+}
+
 // HealthStatus represents the agent health check response.
 type HealthStatus struct {
 	Status  string `json:"status"`

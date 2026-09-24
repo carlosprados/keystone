@@ -8,29 +8,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/carlosprados/keystone/internal/adapter"
 	"github.com/carlosprados/keystone/internal/artifact"
 	"github.com/carlosprados/keystone/internal/security"
 	"github.com/carlosprados/keystone/internal/selfupdate"
 	"github.com/carlosprados/keystone/internal/version"
 )
-
-// SelfUpdateSpec is an instruction to replace the agent's own binary.
-type SelfUpdateSpec struct {
-	// Version names the new build. It becomes a directory name, so it is what
-	// an operator will see in logs and telemetry — and what a rollback points
-	// back at.
-	Version string
-	// URI is where the binary is fetched from.
-	URI string
-	// SHA256 is mandatory. An agent binary is the one artifact where "we could
-	// not check it" must never mean "install it anyway".
-	SHA256 string
-	// SigURI and CertURI locate the detached signature. Empty means
-	// "<URI>.sig" and the configured leaf certificate, matching how artifacts
-	// are signed elsewhere.
-	SigURI  string
-	CertURI string
-}
 
 // StageSelfUpdate downloads, verifies and installs a new agent binary beside
 // the running one, and marks it pending so the pre-start gate will count its
@@ -47,7 +30,7 @@ type SelfUpdateSpec struct {
 // which turned a mistyped URL into three minutes of downtime in the field; an
 // update that did the same with the agent's own binary would make the outage
 // the full download time, over whatever link the device has.
-func (a *Agent) StageSelfUpdate(ctx context.Context, spec SelfUpdateSpec) error {
+func (a *Agent) StageSelfUpdate(ctx context.Context, spec adapter.SelfUpdateSpec) error {
 	if a.selfUpdateRoot == "" {
 		return fmt.Errorf("self-update is not enabled on this agent (--self-update-root is unset)")
 	}
@@ -133,7 +116,7 @@ func (a *Agent) StageSelfUpdate(ctx context.Context, spec SelfUpdateSpec) error 
 
 // verifySelfUpdateSignature applies the same rule as every other artifact: a
 // signature is required unless verification was explicitly disabled.
-func (a *Agent) verifySelfUpdateSignature(ctx context.Context, stagingDir, binaryPath string, spec SelfUpdateSpec) error {
+func (a *Agent) verifySelfUpdateSignature(ctx context.Context, stagingDir, binaryPath string, spec adapter.SelfUpdateSpec) error {
 	if a.insecureSkipVerify {
 		log.Printf("[selfupdate] WARNING installing %s WITHOUT signature verification (--insecure-skip-verify)", spec.Version)
 		return nil

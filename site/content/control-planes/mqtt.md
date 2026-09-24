@@ -35,6 +35,40 @@ Everything under `keystone/{deviceId}/`:
 The command/response split (rather than MQTT 5 request/response) keeps it
 compatible with 3.1.1 brokers, which is what most industrial gear speaks.
 
+## Replacing the agent itself
+
+`cmd/self-update` installs a new agent binary beside the running one and, by
+default, exits so the supervisor starts it:
+
+```json
+{
+  "commandId": "upd-2026-09-24-01",
+  "version": "v0.12.0",
+  "uri": "https://artifacts.example.net/keystone-v0.12.0-arm64",
+  "sha256": "…",
+  "restart": true
+}
+```
+
+`sha256` is required. Nothing is stopped while the binary downloads — the new
+version is installed into its own directory and only the final restart
+interrupts anything — and the response is published **before** the agent exits,
+so the command that ordered the update is not the one whose answer disappears.
+
+`restart: false` installs without restarting, leaving the timing to an operator
+who knows when the device can afford it. The update does not take effect until
+something restarts the agent.
+
+If the new version fails to start, or starts and cannot prove itself, the
+pre-start gate rolls it back without anyone asking. Proving itself means two
+things: the plan converged, **and** a control plane has heard from the device —
+see [self-update]({{% relref "/concepts/plans" %}}) for why starting is not
+enough on its own.
+
+**Requires `--self-update-root`.** An agent without it refuses the command
+rather than half-answering, which is what every install upgraded from outside
+should do.
+
 ## A slow command does not silence the channel
 
 Each command handler runs in its own goroutine (`SetOrderMatters(false)`).
