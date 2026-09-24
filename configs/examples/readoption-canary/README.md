@@ -16,6 +16,51 @@ it to report healthy after the restart.
 
 Removing it is deleting this directory. It writes nothing elsewhere.
 
+## Before anything: the recipe has to be signed
+
+Keystone refuses a recipe loaded from a file unless it carries a valid detached
+signature. That is not a detail to work around — it is the reason the recipe
+cannot quietly become something else between writing it and running it.
+
+The obvious shortcut, `--insecure-skip-verify`, is a flag on the **agent**, not
+on `keystonectl`. It disables integrity checking for everything that agent ever
+loads, not just this canary, and it is exactly the kind of "temporary" that
+stays. On a device running anything real, do not.
+
+Sign it instead:
+
+```bash
+scripts/dev-sign.sh configs/examples/readoption-canary/es.keystone.readopt-canary.recipe.toml
+
+# check it the way the agent will, before trusting the device to
+keystonectl verify   --trust-bundle configs/trust/ca.pem   --cert configs/trust/leaf.pem   configs/examples/readoption-canary/es.keystone.readopt-canary.recipe.toml
+```
+
+The agent needs the trust material, usually through its environment file:
+
+```
+KEYSTONE_TRUST_BUNDLE=/etc/keystone/ca.pem
+KEYSTONE_LEAF_CERT=/etc/keystone/leaf.pem
+```
+
+The keys `dev-sign.sh` produces are throwaway and not secret. A CA installed for
+an experiment should come back out when the experiment ends: whatever it signs,
+that device will accept.
+
+## Paths in the plan
+
+`plan.toml` here points at the recipe by a path relative to the repository root,
+which works when you run from a checkout and nowhere else. On a device, give the
+component its own directory and use absolute paths:
+
+```toml
+[[components]]
+name = "readopt-canary"
+recipe = "/opt/keystone/canary/es.keystone.readopt-canary.recipe.toml"
+```
+
+The signature (`<recipe>.sig`) has to travel with it.
+
 ## The check
 
 **Read the PID the same way before and after.** "It kept its PID" is exactly the
