@@ -1,0 +1,36 @@
+# A component whose only job is to be still running afterwards.
+#
+# Used to check that restarting the agent does NOT restart what it supervises.
+# It holds no state, writes nothing outside its own log line, and can be removed
+# by deleting this file and its plan.
+
+[metadata]
+name = "es.keystone.readopt-canary"
+version = "1.0.0"
+description = "Does nothing, durably. Proves component re-adoption across an agent restart"
+publisher = "keystone"
+type = "process"
+
+[lifecycle.run]
+type = "process"
+restart_policy = "always"
+
+[lifecycle.run.exec]
+# A shell loop rather than `sleep infinity`: it prints, so the journal shows
+# whether the process is the same one across the agent restart, independently
+# of what the agent reports about it.
+command = "/bin/sh"
+args = [
+  "-c",
+  "echo \"readopt-canary started pid=$$ at $(date -Is)\"; while true; do sleep 60; done",
+]
+
+# A health probe on purpose. Re-adoption reattaches supervision, and a component
+# with no probe would look identical whether that worked or not: its health
+# would read "unknown" either way. With one, the agent has to actually be
+# watching for this to report healthy again after the restart.
+[lifecycle.run.health]
+exec = ["/bin/true"]
+interval = "10s"
+timeout = "3s"
+failure_threshold = 3

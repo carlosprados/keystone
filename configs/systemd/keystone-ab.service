@@ -64,6 +64,21 @@ ExecStart=/opt/keystone/current/keystone --http 127.0.0.1:8080
 Restart=always
 RestartSec=3
 
+# Kill the agent, not everything it supervises.
+#
+# systemd's default, control-group, kills every process in the unit's cgroup —
+# which for this agent means all its components. With that default, restarting
+# the agent restarts the whole device, and component re-adoption can never
+# happen: there is nothing left alive to adopt. The feature would appear to be
+# broken while doing exactly what it was asked.
+#
+# With process, only the agent is signalled. Components keep running and the
+# agent that comes back takes them over. On a deliberate stop the agent's own
+# shutdown path stops them in dependency order; if it is killed outright, they
+# survive and the next start re-adopts them, which is the behaviour that makes
+# updating the agent free of an outage.
+KillMode=process
+
 User=keystone
 Group=keystone
 
