@@ -1,0 +1,6 @@
+# Apply with:  keystonectl apply configs/examples/readoption-canary/plan.toml
+# Remove with: keystonectl stop   (nothing else to clean up)
+
+[[components]]
+name = "readopt-canary"
+recipe = "configs/examples/readoption-canary/es.keystone.readopt-canary.recipe.toml"

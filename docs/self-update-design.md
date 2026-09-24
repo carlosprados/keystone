@@ -404,6 +404,12 @@ leaves the unit dead. We need a revert, not a stop.
 - **No systemd, no self-update.** The design leans on PID 1 as the watchdog. On
   a device without it the feature should be refused rather than half-implemented
   — the project's existing rule: a declaration is honoured or refused.
+- **`KillMode=process` is a precondition, not a preference.** systemd's default
+  kills every process in the unit's cgroup, so restarting the agent would kill
+  the components too and there would be nothing left to adopt — the feature
+  would look broken while systemd did exactly what it was asked. With
+  `process`, only the agent is signalled; a deliberate stop still shuts
+  components down through the agent's own path, in dependency order.
 - **Component re-adoption** is implemented, with limits worth knowing. A
   process that outlived the previous agent is supervised again instead of being
   restarted, but only when it is alive **and** reparented to init — the two
