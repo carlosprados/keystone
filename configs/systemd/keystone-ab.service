@@ -6,7 +6,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 
-EnvironmentFile=/etc/keystone/keystone.env
+# The leading "-" makes it optional. Without it, a missing file fails the unit
+# BEFORE ExecStartPre runs — so the gate would never execute, and a device with
+# a pending update would never be rolled back because of a missing config file.
+EnvironmentFile=-/etc/keystone/keystone.env
 
 # The pre-start gate decides whether a pending version has had enough chances,
 # and rolls back when it has not. It runs before every start, including the
@@ -15,7 +18,22 @@ EnvironmentFile=/etc/keystone/keystone.env
 #
 # It is deliberately NOT under /opt/keystone/current: it must not be replaced by
 # the thing it supervises.
-ExecStartPre=/usr/local/lib/keystone/keystone-update-gate.sh
+#
+# The leading "+" runs it with full privileges, ignoring User= below. That is
+# the whole privilege split: /opt/keystone belongs to root, so the agent can
+# stage and propose a version but cannot install one, and only this script —
+# which the agent never replaces — moves the symlink. Without the "+" the gate
+# would run as the unprivileged agent user and fail to roll back, precisely
+# when rolling back is the only thing that matters.
+ExecStartPre=+/usr/local/lib/keystone/keystone-update-gate.sh
+
+# The agent writes its state under "runtime/", relative to the working
+# directory. Without this line systemd starts it in "/", which ProtectSystem=
+# strict makes read-only, and the agent cannot even create its own state
+# directory. This directory must exist before the unit starts, because it is
+# also named in ReadWritePaths below and systemd refuses to build the namespace
+# for a path that is not there.
+WorkingDirectory=/var/lib/keystone
 
 # Reached through the symlink, resolved afresh at every start. Switching
 # versions is a rename of that link.

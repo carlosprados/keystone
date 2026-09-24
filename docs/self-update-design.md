@@ -196,6 +196,13 @@ limit is reached, so the two numbers have to be set together.
 Four decisions in there are worth stating, because each one looks like an
 arbitrary choice until the failure it prevents is named:
 
+- **The gate runs with `ExecStartPre=+`.** The `+` gives it full privileges,
+  ignoring the unit's `User=`. That is the privilege split in one character:
+  `/opt/keystone` belongs to root, so the agent can stage and propose a version
+  but never install one, and only the gate — which the agent cannot replace —
+  moves the symlink. Without it the gate runs as the unprivileged agent user
+  and cannot roll back, exactly when rolling back is the only thing that
+  matters.
 - **The gate is a POSIX shell script, not the agent and not a Go helper.** The
   failure it exists for is a binary that does not execute. Anything that has to
   run the new binary to decide whether the new binary works cannot help.
