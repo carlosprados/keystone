@@ -216,7 +216,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("[main] %v", err)
 	}
-	a := agent.New(agent.Options{HTTPAddr: *httpAddr, InsecureSkipVerify: skipVerify, ClockPolicy: policy})
+	a := agent.New(agent.Options{HTTPAddr: *httpAddr, InsecureSkipVerify: skipVerify, ClockPolicy: policy, SelfUpdateRoot: *selfUpdateRoot})
 
 	// Create adapter registry
 	registry := adapter.NewRegistry()
@@ -343,9 +343,24 @@ func main() {
 		}()
 	}
 
-	// Block until shutdown signal
-	<-ctx.Done()
-	log.Println("[main] shutdown signal received, draining...")
+	// Block until a shutdown signal or a restart request.
+	//
+	// A staged self-update ends here: the agent does not re-execute itself, it
+	// exits and lets the supervisor start it again from the symlink, resolved
+	// afresh. A process that replaces its own image keeps everything it got
+	// wrong — its open descriptors, its memory, and its belief that the binary
+	// on disk is the one it is running.
+	select {
+	case <-ctx.Done():
+		log.Println("[main] shutdown signal received, draining...")
+	case reason := <-a.RestartRequests():
+		log.Printf("[main] restart requested: %s", reason)
+		// Let an in-flight response reach whoever asked. Without this pause,
+		// the command that ordered the update is the one whose answer never
+		// arrives.
+		time.Sleep(agent.RestartGrace())
+		log.Println("[main] draining for restart...")
+	}
 
 	// Graceful shutdown with timeout
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -44,6 +44,11 @@ type Options struct {
 	// ClockPolicy decides what happens when the system clock is behind the
 	// agent's own evidence of the current time. Empty means high-water.
 	ClockPolicy clock.Policy
+	// SelfUpdateRoot is the A/B install directory. Empty disables self-update
+	// entirely: the agent then neither stages new versions nor confirms
+	// itself, which is what every deployment that is upgraded from outside
+	// wants.
+	SelfUpdateRoot string
 }
 
 // Agent is the top-level runtime handle for Keystone.
@@ -105,6 +110,12 @@ type Agent struct {
 	trustPool          *x509.CertPool
 	trustPath          string
 	insecureSkipVerify bool
+	// selfUpdateRoot is empty unless this install replaces its own binary.
+	selfUpdateRoot string
+	// restartRequests carries a reason from whatever decided the process
+	// should be restarted to main, which owns process lifetime. Buffered by
+	// one: a second request while one is queued changes nothing.
+	restartRequests chan string
 	// clock decides what time certificate validity is judged against. A gateway
 	// with no RTC boots at 1970 and would otherwise reject every valid
 	// certificate as not yet valid.
@@ -228,6 +239,8 @@ func New(opts Options) *Agent {
 			}()
 		}
 	}
+	a.selfUpdateRoot = opts.SelfUpdateRoot
+	a.restartRequests = make(chan string, 1)
 	a.insecureSkipVerify = opts.InsecureSkipVerify
 	if a.insecureSkipVerify {
 		log.Printf("[agent] WARNING: artifact integrity verification is DISABLED (--insecure-skip-verify); downloaded artifacts are NOT authenticated. Do not use in production.")
