@@ -63,6 +63,12 @@ type Options struct {
 	// no_new_privileges, capability allow-list). Enforced by ProcessRunner; a
 	// restriction that cannot be applied prevents the process from starting.
 	Security Security
+	// AdoptPID asks the runner to take over an already-running process instead
+	// of starting a new one, for the FIRST attempt only. It exists so that
+	// restarting the agent does not restart everything it supervises. If the
+	// process is gone by the time the runner looks, it starts one normally —
+	// adoption is an optimisation, never a precondition.
+	AdoptPID int
 
 	// Container-specific fields
 	Image          string            // Container image (e.g., "docker.io/library/nginx:latest")

@@ -261,8 +261,26 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 
 	retries := 0
 	for {
-		// Start
-		handle, err := r.Start(ctx, opts)
+		// Start, or take over one that is already running.
+		//
+		// Only ever on the first attempt: once this loop restarts a component,
+		// the process it would have adopted is gone by definition, and trying
+		// again would adopt a PID that may since have been reused by something
+		// else entirely.
+		var handle Handle
+		var err error
+		if opts.AdoptPID > 0 {
+			adopted, aerr := r.Adopt(opts.AdoptPID, name)
+			opts.AdoptPID = 0
+			if aerr == nil {
+				handle = adopted
+			} else {
+				log.Printf("[runner] component=%s msg=cannot adopt pid, starting fresh: %v", name, aerr)
+			}
+		}
+		if handle == nil {
+			handle, err = r.Start(ctx, opts)
+		}
 		if err != nil {
 			log.Printf("[runner] component=%s error=%v msg=start attempt failed", name, err)
 			retries++

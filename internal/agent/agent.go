@@ -77,6 +77,10 @@ type Agent struct {
 	// applySkipStart marks components that should be kept running as-is during
 	// the current reconcile apply pass.
 	applySkipStart map[string]bool
+	// adoptable maps a component name to a PID that survived the previous
+	// agent run and can be taken over instead of restarted. Consumed once: a
+	// PID is only safe to adopt while nothing has had the chance to reuse it.
+	adoptable map[string]int
 	// shutdown context - set via SetContext, used for graceful shutdown
 	ctx       context.Context
 	ctxCancel context.CancelFunc
@@ -215,8 +219,18 @@ func New(opts Options) *Agent {
 		// scratch (the snapshot's component states are informational
 		// post-crash, not authoritative).
 		if resume {
-			if reaped := reapOrphanedComponents(snap.Components); reaped > 0 {
-				log.Printf("[agent] reaped %d orphan component process(es) from previous run", reaped)
+			// Processes that outlived the previous agent are offered for
+			// adoption rather than killed. Restarting the agent should not
+			// restart what it supervises: without this, every agent update is
+			// an outage for every component, and even a plain `systemctl
+			// restart keystone` bounces the whole device.
+			//
+			// Whatever is not adopted on the next apply is still reaped, by
+			// the same function, a moment later. Adoption is an optimisation
+			// and never a precondition.
+			a.adoptable = adoptableComponents(snap.Components)
+			if len(a.adoptable) > 0 {
+				log.Printf("[agent] %d component process(es) survived the previous run and will be adopted if the plan still wants them unchanged", len(a.adoptable))
 			}
 		}
 		for _, ci := range snap.Components {
@@ -236,6 +250,11 @@ func New(opts Options) *Agent {
 				if err := a.ApplyPlan(a.planPath, false); err != nil {
 					log.Printf("[agent] resume failed: %v", err)
 				}
+				// Anything still on offer was not claimed by the plan: it is a
+				// component the plan no longer wants, or wants differently.
+				// Leaving it alive would mean a process running that nothing
+				// supervises and nothing reports.
+				a.reapSurvivors()
 			}()
 		}
 	}
@@ -708,6 +727,7 @@ func (a *Agent) applyPlan(planPath string) error {
 
 			// Build options
 			opts := buildRunnerOptions(it.Name, r, workDir, a.datasetEnv(r))
+			opts.AdoptPID = a.takeAdoptable(it.Name)
 			if runType == "" || runType == "process" {
 				log.Printf("[agent] component=%s type=process cwd=%s cmd=%s args=%v msg=starting component", it.Name, workDir, opts.Command, opts.Args)
 			} else {
@@ -1926,6 +1946,83 @@ func (a *Agent) stopComponent(name string) {
 // snapshot's "running" state is informational at that point, not
 // authoritative — reapOrphanedComponents removes the orphans so the resumed
 // plan starts fresh without port/file collisions.
+// adoptableComponents lists the processes from the previous run that are still
+// alive and can be supervised again instead of restarted.
+//
+// The test is deliberately the same one reaping uses — alive AND reparented to
+// init — because those two facts together are what identify a process this
+// agent started and then lost. A live PID that is not an init orphan is not
+// ours: the previous agent exited cleanly and took its children with it, so
+// anything answering to that PID now belongs to somebody else, and adopting it
+// would mean supervising a stranger.
+func adoptableComponents(comps []store.ComponentInfo) map[string]int {
+	out := map[string]int{}
+	for _, ci := range comps {
+		if ci.PID <= 0 {
+			continue
+		}
+		if !processIsInitOrphan(ci.PID) {
+			continue
+		}
+		out[ci.Name] = ci.PID
+	}
+	return out
+}
+
+// takeAdoptable hands out a survivor's PID once and then forgets it.
+//
+// Two conditions, and the second is the one that matters most.
+//
+// Once, because the guarantee that a PID still refers to the process this agent
+// started weakens the moment anything restarts: PIDs are reused, and adopting a
+// recycled one would attach supervision, health probes and a restart policy to
+// an unrelated process.
+//
+// And only for a component the reconcile classified as UNCHANGED. A component
+// whose recipe moved is being started precisely because it must be different;
+// adopting the survivor there would leave the OLD build running while the agent
+// reports the new one — a deployment that says it succeeded and changed
+// nothing. That is worse than the restart adoption exists to avoid.
+func (a *Agent) takeAdoptable(name string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	pid, ok := a.adoptable[name]
+	if !ok {
+		return 0
+	}
+	if !a.applySkipStart[name] {
+		// Changed or new: let it start fresh, and leave the survivor on the
+		// list so it is reaped rather than supervised.
+		return 0
+	}
+	delete(a.adoptable, name)
+	return pid
+}
+
+// reapSurvivors kills whatever was offered for adoption and not taken.
+//
+// Called once the apply has had its chance to claim them. A process left here
+// is one the plan no longer wants, or wants differently — and leaving it alive
+// would mean a component running that nothing supervises and nothing reports.
+func (a *Agent) reapSurvivors() {
+	a.mu.Lock()
+	left := a.adoptable
+	a.adoptable = nil
+	a.mu.Unlock()
+
+	if len(left) == 0 {
+		return
+	}
+	comps := make([]store.ComponentInfo, 0, len(left))
+	for name, pid := range left {
+		comps = append(comps, store.ComponentInfo{Name: name, PID: pid})
+	}
+	if reaped := reapOrphanedComponents(comps); reaped > 0 {
+		log.Printf("[agent] reaped %d orphan process(es) the plan did not adopt", reaped)
+	}
+}
+
 func reapOrphanedComponents(comps []store.ComponentInfo) int {
 	reaped := 0
 	for _, ci := range comps {
