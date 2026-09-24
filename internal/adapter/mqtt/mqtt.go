@@ -579,6 +579,7 @@ func (a *Adapter) publishState() {
 		PlanStatus:   status.Status,
 		PlanPath:     status.PlanPath,
 		AgentVersion: version.Version,
+		UpdateStatus: a.updateStatus(),
 	}
 
 	data, err := json.Marshal(event)
@@ -598,6 +599,16 @@ func (a *Adapter) publishState() {
 	token := client.Publish(a.topics.EventState, a.cfg.EventQoS, false, data)
 	if err := token.Error(); err != nil {
 		log.Printf("[mqtt] failed to publish state event: %v", err)
+		return
+	}
+
+	// Proof that the way back in still works, which is the other half of
+	// confirming a self-update: a version that supervises correctly but broke
+	// its own reconnect is healthy by its own account and unreachable to the
+	// operator. Declared as a small optional interface so the adapter does not
+	// have to know about self-update at all.
+	if r, ok := a.handler.(interface{ MarkUpdateReported() }); ok {
+		r.MarkUpdateReported()
 	}
 }
 

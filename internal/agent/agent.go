@@ -29,6 +29,7 @@ import (
 	"github.com/carlosprados/keystone/internal/runner"
 	sysrt "github.com/carlosprados/keystone/internal/runtime"
 	"github.com/carlosprados/keystone/internal/security"
+	"github.com/carlosprados/keystone/internal/selfupdate"
 	"github.com/carlosprados/keystone/internal/state"
 	"github.com/carlosprados/keystone/internal/store"
 	"github.com/carlosprados/keystone/internal/supervisor"
@@ -50,9 +51,13 @@ type Options struct {
 type Agent struct {
 	opts   Options
 	closed atomic.Bool
-	start  time.Time
-	mu     sync.RWMutex
-	snapMu sync.Mutex
+	// updateConfirmation is nil unless this install can update itself. It
+	// decides when the running version has proved itself well enough for the
+	// pre-start gate to stop counting restarts against it.
+	updateConfirmation *selfupdate.Confirmation
+	start              time.Time
+	mu                 sync.RWMutex
+	snapMu             sync.Mutex
 	// applyInProgress acts as a process-wide critical section for plan apply operations.
 	applyInProgress atomic.Bool
 	comps           *store.MemoryStore
@@ -309,6 +314,47 @@ func (a *Agent) refreshComponentStates() {
 }
 
 // Close releases agent resources and signals all operations to stop.
+// SetUpdateConfirmation attaches the self-update confirmation for this run.
+//
+// It is set from main rather than built here because whether a report is
+// required depends on which adapters were configured, and the agent does not
+// know: an install with only a loopback HTTP adapter has nobody to be mute to,
+// while one reachable solely over MQTT must prove it can still be reached
+// before an update counts as good.
+func (a *Agent) SetUpdateConfirmation(c *selfupdate.Confirmation) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.updateConfirmation = c
+}
+
+// MarkUpdateReported records that a remote control plane heard from this
+// device. Adapters call it after publishing; it is a no-op when this install
+// does not update itself.
+func (a *Agent) MarkUpdateReported() {
+	a.mu.RLock()
+	c := a.updateConfirmation
+	a.mu.RUnlock()
+	c.MarkReported()
+}
+
+// markUpdateConverged records that the plan is applied and its components are
+// healthy — half of what a pending version needs to prove.
+func (a *Agent) markUpdateConverged() {
+	a.mu.RLock()
+	c := a.updateConfirmation
+	a.mu.RUnlock()
+	c.MarkConverged()
+}
+
+// UpdateStatus renders the self-update state for telemetry, so an operator can
+// see a device sitting in a trial that never completes.
+func (a *Agent) UpdateStatus() string {
+	a.mu.RLock()
+	c := a.updateConfirmation
+	a.mu.RUnlock()
+	return c.Status()
+}
+
 func (a *Agent) Close() error {
 	if a.closed.Swap(true) {
 		return nil

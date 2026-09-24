@@ -10,6 +10,16 @@ import (
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+// updateStatus asks the handler for its self-update state, when it has one.
+// Declared as a small optional interface so the adapter does not have to know
+// about self-update: an install without it simply reports nothing.
+func (a *Adapter) updateStatus() string {
+	if s, ok := a.handler.(interface{ UpdateStatus() string }); ok {
+		return s.UpdateStatus()
+	}
+	return ""
+}
+
 // rejectPlanPath reports a request that still carries the removed planPath
 // field, instead of letting it fall through to "content required".
 //

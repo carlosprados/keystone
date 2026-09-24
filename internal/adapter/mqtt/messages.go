@@ -167,6 +167,12 @@ type StateEvent struct {
 	// rides along with the state the device already reports rather than
 	// waiting to be asked.
 	AgentVersion string `json:"agentVersion,omitempty"`
+	// UpdateStatus is "idle" when this install does not update itself,
+	// "pending-confirmation" while a new version is on trial, and "confirmed"
+	// once it has proved itself. A device stuck in pending-confirmation is one
+	// whose next restart will roll it back, and that is worth seeing before it
+	// happens rather than after.
+	UpdateStatus string `json:"updateStatus,omitempty"`
 }
 
 // HealthEvent is published periodically with health status.

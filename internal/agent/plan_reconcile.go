@@ -155,6 +155,13 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 	a.mu.Unlock()
 
 	if err == nil {
+		// Half of what a pending self-update has to prove: the plan applied and
+		// its components came up healthy. The other half — that a control plane
+		// can still hear from this device — is marked by whichever adapter
+		// manages to publish. Neither alone is enough.
+		if !dry {
+			a.markUpdateConverged()
+		}
 		return nil
 	}
 

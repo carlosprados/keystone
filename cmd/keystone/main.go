@@ -21,6 +21,7 @@ import (
 	"github.com/carlosprados/keystone/internal/clock"
 	"github.com/carlosprados/keystone/internal/config"
 	"github.com/carlosprados/keystone/internal/runner"
+	"github.com/carlosprados/keystone/internal/selfupdate"
 	"github.com/carlosprados/keystone/internal/version"
 )
 
@@ -99,6 +100,8 @@ func main() {
 	mqttHealthInterval := flag.Duration("mqtt-health-interval", 30*time.Second, "Interval for publishing health events (0 to disable)")
 	mqttQoS := flag.Int("mqtt-qos", 1, "Default QoS level for commands and responses (0, 1, or 2)")
 	mqttDedupeTTL := flag.Duration("mqtt-command-dedupe-ttl", 10*time.Minute, "How long a commandId is remembered, so a redelivery of the same command is executed once. Raise it on links where a device can be offline longer than this")
+
+	selfUpdateRoot := flag.String("self-update-root", "", "Directory holding the A/B install (versions/, current, state/). Setting it enables the confirmation half of self-update: this run marks itself confirmed once the plan is healthy and, where a remote control plane is configured, once that control plane has heard from the device. Empty disables it")
 
 	clockPolicy := flag.String("clock-policy", "high-water", "What to do when the system clock is behind known-good time: high-water (verify against the later of the two) or strict (refuse to verify)")
 
@@ -183,6 +186,7 @@ func main() {
 	applyStringEnv("mqtt-pass", mqttPass, "KEYSTONE_MQTT_PASS")
 	applyIntEnv("mqtt-qos", mqttQoS, "KEYSTONE_MQTT_QOS")
 	applyDurationEnv("mqtt-command-dedupe-ttl", mqttDedupeTTL, "KEYSTONE_MQTT_COMMAND_DEDUPE_TTL")
+	applyStringEnv("self-update-root", selfUpdateRoot, "KEYSTONE_SELF_UPDATE_ROOT")
 	applyDurationEnv("mqtt-state-interval", mqttStateInterval, "KEYSTONE_MQTT_STATE_INTERVAL")
 	applyDurationEnv("mqtt-health-interval", mqttHealthInterval, "KEYSTONE_MQTT_HEALTH_INTERVAL")
 
@@ -293,6 +297,22 @@ func main() {
 		mqtt := mqttadapter.New(mqttCfg, a)
 		registry.Register(mqtt)
 		log.Printf("[main] MQTT adapter configured for %s (device: %s)", *mqttBroker, *mqttDeviceID)
+	}
+
+	// Self-update confirmation. Built here rather than inside the agent because
+	// whether a report is required depends on which adapters were configured,
+	// which only this function knows.
+	if *selfUpdateRoot != "" {
+		layout := selfupdate.Layout{Root: *selfUpdateRoot}
+		// A remote control plane is what makes being mute a failure. With only
+		// a loopback HTTP adapter there is nobody to be mute to, and requiring
+		// a report would mean no update could ever confirm — every one of them
+		// reverted by a guardrail meant to catch the broken ones.
+		requireReport := *mqttBroker != "" || *natsURL != ""
+		conf := selfupdate.NewConfirmation(layout, version.Version, requireReport)
+		a.SetUpdateConfirmation(conf)
+		log.Printf("[main] self-update confirmation enabled at %s (version %s, report required: %v)",
+			*selfUpdateRoot, version.Version, requireReport)
 	}
 
 	// Register the periodic reconcile adapter (if configured). Off unless asked

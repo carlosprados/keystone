@@ -229,6 +229,23 @@ is *healthy by its own account and mute to you*. Nobody can order it back,
 because the order travels over the channel that broke. Rollback has to be able
 to happen with nobody asking for it, because by definition nobody can.
 
+**Implemented**, as the two halves it describes. `--self-update-root` enables
+it; without that flag nothing changes and the status reported is `idle`.
+
+The agent marks *converged* when a plan applies and its components come up
+healthy, and whichever adapter manages to publish marks *reported*. Only both
+together clear the pending marker and reset the boot counter.
+
+One asymmetry worth stating: the report is required **only when a remote
+control plane is configured**. An install with nothing but a loopback HTTP
+adapter has nobody to be mute to, and demanding a report there would mean no
+update could ever confirm — every one of them reverted by a guardrail built to
+catch the broken ones. The condition has to match the deployment rather than
+the ideal, so `main` decides it from the adapters it just wired.
+
+The adapters do not know about self-update. They call through a one-method
+interface they type-assert, so an install without it simply reports nothing.
+
 **Sizing the timeout.** Until component re-adoption exists (below), an agent
 restart also restarts everything it supervises, so "converged" is the startup
 time of the whole plan, not of the binary. Tuning the counter against a binary
