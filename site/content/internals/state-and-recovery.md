@@ -36,37 +36,55 @@ On startup the agent reads the snapshot and decides from the persisted plan stat
 Unknown future values default to resuming: silently supervising nothing is the
 worse failure.
 
-## Reaping orphans
+## Adopting or reaping survivors
 
 Here is the subtle part. If the agent dies *without* running its shutdown path —
 `SIGKILL`, a segfault, the OOM killer — its children survive. They get reparented
-to `init` and keep running, but the new agent has no handles for them. Ports stay
-bound, lock files stay held, and a fresh start would collide with a process nobody
-is managing.
+to `init` and keep running, but the new agent has no handles for them. Left alone,
+a fresh start would collide with a process nobody is managing: ports stay bound,
+lock files stay held.
 
-So before reconciling, the agent walks the PIDs in the snapshot and reaps the ones
-that look like orphans from its previous life:
+So on boot the agent offers each survivor for **adoption**, and reaps whatever the
+plan does not claim:
 
 ```mermaid
 flowchart TB
     A["boot: read the snapshot"] --> B{"resume this plan?"}
     B -- "no" --> Z["stay idle"]
     B -- "yes" --> C["for each recorded PID"]
-    C --> D{"is its parent PID 1?"}
-    D -- "no" --> E["leave it alone"]
-    D -- "yes" --> F["SIGTERM, then SIGKILL"]
-    E --> G["reset state to stopped"]
+    C --> D{"alive, and parent is PID 1?"}
+    D -- "no" --> E["not ours: leave it alone"]
+    D -- "yes" --> F["offer it for adoption"]
+    E --> G["reset state to stopped, re-apply"]
     F --> G
-    G --> H["re-apply from scratch"]
+    G --> H{"component unchanged<br/>(recipe and dependencies)?"}
+    H -- "yes" --> I["adopt: supervise the same PID"]
+    H -- "no" --> J["SIGTERM/SIGKILL the survivor, then start fresh"]
 ```
 
 The parent-is-`init` test is the safety catch: a PID from a previous boot has
 almost certainly been reused by something unrelated, and killing it would be
 someone else's outage. Only an init-owned orphan is a plausible leftover.
 
+**Unchanged** means the recipe and every dependency are what they were. It does
+not mean "running under supervision" — after a crash nothing is — and the check
+asked exactly that up to v0.12.1, so every survivor was reaped. A component whose
+recipe moved is never adopted: that would leave the old build running while the
+agent reports the new one. Its survivor is killed **before** the new instance
+starts, not after the apply: side by side, the new one would find the port bound
+or the database locked and fail for something the old process was doing.
+
+An adopted process has no log stream (its pipes belonged to the dead agent) and
+its exit is noticed by polling, without an exit status. Its health probe and
+restart policy come back with it.
+
+**Limitation: subreapers.** Under a subreaper — `systemd --user`, a container
+with `tini` or `dumb-init` — orphans are reparented to it, not to PID 1. They are
+then neither adopted nor reaped, and the resume starts a second copy. Run the
+agent under the system manager.
+
 Post-crash, the snapshot's `running` states are treated as **informational, not
-authoritative** — they are reset to `stopped` before the reconcile reads them, so
-the resume starts fresh rather than adopting processes nobody supervises.
+authoritative**: they are reset to `stopped` before the reconcile reads them.
 
 ## Graceful shutdown
 

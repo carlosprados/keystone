@@ -77,6 +77,10 @@ type Agent struct {
 	// applySkipStart marks components that should be kept running as-is during
 	// the current reconcile apply pass.
 	applySkipStart map[string]bool
+	// applyUnchanged marks components whose recipe and dependencies the current
+	// apply leaves as they were, whether or not they are running. It is the
+	// test adoption uses; see reconcileActions.unchanged.
+	applyUnchanged map[string]bool
 	// adoptable maps a component name to a PID that survived the previous
 	// agent run and can be taken over instead of restarted. Consumed once: a
 	// PID is only safe to adopt while nothing has had the chance to reuse it.
@@ -155,6 +159,7 @@ func New(opts Options) *Agent {
 		cancels:        make(map[string]context.CancelFunc),
 		supervised:     make(map[string]bool),
 		applySkipStart: make(map[string]bool),
+		applyUnchanged: make(map[string]bool),
 		stateDir:       filepath.Join("runtime", "state"),
 		ctx:            ctx,
 		ctxCancel:      cancel,
@@ -760,6 +765,9 @@ func (a *Agent) applyPlan(planPath string) error {
 			// Build options
 			opts := buildRunnerOptions(it.Name, r, workDir, a.datasetEnv(r))
 			opts.AdoptPID = a.takeAdoptable(it.Name)
+			if opts.AdoptPID == 0 {
+				a.reapUnclaimed(it.Name)
+			}
 			if runType == "" || runType == "process" {
 				log.Printf("[agent] component=%s type=process cwd=%s cmd=%s args=%v msg=starting component", it.Name, workDir, opts.Command, opts.Args)
 			} else {
@@ -2015,6 +2023,11 @@ func adoptableComponents(comps []store.ComponentInfo) map[string]int {
 // adopting the survivor there would leave the OLD build running while the agent
 // reports the new one — a deployment that says it succeeded and changed
 // nothing. That is worse than the restart adoption exists to avoid.
+//
+// UNCHANGED, not no_touch. no_touch additionally requires the component to be
+// running under this agent's supervision, and after a crash nothing is — so a
+// check against no_touch never passes on the one path adoption exists for, and
+// every survivor was reaped. That was the state of v0.12.1.
 func (a *Agent) takeAdoptable(name string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -2023,13 +2036,31 @@ func (a *Agent) takeAdoptable(name string) int {
 	if !ok {
 		return 0
 	}
-	if !a.applySkipStart[name] {
+	if !a.applyUnchanged[name] {
 		// Changed or new: let it start fresh, and leave the survivor on the
 		// list so it is reaped rather than supervised.
 		return 0
 	}
 	delete(a.adoptable, name)
 	return pid
+}
+
+// reapUnclaimed kills the survivor of a component that is about to be started
+// fresh, before the new instance exists.
+//
+// Waiting for reapSurvivors would run the old and the new instance side by side
+// for the whole apply: the new one finds the port bound or the database locked,
+// fails its readiness, and the apply blames the new build for what the old
+// process is doing.
+func (a *Agent) reapUnclaimed(name string) {
+	a.mu.Lock()
+	pid, ok := a.adoptable[name]
+	delete(a.adoptable, name)
+	a.mu.Unlock()
+
+	if ok {
+		reapOrphanedComponents([]store.ComponentInfo{{Name: name, PID: pid}})
+	}
 }
 
 // reapSurvivors kills whatever was offered for adoption and not taken.

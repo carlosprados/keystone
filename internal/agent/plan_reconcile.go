@@ -73,8 +73,14 @@ type reconcileActions struct {
 	stopTargets  map[string]bool
 	startTargets map[string]bool
 	noTouch      map[string]bool
-	stopOrder    []string
-	startOrder   []string
+	// unchanged is what the plan wants exactly as before: same recipe, and no
+	// dependency that changed. It is noTouch before the liveness check, and the
+	// difference is the whole point. noTouch means "keep the instance this agent
+	// is supervising"; after a crash nothing is supervised, so noTouch is empty
+	// by construction — and a survivor must be adopted precisely then.
+	unchanged  map[string]bool
+	stopOrder  []string
+	startOrder []string
 }
 
 func (a *Agent) ApplyPlan(planPath string, dry bool) error {
@@ -146,12 +152,14 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 
 	a.mu.Lock()
 	a.applySkipStart = cloneBoolMap(actions.noTouch)
+	a.applyUnchanged = cloneBoolMap(actions.unchanged)
 	a.mu.Unlock()
 
 	err = a.applyPlan(planPath)
 
 	a.mu.Lock()
 	a.applySkipStart = make(map[string]bool)
+	a.applyUnchanged = make(map[string]bool)
 	a.mu.Unlock()
 
 	if err == nil {
@@ -463,6 +471,13 @@ func (a *Agent) buildReconcileActions(oldPlan []state.PlanComponent, desired *pl
 		}
 	}
 
+	unchanged := map[string]bool{}
+	for name := range desired.byName {
+		if !startTargets[name] {
+			unchanged[name] = true
+		}
+	}
+
 	// Components left untouched must currently be alive and supervised.
 	for name := range noTouch {
 		comp := desired.byName[name]
@@ -515,6 +530,7 @@ func (a *Agent) buildReconcileActions(oldPlan []state.PlanComponent, desired *pl
 		stopTargets:  stopTargets,
 		startTargets: startTargets,
 		noTouch:      noTouch,
+		unchanged:    unchanged,
 		stopOrder:    stopOrder,
 		startOrder:   startOrder,
 	}, nil

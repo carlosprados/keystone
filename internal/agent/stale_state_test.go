@@ -25,6 +25,7 @@ func newStateAgent() *Agent {
 		runners:        make(map[string]runner.Runner),
 		cancels:        make(map[string]context.CancelFunc),
 		applySkipStart: make(map[string]bool),
+		applyUnchanged: make(map[string]bool),
 	}
 }
 

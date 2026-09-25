@@ -16,7 +16,7 @@ import (
 func TestTakeAdoptableRequiresAnUnchangedComponent(t *testing.T) {
 	a := New(Options{InsecureSkipVerify: true})
 	a.adoptable = map[string]int{"api": 4242, "worker": 4243}
-	a.applySkipStart = map[string]bool{"api": true} // worker changed
+	a.applyUnchanged = map[string]bool{"api": true} // worker changed
 
 	if got := a.takeAdoptable("api"); got != 4242 {
 		t.Errorf("unchanged component: got %d, want 4242", got)
@@ -37,7 +37,7 @@ func TestTakeAdoptableRequiresAnUnchangedComponent(t *testing.T) {
 func TestTakeAdoptableHandsOutAPIDOnce(t *testing.T) {
 	a := New(Options{InsecureSkipVerify: true})
 	a.adoptable = map[string]int{"api": 4242}
-	a.applySkipStart = map[string]bool{"api": true}
+	a.applyUnchanged = map[string]bool{"api": true}
 
 	if got := a.takeAdoptable("api"); got != 4242 {
 		t.Fatalf("first call: got %d", got)
@@ -73,5 +73,59 @@ func TestAdoptableComponentsSkipsWhatIsNotOurs(t *testing.T) {
 
 	if len(got) != 0 {
 		t.Errorf("offered %v for adoption; none of these are ours", got)
+	}
+}
+
+// TestAdoptionSurvivesTheResumeReconcile walks the path a crash actually takes,
+// instead of setting the reconcile's verdict by hand — which is how the tests
+// above passed while every survivor on a real device was reaped.
+//
+// After a crash the agent resets every component to stopped with no PID, so
+// nothing is running under its supervision and no_touch comes out empty. A
+// survivor must still be adopted when its recipe is unchanged.
+func TestAdoptionSurvivesTheResumeReconcile(t *testing.T) {
+	planned, oldPlan := singleComponentPlan("api", "")
+
+	a := newStateAgent()
+	// What New leaves behind on resume: the snapshot's components, reset.
+	a.comps.Upsert(store.ComponentInfo{Name: "api", State: "stopped", PID: 0})
+	a.adoptable = map[string]int{"api": 4242}
+
+	actions, err := a.buildReconcileActions(oldPlan, planned)
+	if err != nil {
+		t.Fatalf("buildReconcileActions: %v", err)
+	}
+	if actions.noTouch["api"] {
+		t.Fatal("api is no_touch after a crash; nothing supervises it, so it must be started (and adopted)")
+	}
+	if !actions.unchanged["api"] {
+		t.Fatal("api is not unchanged; its recipe did not move")
+	}
+
+	a.applyUnchanged = cloneBoolMap(actions.unchanged)
+	if got := a.takeAdoptable("api"); got != 4242 {
+		t.Errorf("survivor of an unchanged component was not adopted: got %d, want 4242", got)
+	}
+}
+
+// TestAChangedDependencyIsNotAdoptedAround: a dependent restarted because its
+// dependency changed is not unchanged, so its survivor is reaped, not adopted.
+func TestAChangedDependencyIsNotAdoptedAround(t *testing.T) {
+	planned, oldPlan := singleComponentPlan("db", "")
+	api, apiOld := singleComponentPlan("api", "")
+	planned.byName["api"] = api.byName["api"]
+	planned.byName["api"].deps = []string{"db"}
+	planned.edges["db"] = []string{"api"}
+	apiOld[0].Deps = []string{"db"}
+	oldPlan = append(oldPlan, apiOld...)
+	oldPlan[0].RecipeDigest = "an-older-db-recipe"
+
+	a := newStateAgent()
+	actions, err := a.buildReconcileActions(oldPlan, planned)
+	if err != nil {
+		t.Fatalf("buildReconcileActions: %v", err)
+	}
+	if actions.unchanged["db"] || actions.unchanged["api"] {
+		t.Errorf("unchanged=%v; db changed and api depends on it, so neither may be adopted", actions.unchanged)
 	}
 }
