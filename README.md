@@ -145,10 +145,11 @@ What is done: supervisor with DAG deployments and rollback, process and containe
 
 Known limitations, stated plainly:
 
-- **No self-update.** The agent does not replace its own binary; upgrades are driven from outside (configuration management, an image, a package). See Phase 7 below.
+- **Self-update is new and only half field-tested.** An MQTT `cmd/self-update` downloads and verifies a new binary, installs it A/B beside the running one, restarts, and a systemd pre-start gate reverts it if it does not confirm (requires `--self-update-root` and the `keystone-ab.service` unit). On hardware, only the gate reverting has been exercised so far; a full update end to end has not. See [MQTT](https://carlosprados.github.io/keystone/control-planes/mqtt/).
 - **No built-in TLS for the HTTP API.** Terminate at a reverse proxy, use a VPN, or tunnel with `keystonectl --ssh`. NATS and MQTT do support TLS natively.
-- **cgroups are a no-op placeholder.** ProcessRunner applies `RLIMIT_NOFILE` only; container resource limits do work.
-- **Canary rings are not implemented** (Phase 7 below).
+- **cgroups are a no-op placeholder.** ProcessRunner applies `RLIMIT_NOFILE` only: `memory_limit` and `cpu_quota` on a process component are accepted and ignored. Container resource limits do work.
+- **Component re-adoption needs the system manager.** Survivors of an agent crash are recognised by being reparented to PID 1; under a subreaper (`systemd --user`, `tini`) they are neither adopted nor reaped.
+- **Canary rings are not implemented** (Phase 7b below).
 
 ## Install
 
@@ -227,7 +228,8 @@ curl -s localhost:8080/metrics | head
 - [x] **Phase 6.5**: Delta (patch) artifact downloads, privilege dropping, published documentation site
 - [x] **Phase 6.6**: Container service discovery (network aliases), shell-free health probes, container misconfiguration guardrails
 - [x] **Phase 8**: Signed releases (cosign keyless + SPDX SBOM)
-- [ ] **Phase 7**: Self-update and canary rings
+- [x] **Phase 7a**: Self-update (A/B install, systemd gate, rollback, component re-adoption)
+- [ ] **Phase 7b**: Canary rings
 
 See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 

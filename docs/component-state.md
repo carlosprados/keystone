@@ -80,6 +80,12 @@ and leave the component unsupervised (see issue #10).
 
 If the agent itself is killed (SIGKILL, OOM, segfault), its children are
 reparented to init and survive with no supervisor. On the next boot the agent
-reaps any orphan recorded in its snapshot, resets the persisted component
-states, and re-applies the last plan from scratch. Persisted `running` states
-are informational after a crash, never authoritative.
+resets the persisted component states and re-applies the last plan. A survivor
+of a component whose recipe and dependencies are unchanged is **adopted** — the
+same PID, supervised again, without a restart. Any other survivor is reaped once
+the apply has had its chance to claim it. Persisted `running` states are
+informational after a crash, never authoritative.
+
+Survivors are recognised by being reparented to PID 1. Under a subreaper
+(`systemd --user`, `tini`, `dumb-init`) they are not, and are then neither
+adopted nor reaped.

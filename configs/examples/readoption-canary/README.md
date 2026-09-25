@@ -73,11 +73,19 @@ keystonectl apply configs/examples/readoption-canary/plan.toml
 sleep 15
 eval "$PID_CMD"          # before: <pid> running healthy
 
-# NOT `systemctl restart`. See below.
-sudo systemctl kill -s SIGKILL keystone
+# NOT `systemctl restart`, and NOT without --kill-whom=main. See below.
+sudo systemctl kill -s SIGKILL --kill-whom=main keystone
 sleep 20
 eval "$PID_CMD"          # after:  SAME pid, running healthy
 ```
+
+### Why `--kill-whom=main`
+
+Without it, `systemctl kill` signals **every process in the unit's cgroup** — the
+default is `--kill-whom=all`. `KillMode=process` governs `stop`, not `kill`. So
+the plain command kills the canary along with the agent, nothing survives, and
+the result reads exactly like broken re-adoption. A field test got that false
+negative. `--kill-whom=main` kills the agent alone, which is what a crash is.
 
 ### Why not `systemctl restart`
 
@@ -117,8 +125,8 @@ restart would mean the PID was reused, not that the process survived.
 | Result | Meaning |
 |---|---|
 | Same PID, `adopted existing process` in the log | Working. Supervision resumed without an interruption |
-| New PID, `reaping orphan` in the log | The component was not adopted. Either the reconcile saw it as changed, or the process did not survive |
-| New PID, no adoption line at all | The process died with the agent. Check `KillMode=process` is in the unit, and that the agent was killed rather than asked to stop — a clean shutdown stops components on purpose |
+| New PID, `reaping orphan` in the log | The process survived and was not adopted: the reconcile saw the component as changed. Up to v0.12.1 this was every case — the check asked for a supervised component, and after a crash there is none |
+| New PID, no adoption line at all | The process died with the agent. Check `KillMode=process` is in the unit, that the kill used `--kill-whom=main`, and that the agent was killed rather than asked to stop — a clean shutdown stops components on purpose |
 | Same PID but health stays `unknown` | Worse than a restart: the process is alive and **nobody is supervising it** |
 
 That last row is the one to watch. Re-adoption is only worth having if the
@@ -128,6 +136,11 @@ watches, reported as running, is the failure this whole design is against.
 ## Requirements
 
 `KillMode=process` in the unit (`configs/systemd/keystone-ab.service` has it).
+
+Survivors are recognised by being reparented to PID 1. Under a **subreaper** —
+a user session's `systemd --user`, a container with `tini` or `dumb-init` — they
+are reparented to it instead, and are then neither adopted nor reaped. Run this
+under the system manager, as the unit above does.
 Without it systemd kills every process in the agent's cgroup on restart, the
 canary dies with the agent, and re-adoption cannot happen — the feature would
 look broken while doing exactly what it was asked.
