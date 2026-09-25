@@ -3,6 +3,7 @@ package agent
 import (
 	"testing"
 
+	"github.com/carlosprados/keystone/internal/state"
 	"github.com/carlosprados/keystone/internal/store"
 )
 
@@ -128,4 +129,46 @@ func TestAChangedDependencyIsNotAdoptedAround(t *testing.T) {
 	if actions.unchanged["db"] || actions.unchanged["api"] {
 		t.Errorf("unchanged=%v; db changed and api depends on it, so neither may be adopted", actions.unchanged)
 	}
+}
+
+// TestAPendingSurvivorStaysOnDisk: resume clears PIDs from the store, so until a
+// survivor is adopted or reaped the snapshot is the only record of it. An agent
+// that died in between — v0.12.2 did, on every adoption — used to boot knowing
+// nothing about it, and started a second copy beside it.
+func TestAPendingSurvivorStaysOnDisk(t *testing.T) {
+	a := newStateAgent()
+	a.stateDir = t.TempDir()
+	a.comps.Upsert(store.ComponentInfo{Name: "api", State: "stopped", PID: 0})
+	a.adoptable = map[string]int{"api": 4242}
+
+	a.persistSnapshot()
+	snap, err := state.Load(a.stateDir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := adoptableComponentsPIDs(snap.Components)["api"]; got != 4242 {
+		t.Fatalf("pending survivor persisted with pid %d, want 4242", got)
+	}
+
+	// Once settled it must stop being advertised, or the next boot would try
+	// to adopt a PID that is gone or reused.
+	a.mu.Lock()
+	delete(a.adoptable, "api")
+	a.mu.Unlock()
+	a.persistSnapshot()
+	snap, err = state.Load(a.stateDir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := adoptableComponentsPIDs(snap.Components)["api"]; got != 0 {
+		t.Errorf("settled survivor still persisted with pid %d", got)
+	}
+}
+
+func adoptableComponentsPIDs(comps []store.ComponentInfo) map[string]int {
+	out := map[string]int{}
+	for _, ci := range comps {
+		out[ci.Name] = ci.PID
+	}
+	return out
 }

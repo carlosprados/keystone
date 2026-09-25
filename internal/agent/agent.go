@@ -1627,6 +1627,19 @@ func (a *Agent) persistSnapshot() {
 	// fingerprint below).
 	sort.Slice(comps, func(i, j int) bool { return comps[i].Name < comps[j].Name })
 
+	// A survivor still waiting to be adopted or reaped keeps its PID on disk.
+	// Resume clears PIDs from the store, and without this an agent that dies
+	// before settling its survivors — it did, once per adoption, in v0.12.2 —
+	// boots next time knowing nothing about them: they are neither adopted nor
+	// reaped, and a second copy starts beside each one.
+	a.mu.RLock()
+	for i := range comps {
+		if pid, ok := a.adoptable[comps[i].Name]; ok && comps[i].PID == 0 {
+			comps[i].PID = pid
+		}
+	}
+	a.mu.RUnlock()
+
 	snap := state.Snapshot{
 		Plan: state.PlanStatus{
 			Path:    a.planPath,
