@@ -69,6 +69,21 @@ type ProcessHandle struct {
 	name      string
 	startedAt time.Time
 	done      chan error
+	// exited is closed when an adopted process is seen gone. Only adopted
+	// handles have it: they have no cmd to Wait on, because the process is not
+	// this agent's child.
+	exited chan struct{}
+}
+
+// wait blocks until the process exits. For a process this agent started that
+// is cmd.Wait; for an adopted one it is the polling in Adopt, which cannot
+// report an exit status.
+func (h *ProcessHandle) wait() error {
+	if h.cmd != nil {
+		return h.cmd.Wait()
+	}
+	<-h.exited
+	return nil
 }
 
 // ID returns the process ID as a string.
@@ -181,11 +196,13 @@ func (r *ProcessRunner) Stop(ctx context.Context, h Handle, timeout time.Duratio
 	if !ok {
 		return fmt.Errorf("invalid handle type for ProcessRunner: expected *ProcessHandle, got %T", h)
 	}
-	if ph == nil || ph.cmd == nil || ph.cmd.Process == nil {
+	if ph == nil || ph.pid <= 0 {
 		return nil
 	}
-	// Send SIGTERM to the process group
-	pgid := -ph.cmd.Process.Pid
+	// Send SIGTERM to the process group. An adopted process has no cmd, but it
+	// was started with Setpgid by the previous agent, so it still leads a group
+	// of its own and the same signal reaches its children.
+	pgid := -ph.pid
 	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
 		log.Printf("[runner] warning: SIGTERM to pgid %d failed: %v", pgid, err)
 	}
@@ -320,7 +337,7 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 		// Watch process exit
 		exitCh := make(chan error, 1)
 		go func(h *ProcessHandle) {
-			err := h.cmd.Wait()
+			err := h.wait()
 			// log process exit for diagnostics
 			if err != nil {
 				log.Printf("[runner] component=%s pid=%d error=%v msg=process exited with error", name, h.pid, err)

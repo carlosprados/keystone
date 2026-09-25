@@ -88,6 +88,9 @@ agent under the system manager.
 
 Post-crash, the snapshot's `running` states are treated as **informational, not
 authoritative**: they are reset to `stopped` before the reconcile reads them.
+A survivor's PID stays in the snapshot until it has been adopted or reaped. If
+the agent dies again in between, the next boot still knows the process exists,
+rather than starting a second copy beside a process it has forgotten.
 
 ## Graceful shutdown
 

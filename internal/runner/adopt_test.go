@@ -1,9 +1,14 @@
 package runner
 
 import (
+	"context"
 	"os/exec"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
+
+	sysrt "github.com/carlosprados/keystone/internal/runtime"
 )
 
 // sleeper starts a real process and returns its PID, killing it at test end.
@@ -92,5 +97,104 @@ func TestAdoptRefusesADeadPID(t *testing.T) {
 	}
 	if _, err := r.Adopt(-1, "negative"); err == nil {
 		t.Fatal("a negative PID was adopted")
+	}
+}
+
+// survivor starts a process in its own group, the way the previous agent did,
+// and reaps it when it exits so polling sees it gone rather than a zombie.
+func survivor(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start survivor: %v", err)
+	}
+	go func() { _ = cmd.Wait() }()
+	t.Cleanup(func() { _ = syscall.Kill(cmd.Process.Pid, syscall.SIGKILL) })
+	return cmd.Process.Pid
+}
+
+type starts struct {
+	mu   sync.Mutex
+	pids []int
+}
+
+func (s *starts) add(h Handle) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pids = append(s.pids, h.(*ProcessHandle).PID())
+}
+
+func (s *starts) get() []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int(nil), s.pids...)
+}
+
+// TestRunManagedSupervisesAnAdoptedProcess goes through the managed loop, not
+// Adopt alone. Adopt was tested by itself while the loop around it called
+// cmd.Wait on a handle with no cmd: the first real adoption crashed the agent.
+func TestRunManagedSupervisesAnAdoptedProcess(t *testing.T) {
+	pid := survivor(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	var got starts
+	go New().RunManaged(ctx, "c", Options{Name: "c", Command: "sleep", Args: []string{"30"}, AdoptPID: pid},
+		HealthConfig{}, RestartAlways, 5, got.add, nil, nil)
+
+	time.Sleep(3 * adoptInterval)
+	if p := got.get(); len(p) != 1 || p[0] != pid {
+		t.Fatalf("starts = %v, want exactly one, the adopted pid %d", p, pid)
+	}
+	if !sysrt.IsProcessRunning(pid) {
+		t.Fatal("the adopted process is gone; adoption must not disturb it")
+	}
+}
+
+// TestAnAdoptedProcessThatDiesIsRestarted: the restart policy has to come back
+// with adoption, or an adopted component that exits stays down unnoticed.
+func TestAnAdoptedProcessThatDiesIsRestarted(t *testing.T) {
+	pid := survivor(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	var got starts
+	go New().RunManaged(ctx, "c", Options{Name: "c", Command: "sleep", Args: []string{"30"}, AdoptPID: pid},
+		HealthConfig{}, RestartAlways, 5, got.add, nil, nil)
+	time.Sleep(adoptInterval)
+
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+
+	deadline := time.Now().Add(3*adoptInterval + 5*time.Second)
+	for time.Now().Before(deadline) {
+		if p := got.get(); len(p) == 2 {
+			if p[1] == pid {
+				t.Fatalf("restarted with the dead pid %d", pid)
+			}
+			syscall.Kill(p[1], syscall.SIGKILL)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("starts = %v; the adopted process died and was never restarted", got.get())
+}
+
+// TestStopStopsAnAdoptedProcess: Stop used to return nil for a handle with no
+// cmd, so an adopted component could never be stopped — a restart then ran a
+// second copy beside it.
+func TestStopStopsAnAdoptedProcess(t *testing.T) {
+	pid := survivor(t)
+	r := New()
+	h, err := r.Adopt(pid, "c")
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+
+	if err := r.Stop(context.Background(), h, 3*time.Second); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if sysrt.IsProcessRunning(pid) {
+		t.Fatal("the adopted process is still running after Stop")
 	}
 }

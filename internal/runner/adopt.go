@@ -57,6 +57,7 @@ func (r *ProcessRunner) Adopt(pid int, name string) (*ProcessHandle, error) {
 		// since".
 		startedAt: time.Now(),
 		done:      make(chan error, 1),
+		exited:    make(chan struct{}),
 	}
 
 	go func() {
@@ -65,6 +66,7 @@ func (r *ProcessRunner) Adopt(pid int, name string) (*ProcessHandle, error) {
 		for range ticker.C {
 			if !sysrt.IsProcessRunning(pid) {
 				// No exit status to report: it went to init, not to us.
+				close(h.exited)
 				h.done <- nil
 				return
 			}
