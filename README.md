@@ -238,7 +238,7 @@ See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 | Category | Features |
 |----------|----------|
 | **Supervisor** | DAG execution, parallel layer startup, FSM lifecycle, dependency ordering |
-| **ProcessRunner** | Process management, log streaming, health probes (HTTP/TCP/cmd/exec), restart policies, exponential backoff, privilege dropping |
+| **ProcessRunner** | Process management, logs as journald streams that outlive the agent, health probes (HTTP/TCP/cmd/exec), restart policies, exponential backoff, privilege dropping |
 | **ContainerRunner** | containerd client, CLI fallback (docker/nerdctl/podman), image pull, mounts, ports, resource limits, network aliases for service discovery, network pre-flight, moving-tag and containerd-namespace warnings |
 | **Deployment Engine** | TOML plans and recipes, environment variable substitution, dry-run mode, rollback refused across a declared state migration |
 | **Artifact Manager** | Secure download with resume, SHA-256 verification, detached signatures, GC, cache limits, optional delta (patch) updates |

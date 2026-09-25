@@ -31,13 +31,14 @@ const adoptInterval = time.Second
 //     child, so an exit is noticed within adoptInterval rather than instantly,
 //     and the exit STATUS is not available: the kernel gave it to init. Callers
 //     see "it exited", never "it exited with 3".
-//   - **There are no logs.** The pipes belonged to the agent that died. The
-//     process keeps writing to file descriptors that now go nowhere, and
-//     nothing this agent does can recover them. Its output resumes only when
-//     the component is next restarted for real.
+//   - **Logs depend on how it was started.** Under journald its stdout and
+//     stderr are journald streams (see journalStream), which outlive the agent:
+//     the adopted process goes on logging with no gap. Without journald they
+//     were pipes the dead agent read, and the process died on its next write
+//     from SIGPIPE, so there is usually nothing left to adopt.
 //
-// Both are worth the trade: a component that keeps running without its log
-// stream is better than one that was restarted to get the stream back, and the
+// The exit status is worth losing: a component that keeps running is better
+// than one restarted to get its exit code back, and the
 // component's own health probe still reports on it.
 func (r *ProcessRunner) Adopt(pid int, name string) (*ProcessHandle, error) {
 	if pid <= 0 {
@@ -70,6 +71,6 @@ func (r *ProcessRunner) Adopt(pid int, name string) (*ProcessHandle, error) {
 		}
 	}()
 
-	log.Printf("[runner] component=%s msg=adopted existing process pid=%d (no log stream; exit detected by polling)", name, pid)
+	log.Printf("[runner] component=%s msg=adopted existing process pid=%d (exit detected by polling)", name, pid)
 	return h, nil
 }

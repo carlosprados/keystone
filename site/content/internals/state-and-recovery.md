@@ -74,9 +74,12 @@ agent reports the new one. Its survivor is killed **before** the new instance
 starts, not after the apply: side by side, the new one would find the port bound
 or the database locked and fail for something the old process was doing.
 
-An adopted process has no log stream (its pipes belonged to the dead agent) and
-its exit is noticed by polling, without an exit status. Its health probe and
-restart policy come back with it.
+An adopted process keeps logging: its output goes to journald streams it holds
+itself, not to the dead agent. Its exit is noticed by polling, without an exit
+status. Its health probe and restart policy come back with it. Without journald,
+output goes through pipes the agent reads, and a component that writes dies from
+`SIGPIPE` on its first line after the agent is gone — there is then usually
+nothing to adopt.
 
 **Limitation: subreapers.** Under a subreaper — `systemd --user`, a container
 with `tini` or `dumb-init` — orphans are reparented to it, not to PID 1. They are

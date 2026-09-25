@@ -138,14 +138,24 @@ func (r *ProcessRunner) Start(ctx context.Context, opts Options) (Handle, error)
 	}
 	// Put in its own process group to manage signals for children
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// Log capture pipes
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("[runner] warning: failed to capture stdout for %s: %v", opts.Name, err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		log.Printf("[runner] warning: failed to capture stderr for %s: %v", opts.Name, err)
+	// Output goes straight to journald when there is one, so it outlives the
+	// agent (see journalStream). Pipes are the fallback, and with them a
+	// component that logs cannot survive the agent: say so rather than let
+	// re-adoption look supported.
+	var stdout, stderr io.ReadCloser
+	jout, jerr, err := journalStreams(opts.Name)
+	if err == nil {
+		cmd.Stdout, cmd.Stderr = jout, jerr
+		defer jout.Close()
+		defer jerr.Close()
+	} else {
+		log.Printf("[runner] component=%s msg=journald unavailable (%v); logging through the agent, so this component dies on its next write if the agent goes away", opts.Name, err)
+		if stdout, err = cmd.StdoutPipe(); err != nil {
+			log.Printf("[runner] warning: failed to capture stdout for %s: %v", opts.Name, err)
+		}
+		if stderr, err = cmd.StderrPipe(); err != nil {
+			log.Printf("[runner] warning: failed to capture stderr for %s: %v", opts.Name, err)
+		}
 	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
