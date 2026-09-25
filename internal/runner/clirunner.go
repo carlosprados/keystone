@@ -285,7 +285,7 @@ func (r *CLIRunner) RunManaged(ctx context.Context, name string, opts Options, h
 				}
 				return err
 			case <-ticker.C:
-				if hc.Check == "" {
+				if !hc.Configured() {
 					continue
 				}
 				ok := r.probeHealth(ctx, hc, ch)

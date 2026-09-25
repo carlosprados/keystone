@@ -73,10 +73,33 @@ keystonectl apply configs/examples/readoption-canary/plan.toml
 sleep 15
 eval "$PID_CMD"          # before: <pid> running healthy
 
-sudo systemctl restart keystone
-sleep 15
+# NOT `systemctl restart`. See below.
+sudo systemctl kill -s SIGKILL keystone
+sleep 20
 eval "$PID_CMD"          # after:  SAME pid, running healthy
 ```
+
+### Why not `systemctl restart`
+
+Because it does not test this, and a field test spent an afternoon finding out.
+
+`restart` sends SIGTERM, and on SIGTERM the agent runs its own shutdown: it
+stops its components through their lifecycle hooks, in dependency order. That
+is correct — `systemctl stop` sends the same signal, the agent cannot tell the
+two apart, and leaving processes alive that nothing watches is worse than
+restarting them. But it means nothing survives to be adopted, and the canary
+comes back with a new PID having proved nothing.
+
+Re-adoption applies where the agent did **not** get to shut down cleanly:
+
+- it was killed (`SIGKILL`, OOM, a crash), which is what the command above
+  simulates;
+- or it exited to **replace its own binary**, where it deliberately leaves
+  components running because it is coming straight back.
+
+The second is the case that matters in production, and it is the reason the
+feature exists: without it, every self-update restarts everything the agent
+supervises.
 
 Confirm from outside the agent too, since the whole point is not to take its
 word for it:
@@ -95,7 +118,7 @@ restart would mean the PID was reused, not that the process survived.
 |---|---|
 | Same PID, `adopted existing process` in the log | Working. Supervision resumed without an interruption |
 | New PID, `reaping orphan` in the log | The component was not adopted. Either the reconcile saw it as changed, or the process did not survive |
-| New PID, no adoption line at all | The process died with the agent — check `KillMode=process` is in the unit, because systemd's default kills the whole cgroup |
+| New PID, no adoption line at all | The process died with the agent. Check `KillMode=process` is in the unit, and that the agent was killed rather than asked to stop — a clean shutdown stops components on purpose |
 | Same PID but health stays `unknown` | Worse than a restart: the process is alive and **nobody is supervising it** |
 
 That last row is the one to watch. Re-adoption is only worth having if the

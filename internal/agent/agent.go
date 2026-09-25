@@ -346,6 +346,13 @@ func (a *Agent) refreshComponentStates() {
 }
 
 // Close releases agent resources and signals all operations to stop.
+// supervisedCount reports how many components have a live supervision loop.
+func (a *Agent) supervisedCount() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.supervised)
+}
+
 // SetUpdateConfirmation attaches the self-update confirmation for this run.
 //
 // It is set from main rather than built here because whether a report is
@@ -387,15 +394,40 @@ func (a *Agent) UpdateStatus() string {
 	return c.Status()
 }
 
-func (a *Agent) Close() error {
+// Close shuts the agent down and stops everything it supervises.
+//
+// This is the right behaviour when the agent is going away: leaving components
+// running with nobody watching them is how a device ends up with processes no
+// tool knows about.
+func (a *Agent) Close() error { return a.close(true) }
+
+// CloseForRestart shuts the agent down and DELIBERATELY leaves its components
+// running, for the case where the agent is coming straight back.
+//
+// This is what makes a self-update free of an outage. Close() stops components
+// through their shutdown hooks, so an agent that exits that way leaves nothing
+// to re-adopt: the replacement starts everything from scratch, and updating the
+// agent costs a restart of every component it supervises — which is precisely
+// what re-adoption was built to avoid, and what it silently failed to avoid
+// until a field test measured it.
+//
+// Only used where the agent knows it will be started again. A shutdown that
+// might be final goes through Close().
+func (a *Agent) CloseForRestart() error { return a.close(false) }
+
+func (a *Agent) close(stopComponents bool) error {
 	if a.closed.Swap(true) {
 		return nil
 	}
 	// Stop managed components first (graceful) so lifecycle shutdown hooks run.
 	// Do not mark the plan as "stopped" here: on next boot we want to resume
 	// the last applied plan automatically.
-	if err := a.stopPlanInternal(false); err != nil {
-		log.Printf("[agent] warning: stop plan during close failed: %v", err)
+	if stopComponents {
+		if err := a.stopPlanInternal(false); err != nil {
+			log.Printf("[agent] warning: stop plan during close failed: %v", err)
+		}
+	} else {
+		log.Printf("[agent] leaving %d supervised component(s) running for the next start to adopt", a.supervisedCount())
 	}
 	// Record how far time has got before we lose the chance: this mark is what
 	// stops the clock going backwards across a restart.
@@ -687,7 +719,7 @@ func (a *Agent) applyPlan(planPath string) error {
 
 			// Health config
 			hc := buildHealthConfig(r)
-			if hc.Check != "" {
+			if hc.Configured() {
 				healthBasedReady = true
 			}
 
@@ -1553,7 +1585,7 @@ func computeReadyTimeout(r *recipe.Recipe) time.Duration {
 	const minHealthReadyTimeout = 30 * time.Second
 
 	hc := buildHealthConfig(r)
-	if hc.Check == "" {
+	if !hc.Configured() {
 		return defaultReadyTimeout
 	}
 
