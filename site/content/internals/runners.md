@@ -19,12 +19,26 @@ leaving orphans.
 **Stopping.** `SIGTERM` to the process group, wait for the timeout, then `SIGKILL`,
 then a final 3 s grace. A component that ignores `SIGTERM` still dies.
 
-**Logs.** stdout and stderr are captured and streamed into the agent's log, tagged
-with the component name and stream:
+**Logs.** Where journald runs, a component's stdout and stderr are **journald
+streams**, opened by the agent and handed to the process. Entries carry the
+identifier `keystone/<component>`, stdout at priority info and stderr at err, and
+belong to the agent's unit:
 
+```bash
+journalctl -t keystone/api          # one component
+journalctl -u keystone              # the agent and everything it runs
 ```
-[runner] component=api stream=stdout msg=listening on :8080
-```
+
+The stream belongs to the component, not to the agent. That is the point: when
+the agent dies — a crash, or exiting to replace its own binary — the component
+goes on logging, and an adopted process has no gap in its output. Journald's own
+rate limits and disk caps apply.
+
+Without journald (no `/run/systemd/journal/stdout`), output falls back to pipes
+the agent reads, tagged into its log (`[runner] component=api stream=stdout …`).
+The agent logs a warning per component, because then **a component that writes
+dies with the agent**: its next write gets `SIGPIPE`. Re-adoption only holds for
+silent processes in that mode.
 
 **Resource limits.** `RLIMIT_NOFILE` from `[resources].open_files` is applied.
 CPU and memory limits for processes are placeholders today — use a container, or a

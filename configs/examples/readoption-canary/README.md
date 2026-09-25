@@ -120,6 +120,17 @@ journalctl -u keystone | grep -E 'readopt-canary|adopted existing process'
 `lstart` is the tiebreaker: an unchanged PID with a start time *after* the
 restart would mean the PID was reused, not that the process survived.
 
+Then check the heartbeat has no gap. The canary prints every 10 s; a same-PID
+result is only worth something if the lines after the kill keep coming:
+
+```bash
+journalctl -t keystone/readopt-canary --since "-3 min" -o short-iso
+```
+
+Consecutive `alive` lines 10 s apart across the kill, all with the same `pid=`,
+are the pass. Output stopping at the kill means the process lost its log stream
+— or died writing to it.
+
 ## What each outcome means
 
 | Result | Meaning |
@@ -127,6 +138,7 @@ restart would mean the PID was reused, not that the process survived.
 | Same PID, `adopted existing process` in the log | Working. Supervision resumed without an interruption |
 | New PID, `reaping orphan` in the log | The process survived and was not adopted: the reconcile saw the component as changed. Up to v0.12.1 this was every case — the check asked for a supervised component, and after a crash there is none |
 | New PID, no adoption line at all | The process died with the agent. Check `KillMode=process` is in the unit, that the kill used `--kill-whom=main`, and that the agent was killed rather than asked to stop — a clean shutdown stops components on purpose |
+| Same PID, heartbeat stops at the kill | Output was going through the agent (no journald, see the agent's warning), so the next write killed it or went nowhere |
 | Same PID but health stays `unknown` | Worse than a restart: the process is alive and **nobody is supervising it** |
 
 That last row is the one to watch. Re-adoption is only worth having if the

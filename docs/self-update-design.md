@@ -426,11 +426,16 @@ leaves the unit dead. We need a revert, not a stop.
   recipe moved is restarted, because adopting the survivor there would leave
   the old build running while the agent reports the new one.
 
-  Two things an adopted process does not get back, neither recoverable: its
-  **log stream**, whose pipes belonged to the agent that died, and its **exit
-  status**, which the kernel hands to init rather than to us — so an exit is
-  noticed by polling and reported as "it exited", never "it exited with 3". Its
-  health probe still reports on it, which is what matters for supervision.
+  An adopted process does not get back its **exit status**, which the kernel
+  hands to init rather than to us — so an exit is noticed by polling and
+  reported as "it exited", never "it exited with 3". Its health probe still
+  reports on it, which is what matters for supervision.
+
+  Its **logs** survive only because they do not go through the agent: component
+  output is a journald stream the process holds. Through a pipe the agent reads
+  — the fallback without journald — the agent exiting to update itself means
+  `SIGPIPE` on the component's next write, and every component that logs dies
+  on every self-update.
 - **A compromised control plane can push a signed-but-hostile version** if it
   also holds the signing key. Self-update narrows the blast radius of a lost
   device and widens the blast radius of a lost key. That trade is the reason the

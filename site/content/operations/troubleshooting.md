@@ -23,6 +23,7 @@ Look for the reason in this order:
 
 ```bash
 journalctl -u keystone | grep -E "component=<name>|layer failed"
+journalctl -t keystone/<name>        # what the component itself printed
 ```
 
 | Log line | Cause | Fix |

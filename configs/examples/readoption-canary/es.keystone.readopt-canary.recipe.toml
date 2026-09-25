@@ -1,12 +1,12 @@
 # A component whose only job is to be still running afterwards.
 #
 # Used to check that restarting the agent does NOT restart what it supervises.
-# It holds no state, writes nothing outside its own log line, and can be removed
+# It holds no state, writes nothing but a heartbeat to its log, and can be removed
 # by deleting this file and its plan.
 
 [metadata]
 name = "es.keystone.readopt-canary"
-version = "1.0.0"
+version = "1.1.0"
 description = "Does nothing, durably. Proves component re-adoption across an agent restart"
 publisher = "keystone"
 type = "process"
@@ -16,13 +16,17 @@ type = "process"
 restart_policy = "always"
 
 [lifecycle.run.exec]
-# A shell loop rather than `sleep infinity`: it prints, so the journal shows
-# whether the process is the same one across the agent restart, independently
-# of what the agent reports about it.
+# It prints a heartbeat every 10 s, and that is load-bearing. A canary that
+# printed once and then stayed silent passed this test while re-adoption was
+# broken for every real service: with output through pipes the agent reads, a
+# component's first write after the agent dies gets SIGPIPE and kills it. The
+# heartbeat is what a logging service does, so the canary has to survive it.
+# The PID in each line also shows, from the journal alone, that it is the same
+# process across the agent restart.
 command = "/bin/sh"
 args = [
   "-c",
-  "echo \"readopt-canary started pid=$$ at $(date -Is)\"; while true; do sleep 60; done",
+  "echo \"readopt-canary started pid=$$ at $(date -Is)\"; while true; do sleep 10; echo \"readopt-canary alive pid=$$ at $(date -Is)\"; done",
 ]
 
 # A health probe on purpose. Re-adoption reattaches supervision, and a component
