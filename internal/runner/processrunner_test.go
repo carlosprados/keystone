@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestRunManagedRetryLimit(t *testing.T) {
@@ -91,4 +93,35 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// TestOpenFilesLimitsTheComponentNotTheAgent: the limit used to be set on the
+// agent before starting the child. The agent kept it — soft and hard, and a
+// hard limit cannot be raised back without privilege — so one component with
+// open_files = 64 capped the agent and every later component at 64.
+func TestOpenFilesLimitsTheComponentNotTheAgent(t *testing.T) {
+	var before unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &before); err != nil {
+		t.Fatal(err)
+	}
+	h, err := New().Start(context.Background(), Options{Name: "fd", Command: "sleep", Args: []string{"5"}, NoFile: 64})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	ph := h.(*ProcessHandle)
+	t.Cleanup(func() { _ = ph.cmd.Process.Kill(); _ = ph.cmd.Wait() })
+
+	var after unix.Rlimit
+	_ = unix.Getrlimit(unix.RLIMIT_NOFILE, &after)
+	if after != before {
+		t.Errorf("the agent's own limit changed from %+v to %+v", before, after)
+	}
+
+	var child unix.Rlimit
+	if err := unix.Prlimit(ph.pid, unix.RLIMIT_NOFILE, nil, &child); err != nil {
+		t.Fatalf("read child limit: %v", err)
+	}
+	if child.Cur != 64 || child.Max != 64 {
+		t.Errorf("child limit = %+v, want 64/64", child)
+	}
 }

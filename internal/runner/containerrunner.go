@@ -695,16 +695,7 @@ func (r *ContainerRunner) buildSpecOpts(opts Options, image client.Image) []oci.
 		}))
 	}
 
-	// Resources
-	if opts.Resources.MemoryMB > 0 {
-		specOpts = append(specOpts, oci.WithMemoryLimit(uint64(opts.Resources.MemoryMB)*1024*1024))
-	}
-	if opts.Resources.CPUShares > 0 {
-		specOpts = append(specOpts, oci.WithCPUShares(uint64(opts.Resources.CPUShares)))
-	}
-	if opts.Resources.PidsLimit > 0 {
-		specOpts = append(specOpts, oci.WithPidsLimit(opts.Resources.PidsLimit))
-	}
+	specOpts = append(specOpts, resourceSpecOpts(opts.Resources)...)
 
 	// Privileged
 	if opts.Privileged {
@@ -1069,4 +1060,28 @@ func buildHealthExecEnv(containerEnv []string) []string {
 		env = append(env, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	}
 	return env
+}
+
+// resourceSpecOpts turns the declared container limits into OCI spec options.
+func resourceSpecOpts(r ResourceLimits) []oci.SpecOpts {
+	var out []oci.SpecOpts
+	if r.MemoryMB > 0 {
+		out = append(out, oci.WithMemoryLimit(uint64(r.MemoryMB)*1024*1024))
+	}
+	if r.CPUShares > 0 {
+		out = append(out, oci.WithCPUShares(uint64(r.CPUShares)))
+	}
+	// cpu_quota, cpu_period and memory_swap were accepted here and applied to
+	// nothing, while the CLI path honoured some of them: the same recipe got a
+	// CPU limit under docker and none under containerd.
+	if r.CPUQuota > 0 {
+		out = append(out, oci.WithCPUCFS(r.CPUQuota, uint64(cfsPeriod(r))))
+	}
+	if r.MemorySwap != 0 {
+		out = append(out, oci.WithMemorySwap(swapBytes(r.MemorySwap)))
+	}
+	if r.PidsLimit > 0 {
+		out = append(out, oci.WithPidsLimit(r.PidsLimit))
+	}
+	return out
 }

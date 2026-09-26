@@ -123,3 +123,52 @@ func TestValidateRunShapeRejectsAliasesOnProcess(t *testing.T) {
 		t.Fatal("expected a refusal for network_aliases on a process component")
 	}
 }
+
+// TestValidateRunShapeRejectsUnenforcedLimits: memory_limit and cpu_quota under
+// [resources] were parsed and applied to nothing, for processes and containers
+// alike. A recipe declaring a 256M limit ran unbounded. Refused by name now;
+// open_files, which is enforced, still passes.
+func TestValidateRunShapeRejectsUnenforcedLimits(t *testing.T) {
+	for name, set := range map[string]func(*recipe.Recipe){
+		"memory_limit": func(r *recipe.Recipe) { r.Resources.MemoryLimit = "256M" },
+		"cpu_quota":    func(r *recipe.Recipe) { r.Resources.CPUQuota = 50000 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := &recipe.Recipe{}
+			r.Lifecycle.Run.Exec.Command = "/bin/true"
+			set(r)
+			err := validateRunShape(r)
+			if err == nil || !strings.Contains(err.Error(), "not enforced") {
+				t.Fatalf("expected a refusal, got %v", err)
+			}
+		})
+	}
+
+	r := &recipe.Recipe{}
+	r.Lifecycle.Run.Exec.Command = "/bin/true"
+	r.Resources.OpenFiles = 1024
+	if err := validateRunShape(r); err != nil {
+		t.Errorf("open_files is enforced and must be accepted: %v", err)
+	}
+}
+
+// TestValidateRunShapeRejectsLimitsNoRuntimeCanApply: a period with no quota
+// limits nothing, and swap is memory plus swap, which runtimes refuse without a
+// memory limit. Refused rather than passed on to fail, or not, later.
+func TestValidateRunShapeRejectsLimitsNoRuntimeCanApply(t *testing.T) {
+	for name, res := range map[string]recipe.ContainerResources{
+		"period without quota": {CPUPeriod: 100000},
+		"swap without memory":  {MemorySwap: 1024},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := containerRecipe(recipe.ContainerConfig{Image: "app:sha-abc", Resources: res}, recipe.Health{})
+			if err := validateRunShape(r); err == nil {
+				t.Fatal("accepted a limit that cannot take effect")
+			}
+		})
+	}
+	r := containerRecipe(recipe.ContainerConfig{Image: "app:sha-abc", Resources: recipe.ContainerResources{MemoryMB: 256, MemorySwap: 512, CPUQuota: 50000}}, recipe.Health{})
+	if err := validateRunShape(r); err != nil {
+		t.Errorf("a complete set of limits was refused: %v", err)
+	}
+}

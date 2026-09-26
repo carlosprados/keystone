@@ -315,16 +315,24 @@ semantics in [Process privileges](../../security/process-privileges/).
 
 ```toml
 [resources]
-open_files = 4096      # RLIMIT_NOFILE, enforced
-memory_limit = "256M"  # placeholder, not enforced for processes yet
-cpu_quota = 50000      # placeholder, not enforced for processes yet
+open_files = 4096      # RLIMIT_NOFILE on the component, enforced
 ```
 
-{{% notice style="warning" %}}
-For **process** components only `open_files` is enforced today. Memory and CPU
-limits are honoured for containers, through
-`[lifecycle.run.container.resources]`.
-{{% /notice %}}
+`open_files` is set on the component's own process, never on the agent.
+
+`memory_limit` and `cpu_quota` under `[resources]` are **refused**: a recipe that
+declares either fails to apply, naming them. They used to be accepted and applied
+to nothing, for every component type, so a recipe could declare a 256 MB limit
+and run unbounded.
+
+For a **container**, limits go in `[lifecycle.run.container.resources]`, and
+every field there is applied under both containerd and the CLI runtimes:
+`memory_mb`, `memory_swap` (MB, memory plus swap, `-1` unlimited; needs
+`memory_mb`), `cpu_shares`, `cpu_quota` and `cpu_period` (µs; the period
+defaults to 100000 and needs a quota), `pids_limit`.
+
+For a **process**, there are no memory or CPU limits: run it as a container, or
+place it in a systemd slice.
 
 ## Dependencies
 

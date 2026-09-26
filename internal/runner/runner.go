@@ -166,3 +166,21 @@ func DefaultHealthConfig() HealthConfig {
 func (o *Options) IsContainerRunner() bool {
 	return o.Image != ""
 }
+
+// cfsPeriod is the CFS period a quota is measured against: the declared one, or
+// the kernel's default of 100 ms.
+func cfsPeriod(r ResourceLimits) int64 {
+	if r.CPUPeriod > 0 {
+		return r.CPUPeriod
+	}
+	return 100000
+}
+
+// swapBytes converts memory_swap (MB, -1 for unlimited) to the bytes the OCI
+// spec takes.
+func swapBytes(mb int64) int64 {
+	if mb < 0 {
+		return -1
+	}
+	return mb * 1024 * 1024
+}
