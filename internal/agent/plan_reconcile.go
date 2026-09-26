@@ -84,10 +84,16 @@ type reconcileActions struct {
 }
 
 func (a *Agent) ApplyPlan(planPath string, dry bool) error {
-	if !a.applyInProgress.CompareAndSwap(false, true) {
-		return fmt.Errorf("apply already in progress")
+	return a.applyPlanAs(planPath, dry, applyByRequest)
+}
+
+// applyPlanAs is ApplyPlan with a name for whoever is applying, reported to a
+// caller that collides with it.
+func (a *Agent) applyPlanAs(planPath string, dry bool, what string) error {
+	if err := a.tryAcquireApply(what); err != nil {
+		return err
 	}
-	defer a.applyInProgress.Store(false)
+	defer a.releaseApply()
 	return a.applyPlanReconcileUnlocked(planPath, dry, true)
 }
 

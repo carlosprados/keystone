@@ -59,12 +59,12 @@ func (a *Agent) ReconcileNow() (*adapter.ReconcileResult, error) {
 		res.Reason = fmt.Sprintf("plan is %q; a plan stopped by an operator is never resumed automatically", planStatus)
 		return done("skipped", nil)
 	}
-	if !a.applyInProgress.CompareAndSwap(false, true) {
+	if a.tryAcquireApply(applyByTimer) != nil {
 		res.Skipped = true
-		res.Reason = "an apply is already in progress"
+		res.Reason = a.applyBusyReason()
 		return done("skipped", nil)
 	}
-	defer a.applyInProgress.Store(false)
+	defer a.releaseApply()
 
 	before := a.componentFingerprints()
 

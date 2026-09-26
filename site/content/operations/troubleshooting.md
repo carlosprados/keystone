@@ -82,13 +82,35 @@ ps -p "$PID" -o pid,user,cmd
 
 ## The agent came back and started everything again
 
-Expected: on boot the agent re-applies the last plan unless it was explicitly
-stopped. It also reaps init-owned orphans from its previous life first, so ports are
-free. See [State and recovery](../../internals/state-and-recovery/).
+On boot the agent re-applies the last plan unless it was explicitly stopped.
+Components that survived the previous agent and whose recipe and dependencies
+are unchanged are **adopted** — same PID, no restart
+(`adopted existing process` in the log). Everything else starts fresh, and a
+survivor that is not adopted is reaped just before its replacement starts. See
+[State and recovery](../../internals/state-and-recovery/).
+
+If everything restarted anyway, the survivors were not there to adopt: the agent
+was stopped cleanly (`systemctl stop` or `restart` stop components on purpose),
+`KillMode=process` is missing from the unit, or the agent runs under a subreaper.
 
 To keep a device idle across reboots, stop the plan properly
 (`POST /v1/plan/stop`) rather than killing the agent — a `stopped` status is
 remembered, a `SIGKILL` is not.
+
+## An apply answers 503 "… is in progress"
+
+Only one apply runs at a time, and the answer says which one holds it:
+
+| The message names | Meaning |
+|---|---|
+| `the resume of the saved plan after the agent started` | The agent just booted and is converging to its own plan. Normal; retry when it finishes |
+| `a periodic reconcile` | `--reconcile-interval` fired. Retry in a moment |
+| `a plan apply` | Another caller is applying. Check who before retrying over it |
+
+It is a 503, not a 500, because retrying is the right response. A plan status
+stuck at `applying`, and `previous apply was interrupted` on the next boot, are a
+different thing: an apply that did not finish because the agent died during it.
+Look for a `panic` or an OOM kill in the journal.
 
 ## Nothing responds on the API
 

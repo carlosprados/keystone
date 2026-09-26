@@ -350,6 +350,14 @@ paths:
                 - "null"
                 - string
           description: Internal Server Error
+        "503":
+          content:
+            text/plain:
+              schema:
+                type:
+                - "null"
+                - string
+          description: Service Unavailable
       security:
       - bearerAuth: []
       summary: Apply a plan

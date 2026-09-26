@@ -88,8 +88,9 @@ Where MQTT is the only way in, that is the difference between watching an
 update and waiting blind for it.
 
 Concurrent commands are still safe: the agent refuses a second apply while one
-is running (`apply already in progress`) rather than interleaving them, and the
-read-only commands answer throughout.
+is running rather than interleaving them, and the read-only commands answer
+throughout. The refusal names what is running — a requested apply, the resume of
+the saved plan after a boot, or a periodic reconcile — and is retryable.
 
 ## Knowing what build is out there
 
