@@ -42,10 +42,11 @@ func selfUpdateAgent(t *testing.T, root string) *Agent {
 	return New(Options{InsecureSkipVerify: true, SelfUpdateRoot: root})
 }
 
-// TestStageSelfUpdateInstallsBeside is the property the design depends on:
-// nothing is stopped and nothing is overwritten. The running version stays
-// exactly where it was, and the new one is only reached after a restart.
-func TestStageSelfUpdateInstallsBeside(t *testing.T) {
+// TestStageSelfUpdateProposesAndInstallsNothing is the division the A/B unit
+// enforces: the agent may stage and propose, and only the pre-start gate, as
+// root, installs. The agent used to install into versions/ and move current
+// itself, which under the unit's read-only /opt/keystone failed on every device.
+func TestStageSelfUpdateProposesAndInstallsNothing(t *testing.T) {
 	root := t.TempDir()
 	l := selfupdate.Layout{Root: root}
 	if err := l.Install(mustExecutable(t), "v1"); err != nil {
@@ -54,38 +55,64 @@ func TestStageSelfUpdateInstallsBeside(t *testing.T) {
 	if err := l.Activate("v1"); err != nil {
 		t.Fatalf("activate v1: %v", err)
 	}
+	if err := l.SaveState(selfupdate.UpdateState{Confirmed: "v1"}); err != nil {
+		t.Fatal(err)
+	}
 
 	url, sum := binaryServer(t)
 	a := selfUpdateAgent(t, root)
-
 	if err := a.StageSelfUpdate(context.Background(), adapter.SelfUpdateSpec{
 		Version: "v2", URI: url, SHA256: sum,
 	}); err != nil {
 		t.Fatalf("stage: %v", err)
 	}
 
-	installed, _ := l.Installed()
-	if len(installed) != 2 {
-		t.Fatalf("installed = %v, want both versions side by side", installed)
+	if installed, _ := l.Installed(); len(installed) != 1 {
+		t.Errorf("installed = %v: the agent must not install", installed)
 	}
-	if _, err := os.Stat(l.BinaryPath("v1")); err != nil {
-		t.Errorf("the running version was disturbed: %v", err)
+	if cur, _ := l.Current(); cur != "v1" {
+		t.Errorf("current = %q: the agent must not move it", cur)
 	}
-
-	cur, _ := l.Current()
-	if cur != "v2" {
-		t.Errorf("current = %q, want v2 for the next restart", cur)
+	if _, err := os.Stat(filepath.Join(l.StagedDir("v2"), selfupdate.BinaryName)); err != nil {
+		t.Errorf("nothing staged for the gate: %v", err)
 	}
-
 	st, _ := l.LoadState()
-	if st.Pending != "v2" {
-		t.Errorf("pending = %q, want v2", st.Pending)
+	if st.Proposed != "v2" || st.Pending != "" || st.Confirmed != "v1" {
+		t.Errorf("state = %+v, want v2 proposed and nothing else changed", st)
 	}
-	if st.Boots != 0 {
-		t.Errorf("boots = %d, want the trial to start at zero", st.Boots)
+}
+
+// TestStageSelfUpdateUnderAReadOnlyInstallRoot reproduces the unit: everything
+// under the install root is read-only to the agent except staging/ and state/.
+// This is what failed on hardware with "read-only file system".
+func TestStageSelfUpdateUnderAReadOnlyInstallRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
 	}
-	if st.Confirmed != "v1" {
-		t.Errorf("confirmed = %q, want the version that was running", st.Confirmed)
+	root := t.TempDir()
+	l := selfupdate.Layout{Root: root}
+	if err := l.Install(mustExecutable(t), "v1"); err != nil {
+		t.Fatalf("seed v1: %v", err)
+	}
+	if err := l.Activate("v1"); err != nil {
+		t.Fatalf("activate v1: %v", err)
+	}
+	if err := l.SaveState(selfupdate.UpdateState{Confirmed: "v1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{l.VersionsDir(), root} {
+		if err := os.Chmod(d, 0o555); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o755); _ = os.Chmod(l.VersionsDir(), 0o755) })
+
+	url, sum := binaryServer(t)
+	a := selfUpdateAgent(t, root)
+	if err := a.StageSelfUpdate(context.Background(), adapter.SelfUpdateSpec{
+		Version: "v2", URI: url, SHA256: sum,
+	}); err != nil {
+		t.Fatalf("staging under a read-only install root failed: %v", err)
 	}
 }
 
@@ -174,9 +201,8 @@ func mustExecutable(t *testing.T) string {
 var _ = filepath.Join
 
 // TestAFailedVersionCanBeRetried: a version that failed its trial stays in
-// versions/, and the gate points current back at the confirmed one. Retrying it
-// once the cause is fixed — the broker was down — used to be refused as
-// "already installed", which left only inventing a new version number.
+// versions/. Proposing it again once the cause is fixed must work with the same
+// bytes, and be refused with different ones.
 func TestAFailedVersionCanBeRetried(t *testing.T) {
 	root := t.TempDir()
 	l := selfupdate.Layout{Root: root}
@@ -187,31 +213,23 @@ func TestAFailedVersionCanBeRetried(t *testing.T) {
 		t.Fatalf("activate v1: %v", err)
 	}
 	url, sum := binaryServer(t)
-	a := selfUpdateAgent(t, root)
-	spec := adapter.SelfUpdateSpec{Version: "v2", URI: url, SHA256: sum}
-
-	if err := a.StageSelfUpdate(context.Background(), spec); err != nil {
-		t.Fatalf("first attempt: %v", err)
-	}
-	// What the gate leaves after v2 fails its trial.
-	if err := l.Activate("v1"); err != nil {
-		t.Fatalf("roll back: %v", err)
+	// What the gate leaves after v2 failed its trial: installed, not current.
+	if err := l.Install(mustExecutable(t), "v2"); err != nil {
+		t.Fatalf("seed v2: %v", err)
 	}
 	if err := l.SaveState(selfupdate.UpdateState{Confirmed: "v1", LastFailure: "v2 failed to confirm after 3 starts"}); err != nil {
-		t.Fatalf("save state: %v", err)
+		t.Fatal(err)
 	}
 
-	if err := a.StageSelfUpdate(context.Background(), spec); err != nil {
+	a := selfUpdateAgent(t, root)
+	if err := a.StageSelfUpdate(context.Background(), adapter.SelfUpdateSpec{Version: "v2", URI: url, SHA256: sum}); err != nil {
 		t.Fatalf("retrying the failed version was refused: %v", err)
 	}
-	if cur, _ := l.Current(); cur != "v2" {
-		t.Errorf("current = %q, want v2 on trial again", cur)
-	}
-	if st, _ := l.LoadState(); st.Pending != "v2" || st.Confirmed != "v1" {
-		t.Errorf("state = %+v, want v2 pending over v1", st)
+	if st, _ := l.LoadState(); st.Proposed != "v2" {
+		t.Errorf("state = %+v, want v2 proposed again", st)
 	}
 
-	// The version in use, though, is still refused.
+	// The version in use is still refused.
 	if err := a.StageSelfUpdate(context.Background(), adapter.SelfUpdateSpec{Version: "v1", URI: url, SHA256: sum}); err == nil || !strings.Contains(err.Error(), "in use") {
 		t.Errorf("staging the confirmed version: got %v, want a refusal", err)
 	}

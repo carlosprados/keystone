@@ -56,6 +56,18 @@ func main() {
 		return // unreachable: RunPrivdropShim execs on success
 	}
 
+	// The pre-start gate runs this, as root, to verify a staged proposal before
+	// installing it. It is a separate mode so the gate uses the verifier of the
+	// version already installed, never code the proposal brought with it.
+	//
+	// Spelled as a flag on purpose. A version from before this mode existed
+	// rejects an unknown flag and exits 2 at once, so the gate refuses the
+	// proposal. A bare word would have been ignored by flag parsing, and that
+	// old binary would have started a whole agent, as root, inside the gate.
+	if len(os.Args) > 1 && os.Args[1] == verifyUpdateFlag {
+		os.Exit(runVerifyUpdate(os.Args[2:]))
+	}
+
 	// Load .env as early as possible so adapter configuration (flags/env) can use it.
 	config.LoadDotEnvDefault()
 

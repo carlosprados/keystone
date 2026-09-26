@@ -76,7 +76,9 @@ func (a *Agent) StageSelfUpdate(ctx context.Context, spec adapter.SelfUpdateSpec
 
 	// Download into a directory of its own, so a failed or partial attempt
 	// never sits next to a good one with the same name.
-	stagingDir := filepath.Join(layout.StagingDir(), spec.Version)
+	// Not staging/<version>: that is where the finished proposal goes, and this
+	// directory is removed on return.
+	stagingDir := filepath.Join(layout.StagingDir(), ".download-"+spec.Version)
 	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
 		return fmt.Errorf("self-update: create staging dir: %w", err)
 	}
@@ -95,48 +97,39 @@ func (a *Agent) StageSelfUpdate(ctx context.Context, spec adapter.SelfUpdateSpec
 		}
 	}
 
-	if err := a.verifySelfUpdateSignature(ctx, stagingDir, res.Path, spec); err != nil {
+	sigPath, certPath, err := a.verifySelfUpdateSignature(ctx, stagingDir, res.Path, spec)
+	if err != nil {
 		return err
 	}
 
-	if err := layout.Install(res.Path, spec.Version); err != nil {
+	// Propose, do not install. Under the A/B unit this process cannot write
+	// versions/ or move `current`, and that is the design: the pre-start gate
+	// runs as root, verifies the staged binary against the trust bundle itself,
+	// and only then installs and activates it. A compromised agent can propose
+	// a binary but not get one run that the trust bundle does not vouch for.
+	if err := layout.StageProposal(res.Path, sigPath, certPath, spec.Version); err != nil {
 		return fmt.Errorf("self-update: %w", err)
 	}
-
-	// Order matters here, and the obvious order is wrong. MarkPending records
-	// what is running now as the version to fall back to, so it has to read the
-	// symlink BEFORE the symlink moves. Activating first makes it record the
-	// version being installed as its own fallback, which leaves a trial with
-	// nowhere to go back to.
-	//
-	// It is also the safer failure: if marking fails, nothing has moved yet.
-	if err := layout.MarkPending(spec.Version); err != nil {
-		return fmt.Errorf("self-update: mark pending: %w", err)
-	}
-	if err := layout.Activate(spec.Version); err != nil {
-		// Marked but not activated: clear the marker rather than leave the gate
-		// counting restarts of a version that is not going to run.
-		if st, lerr := layout.LoadState(); lerr == nil {
-			st.Pending = ""
-			st.Boots = 0
-			_ = layout.SaveState(st)
-		}
-		return fmt.Errorf("self-update: %w", err)
+	if err := layout.Propose(spec.Version); err != nil {
+		return fmt.Errorf("self-update: propose: %w", err)
 	}
 
-	log.Printf("[selfupdate] %s installed and activated; it takes effect on the next restart", spec.Version)
+	log.Printf("[selfupdate] %s staged and proposed; the pre-start gate verifies and installs it on the next start", spec.Version)
 	return nil
 }
 
 // verifySelfUpdateSignature applies the same rule as every other artifact: a
 // signature is required unless verification was explicitly disabled.
-func (a *Agent) verifySelfUpdateSignature(ctx context.Context, stagingDir, binaryPath string, spec adapter.SelfUpdateSpec) error {
+//
+// It returns the signature and certificate it verified with, so they can travel
+// with the proposal: the gate verifies the same pair again, as root.
+func (a *Agent) verifySelfUpdateSignature(ctx context.Context, stagingDir, binaryPath string, spec adapter.SelfUpdateSpec) (sigPath, certPath string, err error) {
 	if a.insecureSkipVerify {
 		log.Printf("[selfupdate] WARNING installing %s WITHOUT signature verification (--insecure-skip-verify)", spec.Version)
-		return nil
+		return "", "", nil
 	}
 	if a.trustPool == nil {
-		return fmt.Errorf("self-update: signature required but no trust bundle configured; set KEYSTONE_TRUST_BUNDLE")
+		return "", "", fmt.Errorf("self-update: signature required but no trust bundle configured; set KEYSTONE_TRUST_BUNDLE")
 	}
 
 	sigURI := spec.SigURI
@@ -147,30 +140,30 @@ func (a *Agent) verifySelfUpdateSignature(ctx context.Context, stagingDir, binar
 
 	sig, err := artifact.DownloadWithConfig(ctx, filepath.Join(stagingDir, "sig"), sigURI, cfg)
 	if err != nil {
-		return fmt.Errorf("self-update: download signature %s: %w", sigURI, err)
+		return "", "", fmt.Errorf("self-update: download signature %s: %w", sigURI, err)
 	}
 
-	certPath := os.Getenv("KEYSTONE_LEAF_CERT")
+	certPath = os.Getenv("KEYSTONE_LEAF_CERT")
 	if spec.CertURI != "" {
 		cert, cerr := artifact.DownloadWithConfig(ctx, filepath.Join(stagingDir, "cert"), spec.CertURI, cfg)
 		if cerr != nil {
-			return fmt.Errorf("self-update: download certificate %s: %w", spec.CertURI, cerr)
+			return "", "", fmt.Errorf("self-update: download certificate %s: %w", spec.CertURI, cerr)
 		}
 		certPath = cert.Path
 	}
 
-	now, err := a.verificationTime()
-	if err != nil {
-		return fmt.Errorf("self-update: %w", err)
+	now, verr := a.verificationTime()
+	if verr != nil {
+		return "", "", fmt.Errorf("self-update: %w", verr)
 	}
 	if certPath == "" {
-		return fmt.Errorf("self-update: no certificate for signature verification; set KEYSTONE_LEAF_CERT or send certUri")
+		return "", "", fmt.Errorf("self-update: no certificate for signature verification; set KEYSTONE_LEAF_CERT or send certUri")
 	}
 	if err := security.VerifyDetachedAt(binaryPath, sig.Path, certPath, a.trustPool, now); err != nil {
-		return fmt.Errorf("self-update: signature verification failed for %s: %w", spec.Version, err)
+		return "", "", fmt.Errorf("self-update: signature verification failed for %s: %w", spec.Version, err)
 	}
 	log.Printf("[selfupdate] signature verified for %s", spec.Version)
-	return nil
+	return sig.Path, certPath, nil
 }
 
 // RequestRestart asks the process to exit so the supervisor starts it again.

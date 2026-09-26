@@ -295,18 +295,39 @@ the components survive the update's own restart and every restart the deadline
 causes, so later starts converge as fast as the binary comes up. Size the
 deadline against the slowest plan's cold start on that hardware.
 
-**Implemented** as `Agent.StageSelfUpdate`. It downloads, checks the digest,
-verifies the signature, installs beside the running version, records what to
-fall back to, and moves the symlink — then stops. Restarting is a separate
-decision, taken by whoever knows when the device can afford it, and carried out
-by exiting rather than re-executing: a process that replaces its own image
-keeps everything it got wrong, including its belief about which binary is on
-disk.
+**Implemented, and first implemented wrong.** `Agent.StageSelfUpdate` used to
+install the binary into `versions/` and move the symlink itself. The A/B unit
+makes `/opt/keystone` read-only to the agent — that is the design's own
+boundary — so on real hardware it failed every time with `read-only file
+system`. It had only ever run without the unit's sandbox.
 
-One ordering is worth writing down because the obvious one is wrong. The
-fallback version has to be recorded **before** the symlink moves, or it records
-the version being installed as its own fallback and the trial has nowhere to go
-back to. It is also the safer failure: if recording fails, nothing has moved.
+Now the work is split along the boundary:
+
+- **The agent proposes.** It downloads, checks the digest and verifies the
+  signature, then stages the binary, `keystone.sig` and `keystone.crt` in
+  `staging/<version>/` (the one directory it owns there) and sets
+  `KEYSTONE_UPDATE_PROPOSED`. Its verification is an early refusal, not the one
+  that counts.
+- **The gate installs.** At the next start, as root, it:
+  1. copies the proposal to `versions/.incoming-gate`;
+  2. verifies the **copy** with `"$CURRENT/keystone" --verify-update`, so the
+     judge is the version already trusted and the files are ones a leftover
+     agent process can no longer swap;
+  3. refuses a name already installed with different bytes;
+  4. moves the copy into place, records the running version as the fallback if
+     none is confirmed, points `current` at the new one, and marks it pending.
+
+  Any failure is a logged refusal, and the device starts the version it had.
+- **Every name the gate reads is validated** as one plain path component.
+  `CONFIRMED=../../tmp/x` used to be followed.
+- **`--verify-update` is spelled as a flag** so that a version from before it
+  exists exits 2 on the unknown flag. The proposal is refused, rather than an
+  old binary starting a whole agent inside the gate.
+
+Restarting is a separate decision, taken by whoever knows when the device can
+afford it, and carried out by exiting rather than re-executing: a process that
+replaces its own image keeps everything it got wrong, including its belief
+about which binary is on disk.
 
 ### Verifying the download
 

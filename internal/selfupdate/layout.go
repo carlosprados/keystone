@@ -176,6 +176,74 @@ func (l Layout) Install(verifiedBinary, v string) error {
 	return nil
 }
 
+// Names of the files a proposal carries in staging/<version>/. The gate reads
+// the same names; keep the two in step.
+const (
+	StagedSig  = BinaryName + ".sig"
+	StagedCert = BinaryName + ".crt"
+)
+
+// StagedDir is where a proposal for version v waits for the gate.
+func (l Layout) StagedDir(v string) string { return filepath.Join(l.StagingDir(), v) }
+
+// StageProposal leaves a verified binary, with its detached signature and the
+// certificate it verifies against, in staging/v for the pre-start gate.
+//
+// The agent owns staging/ and nothing else under the install root. It cannot
+// write versions/ or move `current`, and under the A/B unit it is not allowed
+// to: a compromised agent may propose a binary, and the gate, as root, verifies
+// the signature itself before installing it. The agent's own verification is
+// an early refusal, not the check that counts.
+func (l Layout) StageProposal(verifiedBinary, sigPath, certPath, v string) error {
+	if err := validVersionName(v); err != nil {
+		return err
+	}
+	if err := CheckArchitecture(verifiedBinary); err != nil {
+		return err
+	}
+	// The same name must keep meaning the same binary. versions/ is readable,
+	// so a clash is refused here rather than by the gate on the next start.
+	if _, err := os.Stat(l.VersionDir(v)); err == nil {
+		same, err := sameContents(l.BinaryPath(v), verifiedBinary)
+		if err != nil {
+			return fmt.Errorf("version %s is installed and cannot be compared: %w", v, err)
+		}
+		if !same {
+			return fmt.Errorf("version %s is already installed with different contents; a version name must mean the same binary everywhere", v)
+		}
+	}
+	if err := os.MkdirAll(l.StagingDir(), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp(l.StagingDir(), ".incoming-*")
+	if err != nil {
+		return fmt.Errorf("create staging dir: %w", err)
+	}
+	defer os.RemoveAll(tmp)
+
+	if err := copyExecutable(verifiedBinary, filepath.Join(tmp, BinaryName)); err != nil {
+		return err
+	}
+	for src, name := range map[string]string{sigPath: StagedSig, certPath: StagedCert} {
+		if src == "" {
+			// Verification disabled (--insecure-skip-verify): nothing to carry.
+			continue
+		}
+		b, err := os.ReadFile(src)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", src, err)
+		}
+		if err := os.WriteFile(filepath.Join(tmp, name), b, 0o644); err != nil {
+			return err
+		}
+	}
+	final := l.StagedDir(v)
+	if err := os.RemoveAll(final); err != nil {
+		return err
+	}
+	return os.Rename(tmp, final)
+}
+
 // Activate points `current` at v.
 //
 // Done with a temporary symlink and a rename because os.Symlink cannot replace

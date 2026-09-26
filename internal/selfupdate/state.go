@@ -35,6 +35,11 @@ type UpdateState struct {
 	// LastFailure records why the previous attempt was reverted, for the
 	// telemetry that a device reports when nobody can go and look.
 	LastFailure string
+	// Proposed is a version the agent has downloaded, verified and left in
+	// staging/, asking the gate to install it. It is the only thing the agent
+	// may ask for: installing, and moving `current`, are the gate's, which runs
+	// as root and verifies the proposal itself before trusting it.
+	Proposed string
 }
 
 const stateFileName = "update.env"
@@ -78,6 +83,8 @@ func (l Layout) LoadState() (UpdateState, error) {
 			st.Confirmed = value
 		case "KEYSTONE_UPDATE_LAST_FAILURE":
 			st.LastFailure = value
+		case "KEYSTONE_UPDATE_PROPOSED":
+			st.Proposed = value
 		}
 	}
 	return st, sc.Err()
@@ -101,6 +108,7 @@ func (l Layout) SaveState(st UpdateState) error {
 	fmt.Fprintf(&b, "KEYSTONE_UPDATE_BOOTS=%d\n", st.Boots)
 	fmt.Fprintf(&b, "KEYSTONE_UPDATE_CONFIRMED=%s\n", sanitiseValue(st.Confirmed))
 	fmt.Fprintf(&b, "KEYSTONE_UPDATE_LAST_FAILURE=%s\n", sanitiseValue(st.LastFailure))
+	fmt.Fprintf(&b, "KEYSTONE_UPDATE_PROPOSED=%s\n", sanitiseValue(st.Proposed))
 
 	tmp := l.StatePath() + ".tmp"
 	if err := os.WriteFile(tmp, []byte(b.String()), 0o644); err != nil {
@@ -113,30 +121,20 @@ func (l Layout) SaveState(st UpdateState) error {
 	return nil
 }
 
-// MarkPending records that a version is installed and about to be tried.
+// Propose asks the gate to install version v, already staged in staging/v.
 //
-// Boots is reset here, not incremented: this is the start of a trial, and the
-// count belongs to the gate. Confirmed is left alone — it is what the trial
-// falls back to, and overwriting it with the version being tried would remove
-// the only thing a rollback can return to.
-func (l Layout) MarkPending(version string) error {
-	if err := validVersionName(version); err != nil {
+// It does not mark the version pending, and it does not move `current`: under
+// the A/B unit the agent cannot write either, on purpose. The gate does both,
+// as root, after verifying the staged binary against the trust bundle itself.
+func (l Layout) Propose(v string) error {
+	if err := validVersionName(v); err != nil {
 		return err
 	}
 	st, err := l.LoadState()
 	if err != nil {
 		return err
 	}
-	if st.Confirmed == "" {
-		// First update on a device that has never confirmed anything. Whatever
-		// is running now is, by definition, working — record it so there is
-		// somewhere to go back to.
-		if current, cerr := l.Current(); cerr == nil && current != "" && current != version {
-			st.Confirmed = current
-		}
-	}
-	st.Pending = version
-	st.Boots = 0
+	st.Proposed = v
 	return l.SaveState(st)
 }
 
