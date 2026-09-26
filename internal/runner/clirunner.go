@@ -393,7 +393,13 @@ func (r *CLIRunner) buildRunArgs(opts Options) []string {
 		args = append(args, "--cpu-shares", strconv.FormatInt(opts.Resources.CPUShares, 10))
 	}
 	if opts.Resources.CPUQuota > 0 {
-		args = append(args, "--cpu-quota", strconv.FormatInt(opts.Resources.CPUQuota, 10))
+		args = append(args, "--cpu-quota", strconv.FormatInt(opts.Resources.CPUQuota, 10),
+			"--cpu-period", strconv.FormatInt(cfsPeriod(opts.Resources), 10))
+	}
+	if opts.Resources.MemorySwap > 0 {
+		args = append(args, "--memory-swap", fmt.Sprintf("%dm", opts.Resources.MemorySwap))
+	} else if opts.Resources.MemorySwap < 0 {
+		args = append(args, "--memory-swap", "-1")
 	}
 	if opts.Resources.PidsLimit > 0 {
 		args = append(args, "--pids-limit", strconv.FormatInt(opts.Resources.PidsLimit, 10))

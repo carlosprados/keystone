@@ -147,7 +147,7 @@ Known limitations, stated plainly:
 
 - **Self-update is new and only half field-tested.** An MQTT `cmd/self-update` downloads and verifies a new binary, installs it A/B beside the running one, restarts, and a systemd pre-start gate reverts it if it does not confirm (requires `--self-update-root` and the `keystone-ab.service` unit). On hardware, only the gate reverting has been exercised so far; a full update end to end has not. See [MQTT](https://carlosprados.github.io/keystone/control-planes/mqtt/).
 - **No built-in TLS for the HTTP API.** Terminate at a reverse proxy, use a VPN, or tunnel with `keystonectl --ssh`. NATS and MQTT do support TLS natively.
-- **cgroups are a no-op placeholder.** ProcessRunner applies `RLIMIT_NOFILE` only: `memory_limit` and `cpu_quota` on a process component are accepted and ignored. Container resource limits do work.
+- **No memory or CPU limits for process components.** ProcessRunner applies `RLIMIT_NOFILE` only, and a recipe declaring `memory_limit` or `cpu_quota` under `[resources]` is refused rather than run unbounded. Containers get every limit in `[lifecycle.run.container.resources]`, under containerd and the CLI runtimes alike.
 - **Component re-adoption needs the system manager.** Survivors of an agent crash are recognised by being reparented to PID 1; under a subreaper (`systemd --user`, `tini`) they are neither adopted nor reaped.
 - **Canary rings are not implemented** (Phase 7b below).
 

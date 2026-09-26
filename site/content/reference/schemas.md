@@ -112,7 +112,10 @@ the trust model, the measured savings and the current limits.
 `protocol`.
 
 `[lifecycle.run.container.resources]`: `memory_mb`, `memory_swap`, `cpu_shares`,
-`cpu_quota`, `cpu_period`, `pids_limit`.
+`cpu_quota`, `cpu_period`, `pids_limit`. All applied under containerd and the CLI
+runtimes. `memory_swap` is MB of memory plus swap (`-1` unlimited) and needs
+`memory_mb`; `cpu_period` defaults to 100000 µs and needs `cpu_quota`. A recipe
+breaking either rule is refused.
 
 ### `[lifecycle.run.state]`
 
@@ -170,9 +173,9 @@ reread a file, and `SIGKILL` would turn "your data changed" into an outage.
 
 | Field | Type | Enforced | Notes |
 |---|---|---|---|
-| `open_files` | uint | yes | `RLIMIT_NOFILE` |
-| `memory_limit` | string | **no** | Placeholder for process components |
-| `cpu_quota` | int | **no** | Placeholder for process components |
+| `open_files` | uint | yes | `RLIMIT_NOFILE`, set on the component's process |
+| `memory_limit` | string | — | **Refused.** Use `[lifecycle.run.container.resources] memory_mb` |
+| `cpu_quota` | int | — | **Refused.** Use `[lifecycle.run.container.resources] cpu_quota` |
 
 ### `[[dependencies]]`
 

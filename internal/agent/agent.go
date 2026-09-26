@@ -1450,6 +1450,22 @@ func checkContainerdNamespace(cr *runner.ContainerRunner) error {
 // refusal, because the symptom lands in a sibling component as a name that
 // does not resolve.
 func validateRunShape(r *recipe.Recipe) error {
+	// Top-level [resources] limits were parsed and applied to nothing, for any
+	// component type: a recipe could declare memory_limit = "256M" and run
+	// unbounded, which is the one outcome a limit exists to prevent. open_files
+	// is the field here that works.
+	if res := r.Resources; strings.TrimSpace(res.MemoryLimit) != "" || res.CPUQuota != 0 {
+		return fmt.Errorf("[resources] memory_limit and cpu_quota are not enforced for any component type; " +
+			"for a container use [lifecycle.run.container.resources] (memory_mb, cpu_quota), " +
+			"for a process run it in a container or a systemd slice. Remove them rather than rely on a limit that does not exist")
+	}
+
+	if cr := r.Lifecycle.Run.Container.Resources; cr.CPUPeriod > 0 && cr.CPUQuota <= 0 {
+		return fmt.Errorf("[lifecycle.run.container.resources] cpu_period has no effect without cpu_quota; set both, or neither")
+	} else if cr.MemorySwap != 0 && cr.MemoryMB <= 0 {
+		return fmt.Errorf("[lifecycle.run.container.resources] memory_swap needs memory_mb: it is memory plus swap, and runtimes refuse it alone")
+	}
+
 	h := r.Lifecycle.Run.Health
 	if h.Check != "" && len(h.Exec) > 0 {
 		return fmt.Errorf("health.check and health.exec are two ways to say the same thing; declare one")

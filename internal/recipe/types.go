@@ -313,11 +313,17 @@ type Health struct {
 	FailureThreshold int      `toml:"failure_threshold"`
 }
 
-// Resources maps to simple limits for the MVP
+// Resources holds limits applied to every component type.
+//
+// Only open_files is enforced (RLIMIT_NOFILE). memory_limit and cpu_quota are
+// still parsed so that a recipe using them is refused by name when it is
+// applied, rather than rejected as an unknown key or, as it used to be,
+// accepted and ignored. Container limits live in
+// [lifecycle.run.container.resources].
 type Resources struct {
 	OpenFiles   uint64 `toml:"open_files"`
-	MemoryLimit string `toml:"memory_limit"` // placeholder, cgroups not enforced yet
-	CPUQuota    int64  `toml:"cpu_quota"`    // placeholder
+	MemoryLimit string `toml:"memory_limit"`
+	CPUQuota    int64  `toml:"cpu_quota"`
 }
 
 // Dependency models recipe-level dependencies referencing other components by name.

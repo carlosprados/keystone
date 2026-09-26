@@ -125,9 +125,6 @@ func (r *ProcessRunner) Start(ctx context.Context, opts Options) (Handle, error)
 	if opts.Command == "" {
 		return nil, fmt.Errorf("empty command")
 	}
-	if err := sysrt.ApplyRlimits(opts.NoFile); err != nil {
-		return nil, err
-	}
 	command, args := opts.Command, opts.Args
 	if !opts.Security.IsZero() {
 		// Privilege restrictions have to be applied in the child, between fork
@@ -174,6 +171,15 @@ func (r *ProcessRunner) Start(ctx context.Context, opts Options) (Handle, error)
 	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
+	}
+	// Set on the child once it exists. Go cannot set rlimits between fork and
+	// exec, so for the first instant the process runs with the agent's limit;
+	// a limit is about what it can accumulate, and nothing accumulates in that
+	// instant. Refusing to run beats running unbounded when it cannot be set.
+	if err := sysrt.LimitOpenFiles(cmd.Process.Pid, opts.NoFile); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("component %s: %w", opts.Name, err)
 	}
 	if stdout != nil {
 		go streamLogs(ctx, opts.Name, "stdout", stdout)
