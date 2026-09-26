@@ -81,6 +81,22 @@ periodically "to be safe" — the agent already re-applies its plan on boot and
 reconciles without churn. Restarting it on a schedule just adds a window where
 nothing is supervising.
 
+## Updating from v0.12.6 or earlier: once, by hand
+
+Up to v0.12.6 the agent tried to install updates itself, which the A/B unit
+does not allow, so a device on one of those versions cannot update itself to a
+later one. Install the new version once from outside, together with the new
+gate script. From then on self-update works through the gate:
+
+```bash
+sudo install -D -m 0755 keystone /opt/keystone/versions/v0.12.7/keystone
+sudo install -m 0755 keystone-update-gate.sh /usr/local/lib/keystone/keystone-update-gate.sh
+sudo ln -sfn versions/v0.12.7 /opt/keystone/current
+# record it as confirmed, so a later update has somewhere to roll back to
+sudo sed -i 's/^KEYSTONE_UPDATE_CONFIRMED=.*/KEYSTONE_UPDATE_CONFIRMED=v0.12.7/' /opt/keystone/state/update.env
+sudo systemctl restart keystone
+```
+
 ## Log volume
 
 Component stdout and stderr are streamed into the agent's log, so a chatty

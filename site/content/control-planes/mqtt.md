@@ -37,8 +37,14 @@ compatible with 3.1.1 brokers, which is what most industrial gear speaks.
 
 ## Replacing the agent itself
 
-`cmd/self-update` installs a new agent binary beside the running one and, by
-default, exits so the supervisor starts it:
+`cmd/self-update` asks the device to replace the agent. The agent downloads the
+binary, checks its digest and signature, and **proposes** it: it leaves the
+binary, signature and certificate in `staging/` and exits so systemd starts it
+again. It does not install anything. Under the A/B unit `/opt/keystone` is
+read-only to the agent, and the pre-start gate, running as root, verifies the
+proposal **again** with the version already installed, installs it into
+`versions/` and moves `current`. A compromised agent can propose a binary, but
+cannot get one run that the trust bundle does not vouch for.
 
 ```json
 {
