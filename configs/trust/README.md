@@ -36,7 +36,10 @@ openssl req -x509 -new -nodes -key ca.key -days 3650 -out ca.pem -subj "/CN=Keys
 
 openssl genpkey -algorithm ed25519 -out leaf.key
 openssl req -new -key leaf.key -out leaf.csr -subj "/CN=keystone-signer"
-openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out leaf.pem -days 365
+# The signer must be issued for codeSigning: agents refuse any other certificate.
+printf 'extendedKeyUsage=codeSigning\nkeyUsage=critical,digitalSignature\n' > leaf.ext
+openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+  -extfile leaf.ext -out leaf.pem -days 365
 ```
 
 Note there is no `-sha256` on an Ed25519 certificate: the algorithm has its hash

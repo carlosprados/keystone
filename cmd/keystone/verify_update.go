@@ -48,6 +48,13 @@ func runVerifyUpdate(args []string) int {
 		fmt.Fprintln(os.Stderr, "verify-update: no trust bundle configured (KEYSTONE_TRUST_BUNDLE); refusing")
 		return 1
 	}
+	// Same transition policy as the agent that proposed this: without it, a
+	// no-EKU signer the agent accepted would be refused here and every update
+	// would roll back.
+	if allow, _ := strconv.ParseBool(os.Getenv("KEYSTONE_ALLOW_NO_EKU_SIGNERS")); allow {
+		security.AllowNoEKUSigners(true)
+		fmt.Fprintln(os.Stderr, "verify-update: WARNING accepting signers with no extended key usage (KEYSTONE_ALLOW_NO_EKU_SIGNERS)")
+	}
 	roots, err := security.LoadTrustBundle(bundle)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "verify-update: %v\n", err)

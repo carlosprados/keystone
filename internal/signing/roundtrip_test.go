@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -199,6 +200,7 @@ func issueLeaf(t *testing.T, ca *x509.Certificate, caKey crypto.Signer, leafKey 
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, leafKey.Public(), caKey)
 	if err != nil {
@@ -222,4 +224,37 @@ func writeKeyPEM(t *testing.T, dir string, key crypto.Signer) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// TestSigningRefusesASignerAgentsWillReject: a signature made with a certificate
+// that is not issued for codeSigning would fail on every device. Refused here,
+// where the person who can fix it is.
+func TestSigningRefusesASignerAgentsWillReject(t *testing.T) {
+	dir := t.TempDir()
+	ca, caKey := newCA(t)
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "tls-not-a-signer"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, leafKey.Public(), caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, _ := x509.MarshalPKCS8PrivateKey(leafKey)
+	keyPath := filepath.Join(dir, "k.pem")
+	certPath := filepath.Join(dir, "c.pem")
+	target := filepath.Join(dir, "f")
+	_ = os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600)
+	_ = os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644)
+	_ = os.WriteFile(target, []byte("x"), 0o644)
+
+	_, err = signing.SignFile(signing.FileBackend{KeyPath: keyPath, CertPath: certPath}, target)
+	if err == nil || !strings.Contains(err.Error(), "codeSigning") {
+		t.Fatalf("got %v, want a refusal naming codeSigning", err)
+	}
 }
