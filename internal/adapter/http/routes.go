@@ -217,7 +217,7 @@ func (a *Adapter) routes() []Route {
 			Params: []Param{
 				{Name: "dry", In: "query", Description: "true validates and reports the reconcile without installing or starting anything", Example: "true"},
 			},
-			Errors:  []int{http.StatusBadRequest, http.StatusInternalServerError},
+			Errors:  []int{http.StatusBadRequest, http.StatusServiceUnavailable, http.StatusInternalServerError},
 			handler: a.handlePlanApply,
 		},
 		{

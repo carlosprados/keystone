@@ -65,6 +65,8 @@ type Agent struct {
 	snapMu             sync.Mutex
 	// applyInProgress acts as a process-wide critical section for plan apply operations.
 	applyInProgress atomic.Bool
+	applyHolderMu   sync.Mutex
+	applyHolder     applyHolder
 	comps           *store.MemoryStore
 	handles         map[string]runner.Handle // Process or container handles
 	runners         map[string]runner.Runner // Runner instances (for containers that need cleanup)
@@ -252,7 +254,7 @@ func New(opts Options) *Agent {
 			}
 			go func() {
 				log.Printf("[agent] resuming last plan: %s", a.planPath)
-				if err := a.ApplyPlan(a.planPath, false); err != nil {
+				if err := a.applyPlanAs(a.planPath, false, applyByResume); err != nil {
 					log.Printf("[agent] resume failed: %v", err)
 				}
 				// Anything still on offer was not claimed by the plan: it is a
