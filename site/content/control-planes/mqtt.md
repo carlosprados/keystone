@@ -65,9 +65,41 @@ things: the plan converged, **and** a control plane has heard from the device �
 see [self-update]({{% relref "/concepts/plans" %}}) for why starting is not
 enough on its own.
 
+**Proving itself has a deadline.** The gate counts *starts*, and nothing else
+restarts a version that starts fine and then cannot confirm — it converges and
+never reaches the control plane, or reaches it and never converges. Such a
+version would run unconfirmed forever. So a version on trial that has not
+confirmed within `--self-update-confirm-timeout` (default 5 minutes) says so in
+its log and exits for a restart, leaving its components running for the next
+start to adopt. The gate counts that start, and rolls back after its limit
+(three by default): about 15 minutes, with no component restarted along the
+way. `0` disables the deadline, and with it the rollback of a mute version.
+
+**`version` names the install directory**, and that name is the version's
+identity from then on: the pending marker, the rollback target and the version
+the device confirms. It does not have to match what the binary reports about
+itself; release binaries report `0.12.4` and are usually named `v0.12.4`, and
+both work.
+
+**A version that failed can be retried.** It stays installed after the gate
+rolls it back. Sending the same command again once the cause is fixed reuses
+it — provided the binary is byte-for-byte the same. Different bytes under a name
+already installed are refused: a version name must mean one binary everywhere.
+The running version and the confirmed one are always refused.
+
 **Requires `--self-update-root`.** An agent without it refuses the command
 rather than half-answering, which is what every install upgraded from outside
 should do.
+
+## A broker that is away does not stop the agent
+
+The agent starts whether or not the broker answers, and keeps retrying the
+first connection every 10 s in the background; subscriptions and the online
+status are set up whenever it succeeds. It used to exit when the first
+connection failed, which on a device after a power cut — the router back after
+the device — meant restarting in a loop supervising nothing until systemd gave
+up on the unit. A control plane being away is the normal case at the edge, and
+must never stop the agent running what it already knows.
 
 ## A slow command does not silence the channel
 

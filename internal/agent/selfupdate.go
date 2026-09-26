@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/carlosprados/keystone/internal/adapter"
@@ -43,7 +44,8 @@ func (a *Agent) StageSelfUpdate(ctx context.Context, spec adapter.SelfUpdateSpec
 	if spec.SHA256 == "" && !a.insecureSkipVerify {
 		return fmt.Errorf("self-update: sha256 is required")
 	}
-	if spec.Version == version.Version {
+	// A release binary reports "0.12.4" and commands name it "v0.12.4".
+	if strings.TrimPrefix(spec.Version, "v") == strings.TrimPrefix(version.Version, "v") {
 		return fmt.Errorf("self-update: %s is already running", spec.Version)
 	}
 
@@ -52,11 +54,23 @@ func (a *Agent) StageSelfUpdate(ctx context.Context, spec adapter.SelfUpdateSpec
 		return fmt.Errorf("self-update: prepare layout: %w", err)
 	}
 
+	// A version already on disk is refused only while it is in use: the one
+	// running, or the one a failure rolls back to. Any other is a version that
+	// failed its trial, and retrying it after fixing what failed — the broker,
+	// the network — has to be possible without inventing a new version number.
+	// Install then insists the bytes are the same, so the name keeps meaning
+	// one binary.
 	if installed, err := layout.Installed(); err == nil {
+		current, _ := layout.Current()
+		st, _ := layout.LoadState()
 		for _, v := range installed {
-			if v == spec.Version {
-				return fmt.Errorf("self-update: version %s is already installed", spec.Version)
+			if v != spec.Version {
+				continue
 			}
+			if v == current || v == st.Confirmed {
+				return fmt.Errorf("self-update: version %s is already installed and in use", spec.Version)
+			}
+			log.Printf("[selfupdate] %s is installed from an earlier attempt that did not confirm; retrying it", spec.Version)
 		}
 	}
 

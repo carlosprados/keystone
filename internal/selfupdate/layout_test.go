@@ -108,9 +108,29 @@ func TestInstallRefusesOverwrite(t *testing.T) {
 	if err := l.Install(thisBinary(t), "v1"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	err := l.Install(thisBinary(t), "v1")
-	if err == nil || !strings.Contains(err.Error(), "already installed") {
-		t.Fatalf("expected a refusal to overwrite, got %v", err)
+
+	other := filepath.Join(t.TempDir(), "keystone")
+	if err := os.WriteFile(other, []byte("a different binary"), 0o755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	err := l.Install(other, "v1")
+	if err == nil || !strings.Contains(err.Error(), "different contents") {
+		t.Fatalf("expected a refusal to put different bytes under v1, got %v", err)
+	}
+}
+
+// TestInstallRetriesTheSameBinary: a version that failed its trial stays on
+// disk, and retrying it after fixing the cause — the broker, the network — must
+// not need a new version number. The same bytes under the same name is not an
+// overwrite.
+func TestInstallRetriesTheSameBinary(t *testing.T) {
+	l := Layout{Root: t.TempDir()}
+
+	if err := l.Install(thisBinary(t), "v1"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if err := l.Install(thisBinary(t), "v1"); err != nil {
+		t.Fatalf("retrying the same binary was refused: %v", err)
 	}
 }
 
@@ -198,5 +218,40 @@ func TestCurrentOnAFreshInstall(t *testing.T) {
 	}
 	if cur != "" {
 		t.Errorf("current = %q, want empty", cur)
+	}
+}
+
+// TestRunningVersionIsTheInstallDirectory: the pending marker says "v0.12.4"
+// while a release binary reports "0.12.4". Confirmation compared those two, so
+// no release could confirm and the gate reverted every good update. The
+// directory the binary runs from is the name the gate uses.
+func TestRunningVersionIsTheInstallDirectory(t *testing.T) {
+	l := Layout{Root: t.TempDir()}
+	if err := os.MkdirAll(l.VersionDir("v0.12.4"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := l.BinaryPath("v0.12.4")
+	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("versions", "v0.12.4"), l.CurrentLink()); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, exe := range map[string]string{
+		"direct":          bin,
+		"through current": filepath.Join(l.CurrentLink(), BinaryName),
+	} {
+		if v, ok := l.RunningVersion(exe); !ok || v != "v0.12.4" {
+			t.Errorf("%s: RunningVersion = %q, %v; want v0.12.4", name, v, ok)
+		}
+	}
+
+	outside := filepath.Join(t.TempDir(), BinaryName)
+	if err := os.WriteFile(outside, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := l.RunningVersion(outside); ok {
+		t.Errorf("a binary outside the layout was named %q", v)
 	}
 }
