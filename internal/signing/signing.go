@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/carlosprados/keystone/internal/security"
 )
 
 // Backend resolves the key material a signature needs.
@@ -171,6 +173,11 @@ func SignFile(b Backend, path string) ([]byte, error) {
 	if cert != nil {
 		if err := VerifyDigest(cert, digest, sig); err != nil {
 			return nil, fmt.Errorf("the signature does not verify against %T in the certificate: %w", cert.PublicKey, err)
+		}
+		// Refused here rather than on every device: agents only accept
+		// signers issued for codeSigning.
+		if err := security.CheckSignerEKU(cert); err != nil {
+			return nil, fmt.Errorf("agents will refuse this signature: %w", err)
 		}
 	}
 	return sig, nil

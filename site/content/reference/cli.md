@@ -12,6 +12,8 @@ running. This is that output:
 
 ```text
 Usage of keystone:
+  -allow-no-eku-signers
+    	Transition only: accept signing certificates that carry no extended key usage. Signers must be issued for codeSigning; certificates made before that was required have no EKU and are refused without this. Logged loudly every time it admits one. Will be removed
   -api-token string
     	Bearer token required for the HTTP API (or KEYSTONE_API_TOKEN); required to bind a non-loopback address
   -clock-policy string

@@ -50,6 +50,52 @@ than RSA-3072. The other two keep working, so material generated earlier is
 unaffected. The leaf can be provisioned on the device or
 fetched per artifact with `cert_uri`.
 
+### The signer must be issued for codeSigning
+
+The leaf that signs has to list **codeSigning** in its extended key usage, and
+every CA between it and the bundle has to allow it too. Anything else is refused:
+a TLS server certificate, a device's client certificate, or a certificate with no
+extended key usage at all.
+
+Why it is strict: the verifier used to ask for no usage, and Go then checks for
+server authentication. So any certificate from the bundle with no EKU or with
+`serverAuth` — a broker's TLS certificate, for one — could sign a recipe, while
+a correctly issued codeSigning-only certificate was rejected. A CA that issues
+identities for connections must never be able to authorise code; restricting its
+EKU is what makes that hold.
+
+Certificates after the leaf in the certificate file are used as intermediates,
+so a signer can chain through a signing CA without that CA being in the bundle.
+
+{{% notice style="warning" title="Certificates with no EKU, during a transition" %}}
+Signers issued before this was required usually carry no extended key usage and
+are now refused. `--allow-no-eku-signers` (`KEYSTONE_ALLOW_NO_EKU_SIGNERS=true`)
+admits them, and only them: never a certificate issued for something else. The
+agent says so in its log every time it uses the allowance. Reissue the signer
+for codeSigning and turn it off; the flag will be removed. `keystonectl verify`
+honours the same variable, and `keystonectl sign` refuses a certificate the
+agents will refuse, so the mistake shows at signing rather than on every device.
+The self-update gate (`keystone --verify-update`) honours the variable too, but
+not the flag, which it never sees: set it in `/etc/keystone/keystone.env`, or the
+gate refuses what the agent proposed and the update rolls back.
+{{% /notice %}}
+
+### The trust bundle is for code only
+
+The agent refuses to start when a certificate in the trust bundle shares a key
+with one used for transport: `--mqtt-tls-ca`, the `--mqtt-tls-cert` chain, or the
+NATS equivalents. It is compared by key, so a CA reissued under a new serial
+still counts. Keep one CA, or a set of them, for signing code, and different
+ones for broker and device identities.
+
+To issue a signer with openssl:
+
+```bash
+printf 'extendedKeyUsage=codeSigning\nkeyUsage=critical,digitalSignature\n' > leaf.ext
+openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+  -extfile leaf.ext -out leaf.pem -days 365
+```
+
 ### The scheme, exactly
 
 The signed message is the file's **32-byte SHA-256 digest**, for every

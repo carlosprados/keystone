@@ -13,10 +13,47 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"os"
+	"sync/atomic"
 	"time"
 )
+
+// allowNoEKUSigners admits signing certificates that carry no extended key
+// usage at all. It exists only for the transition: certificates issued before
+// codeSigning was required have no EKU, and refusing them at once would stop
+// every device that still holds one. Off unless an operator turns it on.
+var allowNoEKUSigners atomic.Bool
+
+// AllowNoEKUSigners sets the transition policy for signing certificates with no
+// extended key usage. Call it once at startup.
+func AllowNoEKUSigners(allow bool) { allowNoEKUSigners.Store(allow) }
+
+// CheckSignerEKU reports whether cert may sign what Keystone verifies: it must
+// list codeSigning. A certificate with no EKU at all passes only while the
+// transition policy allows it, and says so in the log every time.
+//
+// Why explicit: x509 treats a certificate with no EKU as good for any purpose,
+// and the verifier used to ask for none, so x509 checked ServerAuth. Any no-EKU
+// or serverAuth certificate from the trust bundle — a broker's TLS certificate,
+// for one — could sign a recipe, while a correctly made codeSigning-only
+// certificate was rejected.
+func CheckSignerEKU(cert *x509.Certificate) error {
+	for _, u := range cert.ExtKeyUsage {
+		if u == x509.ExtKeyUsageCodeSigning {
+			return nil
+		}
+	}
+	if len(cert.ExtKeyUsage) == 0 && len(cert.UnknownExtKeyUsage) == 0 {
+		if allowNoEKUSigners.Load() {
+			log.Printf("[security] WARNING accepting signer %q with no extended key usage (--allow-no-eku-signers). Reissue it with codeSigning: this allowance is temporary", cert.Subject.CommonName)
+			return nil
+		}
+		return fmt.Errorf("signing certificate %q has no extended key usage; it must be issued for codeSigning (during a transition, --allow-no-eku-signers admits it)", cert.Subject.CommonName)
+	}
+	return fmt.Errorf("signing certificate %q is not issued for codeSigning", cert.Subject.CommonName)
+}
 
 // LoadTrustBundle loads a PEM bundle of trusted roots into a CertPool.
 func LoadTrustBundle(pemPath string) (*x509.CertPool, error) {
@@ -101,9 +138,27 @@ func VerifyDetachedAt(filePath, sigPath, leafCertPath string, roots *x509.CertPo
 	}
 	leaf := certs[0]
 
-	// Verify chain. CurrentTime zero means x509 uses the system clock.
-	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, CurrentTime: now}); err != nil {
+	// Certificates after the leaf are its intermediates. They were ignored, so
+	// a chain through an intermediate CA verified only if that intermediate had
+	// been put in the trust bundle itself.
+	intermediates := x509.NewCertPool()
+	for _, c := range certs[1:] {
+		intermediates.AddCert(c)
+	}
+
+	// Verify the chain for code signing, which also holds every CA in the chain
+	// to it: an intermediate restricted to clientAuth cannot authorise code.
+	// CurrentTime zero means x509 uses the system clock.
+	if _, err := leaf.Verify(x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		CurrentTime:   now,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
+	}); err != nil {
 		return fmt.Errorf("certificate verify failed: %w", err)
+	}
+	if err := CheckSignerEKU(leaf); err != nil {
+		return err
 	}
 
 	// Verify signature according to key type
@@ -175,3 +230,66 @@ func parsePEMCerts(b []byte) ([]*x509.Certificate, error) {
 	}
 	return out, nil
 }
+
+// CheckTransportSeparation refuses a trust bundle that shares a key with the
+// certificates used for transport: the MQTT or NATS CA file, or a client
+// certificate chain.
+//
+// The trust bundle decides what code a device runs. A CA that issues transport
+// identities — broker certificates, device client certificates — is operated
+// for a different purpose and usually by different people, and if it is also
+// trusted for code, whoever can get a connection certificate issued can get a
+// recipe accepted. Requiring the codeSigning EKU narrows that; separation closes it.
+// Compared by public key, so a CA reissued under another serial still counts.
+//
+// Empty paths are skipped. A trust bundle path that is empty means signing is
+// not configured, and there is nothing to keep apart.
+func CheckTransportSeparation(trustBundlePath string, transportFiles ...string) error {
+	if trustBundlePath == "" {
+		return nil
+	}
+	codeKeys, err := keysIn(trustBundlePath)
+	if err != nil {
+		return fmt.Errorf("read trust bundle %s: %w", trustBundlePath, err)
+	}
+	for _, path := range transportFiles {
+		if path == "" {
+			continue
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		certs, err := parsePEMCerts(b)
+		if err != nil {
+			// A key file or anything else without certificates: nothing to compare.
+			continue
+		}
+		for _, c := range certs {
+			if subject, shared := codeKeys[spkiHash(c)]; shared {
+				return fmt.Errorf("%s contains %q, whose key is also in the trust bundle %s as %q: "+
+					"a certificate authority used for transport must never be trusted to authorise code; use separate CAs",
+					path, c.Subject.String(), trustBundlePath, subject)
+			}
+		}
+	}
+	return nil
+}
+
+func keysIn(path string) (map[[32]byte]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	certs, err := parsePEMCerts(b)
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[[32]byte]string, len(certs))
+	for _, c := range certs {
+		keys[spkiHash(c)] = c.Subject.String()
+	}
+	return keys, nil
+}
+
+func spkiHash(c *x509.Certificate) [32]byte { return sha256.Sum256(c.RawSubjectPublicKeyInfo) }

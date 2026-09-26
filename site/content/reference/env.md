@@ -17,6 +17,7 @@ anything else, so these can live there or in a systemd `EnvironmentFile`.
 | `KEYSTONE_TRUST_BUNDLE` | — | PEM file of CAs used to verify artifact and recipe signatures |
 | `KEYSTONE_LEAF_CERT` | — | Provisioned signing leaf certificate |
 | `KEYSTONE_INSECURE_SKIP_VERIFY` | `false` | Disables mandatory artifact integrity. Development only |
+| `KEYSTONE_ALLOW_NO_EKU_SIGNERS` | `false` | Transition only: accepts signing certificates with no extended key usage. Also honoured by `keystonectl verify` and by the self-update gate (`--verify-update`), which reads only the variable, not the flag |
 | `KEYSTONE_MAX_REQUEST_BYTES` | 4 MiB | HTTP request body cap (413 on overflow) |
 | `KEYSTONE_MAX_EXTRACT_BYTES` | 2 GiB | Cap on decompressed archive size, so a small archive cannot fill the disk |
 
