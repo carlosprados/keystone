@@ -172,3 +172,47 @@ func mustExecutable(t *testing.T) string {
 }
 
 var _ = filepath.Join
+
+// TestAFailedVersionCanBeRetried: a version that failed its trial stays in
+// versions/, and the gate points current back at the confirmed one. Retrying it
+// once the cause is fixed — the broker was down — used to be refused as
+// "already installed", which left only inventing a new version number.
+func TestAFailedVersionCanBeRetried(t *testing.T) {
+	root := t.TempDir()
+	l := selfupdate.Layout{Root: root}
+	if err := l.Install(mustExecutable(t), "v1"); err != nil {
+		t.Fatalf("seed v1: %v", err)
+	}
+	if err := l.Activate("v1"); err != nil {
+		t.Fatalf("activate v1: %v", err)
+	}
+	url, sum := binaryServer(t)
+	a := selfUpdateAgent(t, root)
+	spec := adapter.SelfUpdateSpec{Version: "v2", URI: url, SHA256: sum}
+
+	if err := a.StageSelfUpdate(context.Background(), spec); err != nil {
+		t.Fatalf("first attempt: %v", err)
+	}
+	// What the gate leaves after v2 fails its trial.
+	if err := l.Activate("v1"); err != nil {
+		t.Fatalf("roll back: %v", err)
+	}
+	if err := l.SaveState(selfupdate.UpdateState{Confirmed: "v1", LastFailure: "v2 failed to confirm after 3 starts"}); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	if err := a.StageSelfUpdate(context.Background(), spec); err != nil {
+		t.Fatalf("retrying the failed version was refused: %v", err)
+	}
+	if cur, _ := l.Current(); cur != "v2" {
+		t.Errorf("current = %q, want v2 on trial again", cur)
+	}
+	if st, _ := l.LoadState(); st.Pending != "v2" || st.Confirmed != "v1" {
+		t.Errorf("state = %+v, want v2 pending over v1", st)
+	}
+
+	// The version in use, though, is still refused.
+	if err := a.StageSelfUpdate(context.Background(), adapter.SelfUpdateSpec{Version: "v1", URI: url, SHA256: sum}); err == nil || !strings.Contains(err.Error(), "in use") {
+		t.Errorf("staging the confirmed version: got %v, want a refusal", err)
+	}
+}

@@ -273,10 +273,27 @@ the ideal, so `main` decides it from the adapters it just wired.
 The adapters do not know about self-update. They call through a one-method
 interface they type-assert, so an install without it simply reports nothing.
 
-**Sizing the timeout.** Until component re-adoption exists (below), an agent
-restart also restarts everything it supervises, so "converged" is the startup
-time of the whole plan, not of the binary. Tuning the counter against a binary
-start will revert good updates for being slow.
+**The deadline, implemented.** The gate counts starts, and a version that starts
+and never confirms is never restarted, so as first built it ran unconfirmed
+forever — the mute case this section exists for. `--self-update-confirm-timeout`
+(default 5 minutes) makes a trial that has not confirmed exit for a restart,
+leaving components for the next start to adopt; the gate counts it and rolls
+back after `KEYSTONE_UPDATE_MAX_BOOTS`. Only a trial is watched — this version is
+the pending one — because an ordinary start that cannot reach its control plane
+has nothing to roll back to. A run with no plan to resume counts as converged.
+
+**Version identity is the install directory.** The pending marker and the
+rollback target carry the name the command sent (`v0.12.4`); a release binary
+reports GoReleaser's `{{.Version}}` (`0.12.4`). Confirmation compared the two, so
+no release could confirm. The running version is now the directory under
+`versions/` the binary was started from.
+
+**Sizing the timeout.** "Converged" is the startup time of the whole plan, not
+of the binary, and the deadline has to leave room for it or it reverts good
+updates for being slow. Re-adoption (below) makes that a first-start cost only:
+the components survive the update's own restart and every restart the deadline
+causes, so later starts converge as fast as the binary comes up. Size the
+deadline against the slowest plan's cold start on that hardware.
 
 **Implemented** as `Agent.StageSelfUpdate`. It downloads, checks the digest,
 verifies the signature, installs beside the running version, records what to

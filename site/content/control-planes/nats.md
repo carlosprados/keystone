@@ -58,6 +58,14 @@ keystone --nats-url tls://broker:4222 --nats-device-id edge-001 \
 mTLS is supported with `--nats-tls-cert` / `--nats-tls-key`, and
 `--nats-tls-verify=false` exists for testing only.
 
+## A server that is away does not stop the agent
+
+The agent starts whether or not NATS answers, and keeps retrying in the
+background. Subscriptions are buffered and sent on connect, and the JetStream
+job queue is set up on the first real connection rather than given up for the
+run. It used to exit when the first connection failed, which on a device after
+a power cut meant supervising nothing until systemd gave up on the unit.
+
 ## JetStream
 
 Without JetStream, a command sent to an offline device is lost. With it, commands

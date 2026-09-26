@@ -106,6 +106,7 @@ func main() {
 	clockPolicy := flag.String("clock-policy", "high-water", "What to do when the system clock is behind known-good time: high-water (verify against the later of the two) or strict (refuse to verify)")
 
 	// Periodic reconcile flags
+	selfUpdateConfirmTimeout := flag.Duration("self-update-confirm-timeout", 5*time.Minute, "How long a newly installed version has to confirm itself (plan healthy and, with a remote control plane, heard from) before it restarts so the pre-start gate counts the attempt; the gate rolls back after its limit of starts. Only applies while a version is on trial. 0 disables it, and then a version that starts fine but cannot reach its control plane is never rolled back")
 	reconcileInterval := flag.Duration("reconcile-interval", 0, "Re-apply the plan in effect on this interval so dead components are restarted (0 disables it)")
 	reconcileJitter := flag.Duration("reconcile-jitter", 0, "Spread reconcile passes across a fleet by this much (defaults to 10% of the interval)")
 
@@ -193,6 +194,7 @@ func main() {
 	applyStringEnv("clock-policy", clockPolicy, "KEYSTONE_CLOCK_POLICY")
 
 	// Periodic reconcile env support.
+	applyDurationEnv("self-update-confirm-timeout", selfUpdateConfirmTimeout, "KEYSTONE_SELF_UPDATE_CONFIRM_TIMEOUT")
 	applyDurationEnv("reconcile-interval", reconcileInterval, "KEYSTONE_RECONCILE_INTERVAL")
 	applyDurationEnv("reconcile-jitter", reconcileJitter, "KEYSTONE_RECONCILE_JITTER")
 	// Jitter follows the interval unless someone asked for a specific value —
@@ -309,10 +311,26 @@ func main() {
 		// a report would mean no update could ever confirm — every one of them
 		// reverted by a guardrail meant to catch the broken ones.
 		requireReport := *mqttBroker != "" || *natsURL != ""
-		conf := selfupdate.NewConfirmation(layout, version.Version, requireReport)
+		// The version this run confirms is the install directory it was started
+		// from, the same name the pending marker and the gate use. The compiled-in
+		// version is only a fallback for a binary started outside the layout.
+		running := version.Version
+		if exe, err := os.Executable(); err == nil {
+			if v, ok := layout.RunningVersion(exe); ok {
+				running = v
+			}
+		}
+		conf := selfupdate.NewConfirmation(layout, running, requireReport)
 		a.SetUpdateConfirmation(conf)
+		// Convergence is marked when a plan applies. With no plan to resume
+		// there is nothing to converge: without this, an agent with no plan
+		// could never confirm an update, and the deadline would revert it.
+		if !a.ResumesPlan() {
+			conf.MarkConverged()
+		}
+		conf.WatchDeadline(ctx, *selfUpdateConfirmTimeout, a.RequestRestart)
 		log.Printf("[main] self-update confirmation enabled at %s (version %s, report required: %v)",
-			*selfUpdateRoot, version.Version, requireReport)
+			*selfUpdateRoot, running, requireReport)
 	}
 
 	// Register the periodic reconcile adapter (if configured). Off unless asked

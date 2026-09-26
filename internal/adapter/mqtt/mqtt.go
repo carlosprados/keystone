@@ -18,6 +18,10 @@ import (
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+// connectRetryInterval is how often the first connection is retried while the
+// broker is unreachable. Later reconnects back off up to MaxReconnectWait.
+const connectRetryInterval = 10 * time.Second
+
 // Adapter implements the MQTT control plane adapter.
 type Adapter struct {
 	cfg     Config
@@ -171,6 +175,14 @@ func (a *Adapter) Start(ctx context.Context) error {
 	opts.SetCleanSession(a.cfg.CleanSession)
 	opts.SetAutoReconnect(a.cfg.AutoReconnect)
 	opts.SetMaxReconnectInterval(a.cfg.MaxReconnectWait)
+	// Retry the FIRST connection too. AutoReconnect only covers a connection
+	// that once succeeded, so a broker unreachable at boot made Start fail and
+	// the agent exit: after a power cut where the router comes back after the
+	// device, the agent crash-looped supervising nothing until systemd gave up
+	// on the unit. A control plane being away is the normal case on the edge,
+	// and must never stop the agent running what it already knows.
+	opts.SetConnectRetry(true)
+	opts.SetConnectRetryInterval(connectRetryInterval)
 
 	// TLS configuration.
 	//
@@ -230,19 +242,27 @@ func (a *Adapter) Start(ctx context.Context) error {
 		log.Printf("[mqtt] reconnecting to %s", a.cfg.Broker)
 	})
 
-	// Create and connect client
+	// Create and connect client. With ConnectRetry the token completes only
+	// once connected, so wait a moment for the common case and otherwise let
+	// the client keep trying in the background: subscriptions and the online
+	// status are set up by the OnConnect handler whenever that happens.
 	client := pahomqtt.NewClient(opts)
-	token := client.Connect()
-	if !token.WaitTimeout(a.cfg.ConnectTimeout) {
-		return fmt.Errorf("connection timeout")
-	}
-	if err := token.Error(); err != nil {
-		return fmt.Errorf("failed to connect to MQTT broker: %w", err)
-	}
-
 	a.mu.Lock()
 	a.client = client
 	a.mu.Unlock()
+
+	//
+	// Start does not wait for it. Waiting ConnectTimeout here held up every
+	// adapter after this one, and main with them: a restart the self-update
+	// deadline asked for sat unserved for the whole wait.
+	token := client.Connect()
+	go func() {
+		if !token.WaitTimeout(a.cfg.ConnectTimeout) {
+			log.Printf("[mqtt] WARNING broker %s unreachable at startup; retrying every %s in the background. The agent keeps supervising its components meanwhile", a.cfg.Broker, connectRetryInterval)
+		} else if err := token.Error(); err != nil {
+			log.Printf("[mqtt] WARNING connecting to %s failed (%v); retrying every %s in the background", a.cfg.Broker, err, connectRetryInterval)
+		}
+	}()
 
 	// Start event publishers
 	if a.cfg.PublishStateInterval > 0 {
@@ -652,7 +672,14 @@ func (a *Adapter) publishState() {
 		return
 	}
 
+	// Wait for the publish before reading its error: Error() on a token that
+	// has not completed is nil, and this success is what tells a pending
+	// self-update that the control plane heard from the device.
 	token := client.Publish(a.topics.EventState, a.cfg.EventQoS, false, data)
+	if !token.WaitTimeout(5 * time.Second) {
+		log.Printf("[mqtt] state event publish timed out")
+		return
+	}
 	if err := token.Error(); err != nil {
 		log.Printf("[mqtt] failed to publish state event: %v", err)
 		return

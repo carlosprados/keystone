@@ -84,6 +84,8 @@ Usage of keystone:
     	Re-apply the plan in effect on this interval so dead components are restarted (0 disables it)
   -reconcile-jitter duration
     	Spread reconcile passes across a fleet by this much (defaults to 10% of the interval)
+  -self-update-confirm-timeout duration
+    	How long a newly installed version has to confirm itself (plan healthy and, with a remote control plane, heard from) before it restarts so the pre-start gate counts the attempt; the gate rolls back after its limit of starts. Only applies while a version is on trial. 0 disables it, and then a version that starts fine but cannot reach its control plane is never rolled back (default 5m0s)
   -self-update-root string
     	Directory holding the A/B install (versions/, current, state/). Setting it enables the confirmation half of self-update: this run marks itself confirmed once the plan is healthy and, where a remote control plane is configured, once that control plane has heard from the device. Empty disables it
   -version

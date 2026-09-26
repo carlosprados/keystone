@@ -1,9 +1,12 @@
 package selfupdate
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Confirmation decides when a pending version has proved itself.
@@ -138,4 +141,64 @@ func (c *Confirmation) Status() string {
 		return "confirmed"
 	}
 	return "pending-confirmation"
+}
+
+// WatchDeadline gives a trial a time limit, and calls expire once if this run
+// has not confirmed itself within d.
+//
+// The gate reverts after a number of STARTS, and nothing else restarts a
+// version that starts fine and then goes mute: it converges, never reaches the
+// control plane, and would run unconfirmed forever with the counter frozen.
+// That is exactly the failure confirmation exists to catch. Exiting when the
+// deadline passes turns "mute" into a start the gate can count; after its limit
+// it rolls back. Components survive each of these restarts through adoption.
+//
+// Only a trial is watched — this version is the pending one. An ordinary start
+// that cannot reach its control plane has nothing to roll back to, and
+// restarting it would only add noise. d <= 0 disables the deadline.
+func (c *Confirmation) WatchDeadline(ctx context.Context, d time.Duration, expire func(reason string)) {
+	if c == nil || d <= 0 {
+		return
+	}
+	st, err := c.layout.LoadState()
+	if err != nil || st.Pending != c.version {
+		return
+	}
+	log.Printf("[selfupdate] version %s is on trial (start %d); it must confirm within %s or it restarts for the gate to count", c.version, st.Boots, d)
+
+	go func() {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		if reason, late := c.missing(); late {
+			log.Printf("[selfupdate] WARNING version %s did not confirm within %s (%s); restarting so the gate can count this start and roll back if it keeps failing", c.version, d, reason)
+			expire(fmt.Sprintf("version %s did not confirm within %s: %s", c.version, d, reason))
+		}
+	}()
+}
+
+// missing says which half of the confirmation is still outstanding, and false
+// once there is nothing left to wait for.
+func (c *Confirmation) missing() (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.done {
+		return "", false
+	}
+	var parts []string
+	if !c.converged {
+		parts = append(parts, "the plan has not converged")
+	}
+	if c.requireReport && !c.reported {
+		parts = append(parts, "no control plane has heard from the device")
+	}
+	if len(parts) == 0 {
+		// Both halves hold but the commit failed; commitLocked already said why.
+		parts = append(parts, "the confirmation could not be written")
+	}
+	return strings.Join(parts, " and "), true
 }

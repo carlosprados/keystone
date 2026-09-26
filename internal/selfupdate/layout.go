@@ -7,8 +7,11 @@
 package selfupdate
 
 import (
+	"crypto/sha256"
 	"debug/elf"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -42,6 +45,33 @@ func (l Layout) VersionDir(v string) string { return filepath.Join(l.VersionsDir
 // BinaryPath is where the binary for a version lives once installed.
 func (l Layout) BinaryPath(v string) string {
 	return filepath.Join(l.VersionDir(v), BinaryName)
+}
+
+// RunningVersion names the installed version exe belongs to — the directory
+// under versions/ that holds it — or reports false when exe is not part of this
+// layout.
+//
+// This, not the version compiled into the binary, is the identity the rest of
+// self-update speaks. The pending marker, the rollback target and the version
+// directories all use the name the update command carried ("v0.12.4"), while a
+// release binary reports GoReleaser's {{.Version}} ("0.12.4"). Comparing the
+// two meant no release could ever confirm itself, and the gate reverted every
+// good update. The directory a binary was started from cannot disagree with the
+// directory the gate points at.
+func (l Layout) RunningVersion(exe string) (string, bool) {
+	real, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return "", false
+	}
+	versions, err := filepath.EvalSymlinks(l.VersionsDir())
+	if err != nil {
+		return "", false
+	}
+	dir := filepath.Dir(real)
+	if filepath.Base(real) != BinaryName || filepath.Dir(dir) != versions {
+		return "", false
+	}
+	return filepath.Base(dir), true
 }
 
 // Prepare creates the directories. It does not create the symlink: pointing
@@ -110,7 +140,17 @@ func (l Layout) Install(verifiedBinary, v string) error {
 
 	dir := l.VersionDir(v)
 	if _, err := os.Stat(dir); err == nil {
-		return fmt.Errorf("version %s is already installed", v)
+		// Retrying a version that failed its trial is allowed, and reuses what
+		// is on disk — but only if it is the same binary. Two different
+		// binaries under one name is what this refusal has always guarded.
+		same, err := sameContents(l.BinaryPath(v), verifiedBinary)
+		if err != nil {
+			return fmt.Errorf("version %s is already installed and cannot be compared: %w", v, err)
+		}
+		if !same {
+			return fmt.Errorf("version %s is already installed with different contents; a version name must mean the same binary everywhere", v)
+		}
+		return nil
 	}
 
 	if err := CheckArchitecture(verifiedBinary); err != nil {
@@ -259,4 +299,30 @@ func copyExecutable(src, dst string) error {
 		return fmt.Errorf("write %s: %w", dst, err)
 	}
 	return nil
+}
+
+// sameContents reports whether two files hold the same bytes, by SHA-256.
+func sameContents(a, b string) (bool, error) {
+	ha, err := fileSHA256(a)
+	if err != nil {
+		return false, err
+	}
+	hb, err := fileSHA256(b)
+	if err != nil {
+		return false, err
+	}
+	return ha == hb, nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

@@ -30,6 +30,7 @@ type Adapter struct {
 
 	// JetStream
 	jsManager *jetStreamManager
+	jsOnce    sync.Once
 
 	// Lifecycle
 	ctx    context.Context
@@ -118,6 +119,19 @@ func (a *Adapter) Start(ctx context.Context) error {
 		nats.ReconnectWait(a.cfg.ReconnectWait),
 		nats.ReconnectJitter(a.cfg.ReconnectJitter, a.cfg.ReconnectJitter),
 		nats.Timeout(a.cfg.ConnectTimeout),
+		// Retry the first connection too. Without it a server unreachable at
+		// boot made Start fail and the agent exit, supervising nothing — on
+		// the edge, after a power cut where the network comes back last.
+		nats.RetryOnFailedConnect(true),
+		nats.ConnectHandler(func(nc *nats.Conn) {
+			log.Printf("[nats] connected to %s", nc.ConnectedUrl())
+			a.mu.Lock()
+			if a.nc == nil {
+				a.nc = nc
+			}
+			a.mu.Unlock()
+			go a.startJetStreamOnce()
+		}),
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
 			if err != nil {
 				log.Printf("[nats] disconnected: %v", err)
@@ -157,18 +171,17 @@ func (a *Adapter) Start(ctx context.Context) error {
 	a.nc = nc
 	a.mu.Unlock()
 
-	log.Printf("[nats] connected to %s as device %s", a.cfg.URL, a.cfg.DeviceID)
-
-	// Set up command subscriptions
+	// Subscriptions made while disconnected are buffered and sent on connect.
 	if err := a.setupSubscriptions(); err != nil {
 		nc.Close()
 		return fmt.Errorf("failed to setup subscriptions: %w", err)
 	}
 
-	// Set up JetStream for persistent job queue (if enabled)
-	if err := a.setupJetStream(ctx); err != nil {
-		log.Printf("[nats] JetStream setup failed (continuing without): %v", err)
-		// Don't fail startup - JetStream is optional
+	if nc.IsConnected() {
+		log.Printf("[nats] connected to %s as device %s", a.cfg.URL, a.cfg.DeviceID)
+		a.startJetStreamOnce()
+	} else {
+		log.Printf("[nats] WARNING %s unreachable at startup; retrying in the background. The agent keeps supervising its components meanwhile", a.cfg.URL)
 	}
 
 	// Start event publishers
@@ -181,10 +194,21 @@ func (a *Adapter) Start(ctx context.Context) error {
 		go a.publishHealthLoop()
 	}
 
-	// Start JetStream job processor (if enabled)
-	a.startJobProcessor(a.ctx)
-
 	return nil
+}
+
+// startJetStreamOnce sets up the job queue and its workers on the first real
+// connection, which with RetryOnFailedConnect may come long after Start.
+// JetStream needs a live connection, and set up only from Start it was lost for
+// the whole run whenever the server was away at boot.
+func (a *Adapter) startJetStreamOnce() {
+	a.jsOnce.Do(func() {
+		if err := a.setupJetStream(a.ctx); err != nil {
+			log.Printf("[nats] JetStream setup failed (continuing without): %v", err)
+			return
+		}
+		a.startJobProcessor(a.ctx)
+	})
 }
 
 // Stop gracefully shuts down the NATS adapter.

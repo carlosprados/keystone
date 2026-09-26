@@ -83,6 +83,8 @@ type Agent struct {
 	// apply leaves as they were, whether or not they are running. It is the
 	// test adoption uses; see reconcileActions.unchanged.
 	applyUnchanged map[string]bool
+	// resumesPlan is whether this run re-applies a saved plan at startup.
+	resumesPlan bool
 	// adoptable maps a component name to a PID that survived the previous
 	// agent run and can be taken over instead of restarted. Consumed once: a
 	// PID is only safe to adopt while nothing has had the chance to reuse it.
@@ -216,6 +218,7 @@ func New(opts Options) *Agent {
 		}
 
 		resume := a.planPath != "" && shouldResumeLastPlan(a.planStatus)
+		a.resumesPlan = resume
 
 		// Variant B recovery: when the previous agent run did not exit via
 		// Close() (SIGKILL, segfault, OOM kill), its child processes are
@@ -390,6 +393,16 @@ func (a *Agent) markUpdateConverged() {
 	c := a.updateConfirmation
 	a.mu.RUnlock()
 	c.MarkConverged()
+}
+
+// ResumesPlan reports whether this run re-applies a saved plan at startup.
+// When it does not — no plan, or one an operator stopped — there is nothing to
+// converge, and a version on trial must not wait for a convergence that will
+// never be marked.
+func (a *Agent) ResumesPlan() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.resumesPlan
 }
 
 // UpdateStatus renders the self-update state for telemetry, so an operator can
