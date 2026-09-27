@@ -85,7 +85,7 @@ ps -p "$PID" -o pid,user,cmd
 On boot the agent re-applies the last plan unless it was explicitly stopped.
 Components that survived the previous agent and whose recipe and dependencies
 are unchanged are **adopted** — same PID, no restart
-(`adopted existing process` in the log). Everything else starts fresh, and a
+(`adopted existing process`, then `process adopted, not restarted`, in the log). Everything else starts fresh, and a
 survivor that is not adopted is reaped just before its replacement starts. See
 [State and recovery](../../internals/state-and-recovery/).
 

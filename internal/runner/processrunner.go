@@ -104,6 +104,10 @@ func (h *ProcessHandle) Type() string { return "process" }
 // PID returns the process ID (process-specific accessor).
 func (h *ProcessHandle) PID() int { return h.pid }
 
+// Adopted reports whether this handle took over a process a previous agent
+// started, rather than starting it.
+func (h *ProcessHandle) Adopted() bool { return h.exited != nil }
+
 // Cmd returns the exec.Cmd (process-specific accessor).
 func (h *ProcessHandle) Cmd() *exec.Cmd { return h.cmd }
 

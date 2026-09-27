@@ -840,7 +840,13 @@ func (a *Agent) applyPlan(planPath string) error {
 							// Extract PID for process handles
 							if ph, ok := h.(*runner.ProcessHandle); ok {
 								ci.PID = ph.PID()
-								log.Printf("[agent] component=%s pid=%d restarts=%d msg=process started", it.Name, ci.PID, ci.Restarts)
+								// An adoption is not a start: saying "started"
+								// here made a kept process read like a restart.
+								what := "process started"
+								if ph.Adopted() {
+									what = "process adopted, not restarted"
+								}
+								log.Printf("[agent] component=%s pid=%d restarts=%d msg=%s", it.Name, ci.PID, ci.Restarts, what)
 							} else {
 								log.Printf("[agent] component=%s container_id=%s restarts=%d msg=container started", it.Name, h.ID(), ci.Restarts)
 							}
