@@ -72,7 +72,8 @@ func (c *Confirmation) mark(set func()) {
 		return
 	}
 
-	if err := c.commitLocked(); err != nil {
+	wrote, err := c.commitLocked()
+	if err != nil {
 		// Not fatal: the version is working, and the worst case is that the
 		// gate reverts a good update. Saying so is what lets an operator tell
 		// that apart from a version that genuinely failed.
@@ -80,7 +81,12 @@ func (c *Confirmation) mark(set func()) {
 		return
 	}
 	c.done = true
-	log.Printf("[selfupdate] version %s confirmed", c.version)
+	// Only when something was recorded. An ordinary start of the version
+	// already confirmed satisfies the same conditions and writes nothing, and
+	// logging "confirmed" for it read like a trial that had just passed.
+	if wrote {
+		log.Printf("[selfupdate] version %s confirmed", c.version)
+	}
 }
 
 func (c *Confirmation) satisfiedLocked() bool {
@@ -92,27 +98,31 @@ func (c *Confirmation) satisfiedLocked() bool {
 
 // commitLocked writes the confirmation: the pending marker goes, the counter
 // resets, and this version becomes the one a future failure rolls back to.
-func (c *Confirmation) commitLocked() error {
+// It reports whether anything was written.
+func (c *Confirmation) commitLocked() (bool, error) {
 	st, err := c.layout.LoadState()
 	if err != nil {
-		return err
+		return false, err
 	}
 	if st.Pending == "" {
 		// Nothing was pending: an ordinary start, not a trial. Recording the
 		// running version as confirmed is still right — it is demonstrably
 		// working, and it is what the next update will fall back to.
 		if st.Confirmed == c.version {
-			return nil
+			return false, nil
 		}
 	}
 	if st.Pending != "" && st.Pending != c.version {
-		return fmt.Errorf("pending version is %q but %q is running", st.Pending, c.version)
+		return false, fmt.Errorf("pending version is %q but %q is running", st.Pending, c.version)
 	}
 
 	st.Pending = ""
 	st.Boots = 0
 	st.Confirmed = c.version
-	return c.layout.SaveState(st)
+	if err := c.layout.SaveState(st); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Confirmed reports whether this run has confirmed itself yet. It is what the
