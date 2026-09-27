@@ -143,7 +143,16 @@ func (r *ProcessRunner) Start(ctx context.Context, opts Options) (Handle, error)
 		command, args = self, shimArgs
 	}
 
-	cmd := exec.CommandContext(ctx, command, args...)
+	// Not CommandContext: its lifetime is the component's, not the caller's.
+	// Go SIGKILLs a CommandContext process when the context ends, and the
+	// agent's context ends on every exit, including the restart that must leave
+	// components running for the next start to adopt. It killed the leader
+	// only, so a shell component died and its children lingered. Stopping is
+	// Stop's job: it signals the whole process group.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(command, args...)
 	cmd.Env = append(os.Environ(), opts.Env...)
 	if opts.WorkingDir != "" {
 		cmd.Dir = opts.WorkingDir

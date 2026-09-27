@@ -464,6 +464,17 @@ leaves the unit dead. We need a revert, not a stop.
   recipe moved is restarted, because adopting the survivor there would leave
   the old build running while the agent reports the new one.
 
+  **A component's process does not live under the agent's context.** Until
+  v0.12.9 it was started with `exec.CommandContext`, and the agent cancels its
+  context on every exit, including this one, so Go SIGKILLed each component as
+  the agent left. Only the leader died: a shell component was gone and its
+  children lingered, and the next start restarted it with nothing in the log to
+  say why. A field test measured it, where a SIGKILLed agent (whose context is
+  never cancelled) had shown re-adoption working. The kill is done by the
+  version that exits, so **an update from v0.12.8 or earlier restarts every
+  process component** even to a fixed version. Components are kept from the
+  first update made *from* a fixed version on.
+
   An adopted process does not get back its **exit status**, which the kernel
   hands to init rather than to us — so an exit is noticed by polling and
   reported as "it exited", never "it exited with 3". Its health probe still
