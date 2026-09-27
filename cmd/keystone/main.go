@@ -108,7 +108,7 @@ func main() {
 	// MQTT adapter flags
 	mqttBroker := flag.String("mqtt-broker", "", "MQTT broker URL (empty to disable MQTT adapter)")
 	mqttDeviceID := flag.String("mqtt-device-id", "", "Device ID for MQTT topics (required if MQTT enabled)")
-	mqttTenant := flag.String("mqtt-tenant", "", "Tenant for MQTT topics: keystone/<tenant>/<device>/... instead of keystone/<device>/.... Empty keeps the tenant-less form")
+	mqttTenant := flag.String("mqtt-tenant", "", "Tenant for MQTT topics, keystone/<tenant>/<device>/...: a DNS label (lowercase letters, digits, inner hyphens). Required with --mqtt-broker unless --enrol-dir provides it")
 	mqttClientID := flag.String("mqtt-client-id", "", "MQTT client ID (defaults to keystone-{device-id})")
 	mqttTLSCert := flag.String("mqtt-tls-cert", "", "Path to MQTT client TLS certificate")
 	mqttTLSKey := flag.String("mqtt-tls-key", "", "Path to MQTT client TLS key")
@@ -328,12 +328,10 @@ func main() {
 		mqttCfg.DeviceID = *mqttDeviceID
 		mqttCfg.Tenant = *mqttTenant
 		if err := mqttadapter.ValidateDeviceID(*mqttDeviceID); err != nil {
-			log.Fatalf("[main] %v", err)
+			log.Fatalf("[main] refusing to start: %v", err)
 		}
-		if *mqttTenant != "" {
-			if err := mqttadapter.ValidateTenant(*mqttTenant); err != nil {
-				log.Fatalf("[main] %v", err)
-			}
+		if err := mqttadapter.ValidateTenant(*mqttTenant); err != nil {
+			log.Fatalf("[main] refusing to start: %v", err)
 		}
 		mqttCfg.ClientID = *mqttClientID
 		mqttCfg.TLSCert = *mqttTLSCert

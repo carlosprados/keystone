@@ -37,7 +37,8 @@ by the user the agent runs as (`keystone` in the shipped units, mode `0600`):
   certificate for the same name.
 - **`tenant`** and **`device`** become the certificate's name,
   `CN=<tenant>/<device>`, and the MQTT topic path `keystone/<tenant>/<device>/…`.
-  Neither may contain `/`, `+`, `#`; the device name may not contain `:` either.
+  They follow the [MQTT naming rules](../../control-planes/mqtt/#tenant-and-device-id):
+  the tenant is a lowercase DNS label, the device ID 1 to 128 of `A-Z a-z 0-9 . _ -`.
 
 A file with an unknown `version`, or any field the agent does not know, is refused.
 

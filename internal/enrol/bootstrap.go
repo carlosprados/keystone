@@ -120,18 +120,10 @@ func validateEnrolURL(s string) error {
 	return nil
 }
 
-// validateDevice is stricter than an MQTT device ID in general: the device
-// name goes into CN=<tenant>/<device> and the URI SAN keystone:device:<t>:<d>,
-// where a "/" or ":" would make the identity ambiguous.
-func validateDevice(d string) error {
-	if err := mqttadapter.ValidateDeviceID(d); err != nil {
-		return err
-	}
-	if strings.ContainsAny(d, "/: ") {
-		return fmt.Errorf("device %q must not contain '/', ':' or spaces: it is part of the certificate name", d)
-	}
-	return nil
-}
+// validateDevice applies the MQTT device ID rules, which exclude "/", ":" and
+// spaces: the name is also part of CN=<tenant>/<device> and the URI SAN
+// keystone:device:<tenant>:<device>, where they would make it ambiguous.
+func validateDevice(d string) error { return mqttadapter.ValidateDeviceID(d) }
 
 // SubjectCN is the certificate common name for a device.
 func SubjectCN(tenant, device string) string { return tenant + "/" + device }

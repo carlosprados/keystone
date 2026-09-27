@@ -373,46 +373,46 @@ Environment variable equivalents are supported (flags take precedence):
 
 ### Topic Patterns
 
-All topics use the pattern `keystone/{deviceId}/*`, or `keystone/{tenant}/{deviceId}/*`
-with `--mqtt-tenant`:
+All topics use the pattern `keystone/{tenant}/{deviceId}/*`. The tenant is required
+(`--mqtt-tenant`, or an enrolment):
 
 #### Command Topics (Agent Subscribes)
 
 | Topic | Description |
 |-------|-------------|
-| `keystone/{deviceId}/cmd/apply` | Apply a deployment plan |
-| `keystone/{deviceId}/cmd/stop` | Stop all components |
-| `keystone/{deviceId}/cmd/status` | Get plan status |
-| `keystone/{deviceId}/cmd/components` | Get components list |
-| `keystone/{deviceId}/cmd/graph` | Get dependency graph |
-| `keystone/{deviceId}/cmd/restart` | Restart a component |
-| `keystone/{deviceId}/cmd/stop-comp` | Stop a specific component |
-| `keystone/{deviceId}/cmd/health` | Get health status |
-| `keystone/{deviceId}/cmd/recipes` | List recipes |
-| `keystone/{deviceId}/cmd/add-recipe` | Add a recipe |
+| `keystone/{tenant}/{deviceId}/cmd/apply` | Apply a deployment plan |
+| `keystone/{tenant}/{deviceId}/cmd/stop` | Stop all components |
+| `keystone/{tenant}/{deviceId}/cmd/status` | Get plan status |
+| `keystone/{tenant}/{deviceId}/cmd/components` | Get components list |
+| `keystone/{tenant}/{deviceId}/cmd/graph` | Get dependency graph |
+| `keystone/{tenant}/{deviceId}/cmd/restart` | Restart a component |
+| `keystone/{tenant}/{deviceId}/cmd/stop-comp` | Stop a specific component |
+| `keystone/{tenant}/{deviceId}/cmd/health` | Get health status |
+| `keystone/{tenant}/{deviceId}/cmd/recipes` | List recipes |
+| `keystone/{tenant}/{deviceId}/cmd/add-recipe` | Add a recipe |
 
 #### Response Topics (Agent Publishes)
 
 | Topic | Description |
 |-------|-------------|
-| `keystone/{deviceId}/resp/apply` | Apply response |
-| `keystone/{deviceId}/resp/stop` | Stop response |
-| `keystone/{deviceId}/resp/status` | Status response |
-| `keystone/{deviceId}/resp/components` | Components response |
-| `keystone/{deviceId}/resp/graph` | Graph response |
-| `keystone/{deviceId}/resp/restart` | Restart response |
-| `keystone/{deviceId}/resp/stop-comp` | Stop component response |
-| `keystone/{deviceId}/resp/health` | Health response |
-| `keystone/{deviceId}/resp/recipes` | Recipes response |
-| `keystone/{deviceId}/resp/add-recipe` | Add recipe response |
+| `keystone/{tenant}/{deviceId}/resp/apply` | Apply response |
+| `keystone/{tenant}/{deviceId}/resp/stop` | Stop response |
+| `keystone/{tenant}/{deviceId}/resp/status` | Status response |
+| `keystone/{tenant}/{deviceId}/resp/components` | Components response |
+| `keystone/{tenant}/{deviceId}/resp/graph` | Graph response |
+| `keystone/{tenant}/{deviceId}/resp/restart` | Restart response |
+| `keystone/{tenant}/{deviceId}/resp/stop-comp` | Stop component response |
+| `keystone/{tenant}/{deviceId}/resp/health` | Health response |
+| `keystone/{tenant}/{deviceId}/resp/recipes` | Recipes response |
+| `keystone/{tenant}/{deviceId}/resp/add-recipe` | Add recipe response |
 
 #### Event Topics (Agent Publishes)
 
 | Topic | Description |
 |-------|-------------|
-| `keystone/{deviceId}/events/state` | Component state updates |
-| `keystone/{deviceId}/events/health` | Health status updates |
-| `keystone/{deviceId}/status` | LWT: "online" / "offline" |
+| `keystone/{tenant}/{deviceId}/events/state` | Component state updates |
+| `keystone/{tenant}/{deviceId}/events/health` | Health status updates |
+| `keystone/{tenant}/{deviceId}/status` | LWT: "online" / "offline" |
 
 ### Message Formats
 
@@ -465,7 +465,7 @@ All requests include an optional `correlationId` for matching responses:
 ### Last Will and Testament (LWT)
 
 The MQTT adapter automatically configures an LWT message:
-- **Topic:** `keystone/{deviceId}/status`
+- **Topic:** `keystone/{tenant}/{deviceId}/status`
 - **Online Payload:** `"online"` (published on connect)
 - **Offline Payload:** `"offline"` (published by broker on disconnect)
 - **Retained:** Yes (subscribers see current status immediately)
@@ -557,5 +557,5 @@ Example:
 [nats] connected to nats://control-plane:4222 as edge-001
 [nats] subscribed to keystone.edge-001.cmd.apply
 [mqtt] connected to tcp://broker:1883 as keystone-edge-001
-[mqtt] subscribed to keystone/edge-001/cmd/apply
+[mqtt] subscribed to keystone/acme/edge-001/cmd/apply
 ```

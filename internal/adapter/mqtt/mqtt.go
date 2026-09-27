@@ -50,7 +50,7 @@ type Config struct {
 	// DeviceID is the unique identifier for this agent.
 	// Used in topic prefixes for multi-tenancy.
 	DeviceID string
-	// Tenant, when set, puts every topic under keystone/<tenant>/<device>/…
+	// Tenant puts every topic under keystone/<tenant>/<device>/…. Required.
 	Tenant string
 
 	// ClientID is the MQTT client ID. If empty, defaults to "keystone-{DeviceID}".
@@ -90,7 +90,7 @@ type Config struct {
 
 	// Last Will and Testament (LWT)
 	LWTEnabled bool   // Enable LWT (default: true)
-	LWTTopic   string // LWT topic (default: keystone/{tenant/}{deviceId}/status)
+	LWTTopic   string // LWT topic (default: keystone/{tenant}/{deviceId}/status)
 	LWTPayload string // LWT payload (default: "offline")
 	LWTRetain  bool   // Retain LWT message (default: true)
 }
@@ -135,6 +135,12 @@ func (a *Adapter) Name() string {
 
 // Start connects to the MQTT broker and sets up subscriptions.
 func (a *Adapter) Start(ctx context.Context) error {
+	if err := ValidateTenant(a.cfg.Tenant); err != nil {
+		return err
+	}
+	if err := ValidateDeviceID(a.cfg.DeviceID); err != nil {
+		return err
+	}
 	a.ctx, a.cancel = context.WithCancel(ctx)
 
 	opts := pahomqtt.NewClientOptions()
@@ -145,7 +151,9 @@ func (a *Adapter) Start(ctx context.Context) error {
 	// Client ID
 	clientID := a.cfg.ClientID
 	if clientID == "" {
-		clientID = fmt.Sprintf("keystone-%s", a.cfg.DeviceID)
+		// The tenant is part of it: two tenants may use the same device ID on
+		// one broker, and two clients with one ID evict each other in a loop.
+		clientID = fmt.Sprintf("keystone-%s-%s", a.cfg.Tenant, a.cfg.DeviceID)
 	}
 	opts.SetClientID(clientID)
 
