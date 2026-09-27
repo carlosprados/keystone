@@ -20,6 +20,8 @@ Usage of keystone:
     	What to do when the system clock is behind known-good time: high-water (verify against the later of the two) or strict (refuse to verify) (default "high-water")
   -demo
     	Run a built-in demo: start a mock 3-component stack
+  -enrol-dir dir
+    	Identity directory written by keystone enrol. The MQTT client certificate, key, broker CA, tenant and device ID come from it, and the certificate is renewed automatically. Conflicting --mqtt-* values are refused
   -http string
     	HTTP listen address (empty to disable) (default "127.0.0.1:8080")
   -insecure-skip-verify

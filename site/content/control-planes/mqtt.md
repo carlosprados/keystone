@@ -200,6 +200,11 @@ Username/password (`--mqtt-user`, `--mqtt-pass`) works too. Every MQTT flag has 
 `KEYSTONE_MQTT_*` environment equivalent, which is usually how you configure it
 under systemd — see [Environment variables](../../reference/env/).
 
+**A per-device identity** can come from [enrolment](../../security/enrolment/)
+instead of files you place by hand: with `--enrol-dir` the agent takes its client
+certificate, key, broker CA, tenant and device ID from what `keystone enrol` wrote,
+renews the certificate itself, and reconnects with the new one without a restart.
+
 **The transport CA must not be a code CA.** The agent refuses to start if any
 certificate in `--mqtt-tls-ca` or in the `--mqtt-tls-cert` chain (or the NATS
 equivalents) shares a key with a certificate in `KEYSTONE_TRUST_BUNDLE`. The

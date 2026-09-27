@@ -20,6 +20,7 @@ import (
 	"github.com/carlosprados/keystone/internal/agent"
 	"github.com/carlosprados/keystone/internal/clock"
 	"github.com/carlosprados/keystone/internal/config"
+	"github.com/carlosprados/keystone/internal/enrol"
 	"github.com/carlosprados/keystone/internal/runner"
 	"github.com/carlosprados/keystone/internal/security"
 	"github.com/carlosprados/keystone/internal/selfupdate"
@@ -72,6 +73,10 @@ func main() {
 	// Load .env as early as possible so adapter configuration (flags/env) can use it.
 	config.LoadDotEnvDefault()
 
+	if len(os.Args) > 1 && os.Args[1] == enrolCommand {
+		os.Exit(runEnrol(os.Args[2:]))
+	}
+
 	// HTTP adapter flags
 	httpAddr := flag.String("http", "127.0.0.1:8080", "HTTP listen address (empty to disable)")
 	apiToken := flag.String("api-token", "", "Bearer token required for the HTTP API (or KEYSTONE_API_TOKEN); required to bind a non-loopback address")
@@ -109,6 +114,7 @@ func main() {
 	mqttTLSKey := flag.String("mqtt-tls-key", "", "Path to MQTT client TLS key")
 	mqttTLSCA := flag.String("mqtt-tls-ca", "", "Path to MQTT CA certificate")
 	mqttTLSVerify := flag.Bool("mqtt-tls-verify", true, "Verify MQTT server TLS certificate")
+	enrolDir := flag.String("enrol-dir", "", "Identity `dir`ectory written by keystone enrol. The MQTT client certificate, key, broker CA, tenant and device ID come from it, and the certificate is renewed automatically. Conflicting --mqtt-* values are refused")
 	mqttUser := flag.String("mqtt-user", "", "MQTT username")
 	mqttPass := flag.String("mqtt-pass", "", "MQTT password")
 	mqttStateInterval := flag.Duration("mqtt-state-interval", 10*time.Second, "Interval for publishing state events (0 to disable)")
@@ -199,6 +205,15 @@ func main() {
 	applyStringEnv("mqtt-tls-key", mqttTLSKey, "KEYSTONE_MQTT_TLS_KEY")
 	applyStringEnv("mqtt-tls-ca", mqttTLSCA, "KEYSTONE_MQTT_TLS_CA")
 	applyBoolEnv("mqtt-tls-verify", mqttTLSVerify, "KEYSTONE_MQTT_TLS_VERIFY")
+	applyStringEnv("enrol-dir", enrolDir, "KEYSTONE_ENROL_DIR")
+	var enrolStore *enrol.Store
+	if *enrolDir != "" {
+		var err error
+		enrolStore, err = applyEnrolment(*enrolDir, mqttIdentity{mqttTenant, mqttDeviceID, mqttTLSCert, mqttTLSKey, mqttTLSCA})
+		if err != nil {
+			log.Fatalf("[main] refusing to start: %v", err)
+		}
+	}
 	applyBoolEnv("allow-no-eku-signers", allowNoEKUSigners, "KEYSTONE_ALLOW_NO_EKU_SIGNERS")
 	security.AllowNoEKUSigners(*allowNoEKUSigners)
 	// Refused rather than warned: a CA that issues transport identities and is
@@ -304,6 +319,7 @@ func main() {
 	}
 
 	// Register MQTT adapter (if configured)
+	var mqttAdapter *mqttadapter.Adapter
 	if *mqttBroker != "" {
 		*mqttDeviceID = resolveDeviceID(*mqttDeviceID)
 
@@ -335,6 +351,7 @@ func main() {
 		}
 
 		mqtt := mqttadapter.New(mqttCfg, a)
+		mqttAdapter = mqtt
 		registry.Register(mqtt)
 		log.Printf("[main] MQTT adapter configured for %s (device: %s)", *mqttBroker, *mqttDeviceID)
 	}
@@ -386,6 +403,18 @@ func main() {
 
 	// Start all adapters
 	log.Printf("[main] keystone starting version=%s adapters=%v", version.Version, registry.List())
+	if enrolStore != nil {
+		if mqttAdapter == nil {
+			log.Printf("[main] WARNING --enrol-dir is set but MQTT is not (--mqtt-broker): the identity is kept renewed and not used")
+		}
+		renewer := &enrol.Renewer{Store: *enrolStore, Now: a.Clock().Now, OnRenewed: func() {
+			if mqttAdapter != nil {
+				mqttAdapter.ReloadIdentity()
+			}
+		}}
+		go renewer.Run(ctx)
+	}
+
 	if err := registry.StartAll(ctx); err != nil {
 		log.Fatalf("[main] failed to start adapters: %v", err)
 	}

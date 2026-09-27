@@ -12,7 +12,7 @@ import (
 func TestTLSConfigSkipVerifyWithoutCA(t *testing.T) {
 	a := &Adapter{cfg: Config{TLSVerify: false}}
 
-	cfg, err := a.buildTLSConfig()
+	cfg, err := a.buildTLSConfig(true)
 	if err != nil {
 		t.Fatalf("building a skip-verify config failed: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestTLSConfigSkipVerifyWithoutCA(t *testing.T) {
 func TestTLSConfigVerifiesByDefault(t *testing.T) {
 	a := &Adapter{cfg: DefaultConfig()}
 
-	cfg, err := a.buildTLSConfig()
+	cfg, err := a.buildTLSConfig(true)
 	if err != nil {
 		t.Fatalf("building the default config failed: %v", err)
 	}

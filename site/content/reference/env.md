@@ -110,6 +110,7 @@ it under systemd:
 | `KEYSTONE_MQTT_CLIENT_ID` | `--mqtt-client-id` |
 | `KEYSTONE_MQTT_USER` / `KEYSTONE_MQTT_PASS` | `--mqtt-user` / `--mqtt-pass` |
 | `KEYSTONE_MQTT_TLS_CERT` / `_KEY` / `_CA` | the matching `--mqtt-tls-*` |
+| `KEYSTONE_ENROL_DIR` | `--enrol-dir`: the identity written by `keystone enrol`, which then provides the TLS files, tenant and device ID above. See [Device enrolment](../../security/enrolment/) |
 | `KEYSTONE_MQTT_TLS_VERIFY` | `--mqtt-tls-verify` |
 | `KEYSTONE_MQTT_QOS` | `--mqtt-qos` |
 | `KEYSTONE_MQTT_COMMAND_DEDUPE_TTL` | `--mqtt-command-dedupe-ttl` |

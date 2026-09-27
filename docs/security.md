@@ -53,6 +53,7 @@ Two trust boundaries matter:
 | Schema | Recipe/plan JSON Schema enforced (not best-effort) | secure |
 | Signer certificates | Leaf must list codeSigning EKU, and every CA in the chain must allow it | secure (fail-closed) |
 | Code vs transport CAs | Refuse to start if the trust bundle shares a key with an MQTT/NATS CA or client chain | secure (fail-closed) |
+| Device enrolment | `keystone enrol` trusts the server only through the pinned CA (not system roots, not its leaf); the key is generated on the device; an answer for another key or name is not written; `--enrol-dir` values that disagree with explicit `--mqtt-*` settings refuse the start | secure (fail-closed) |
 | Signer transition | `--allow-no-eku-signers` / `KEYSTONE_ALLOW_NO_EKU_SIGNERS=true` admits no-EKU signers, logged each time | off |
 | Dev escape | `--insecure-skip-verify` / `KEYSTONE_INSECURE_SKIP_VERIFY=true` | off |
 
