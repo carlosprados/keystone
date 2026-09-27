@@ -51,6 +51,9 @@ Two trust boundaries matter:
 | Recipe name/version | Allowlist validator, no path traversal | secure |
 | Process privileges | `[lifecycle.run.security]`: user/group, `no_new_privileges`, capability allow-list | inherits the agent unless declared |
 | Schema | Recipe/plan JSON Schema enforced (not best-effort) | secure |
+| Signer certificates | Leaf must list codeSigning EKU, and every CA in the chain must allow it | secure (fail-closed) |
+| Code vs transport CAs | Refuse to start if the trust bundle shares a key with an MQTT/NATS CA or client chain | secure (fail-closed) |
+| Signer transition | `--allow-no-eku-signers` / `KEYSTONE_ALLOW_NO_EKU_SIGNERS=true` admits no-EKU signers, logged each time | off |
 | Dev escape | `--insecure-skip-verify` / `KEYSTONE_INSECURE_SKIP_VERIFY=true` | off |
 
 ---

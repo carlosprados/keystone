@@ -186,6 +186,14 @@ Username/password (`--mqtt-user`, `--mqtt-pass`) works too. Every MQTT flag has 
 `KEYSTONE_MQTT_*` environment equivalent, which is usually how you configure it
 under systemd — see [Environment variables](../../reference/env/).
 
+**The transport CA must not be a code CA.** The agent refuses to start if any
+certificate in `--mqtt-tls-ca` or in the `--mqtt-tls-cert` chain (or the NATS
+equivalents) shares a key with a certificate in `KEYSTONE_TRUST_BUNDLE`. The
+error names the certificate and both files. A CA that issues broker or device
+certificates, if also trusted for code, would let anyone who can obtain a
+connection certificate get a recipe accepted. See
+[Signing](../../security/signing/).
+
 ### A self-signed broker does not need verification turned off
 
 Point `--mqtt-tls-ca` at the broker's own certificate:

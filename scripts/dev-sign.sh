@@ -40,9 +40,12 @@ if [[ ! -f "$CA_PEM" || ! -f "$LEAF_PEM" ]]; then
   openssl genpkey -algorithm ed25519 -out "$LEAF_KEY" >/dev/null 2>&1
   openssl req -new -key "$LEAF_KEY" -out "$TRUST_DIR/leaf.csr" \
     -subj "/CN=keystone-dev-signer" >/dev/null 2>&1
+  # Agents accept only signers issued for codeSigning. Without these
+  # extensions openssl issues a certificate with no EKU, which is refused.
+  printf 'extendedKeyUsage=codeSigning\nkeyUsage=critical,digitalSignature\n' >"$TRUST_DIR/leaf.ext"
   openssl x509 -req -in "$TRUST_DIR/leaf.csr" -CA "$CA_PEM" -CAkey "$CA_KEY" \
-    -CAcreateserial -out "$LEAF_PEM" -days 365 >/dev/null 2>&1
-  rm -f "$TRUST_DIR/leaf.csr"
+    -CAcreateserial -extfile "$TRUST_DIR/leaf.ext" -out "$LEAF_PEM" -days 365 >/dev/null 2>&1
+  rm -f "$TRUST_DIR/leaf.csr" "$TRUST_DIR/leaf.ext"
 fi
 
 # Signing goes through keystonectl rather than `openssl dgst -sha256 -sign`.

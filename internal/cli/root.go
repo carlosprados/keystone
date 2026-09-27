@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
+	"github.com/carlosprados/keystone/internal/security"
 	"github.com/carlosprados/keystone/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -125,6 +127,11 @@ func NewRootCommand() *cobra.Command {
 // client. It runs before every command, including the ones that never make a
 // request — cheap, and it means a bad --ssh destination is caught early.
 func resolveConnection(cmd *cobra.Command, _ []string) error {
+	// The same transition policy the agent has, so verifying here agrees with
+	// what a device will decide.
+	if v, err := strconv.ParseBool(os.Getenv("KEYSTONE_ALLOW_NO_EKU_SIGNERS")); err == nil {
+		security.AllowNoEKUSigners(v)
+	}
 	// --addr is the one flag with a non-empty default, so "unset" cannot be
 	// spotted by comparing against "": an operator whose agent listens on
 	// 127.0.0.1:9180 must be able to export KEYSTONE_ADDR once instead of

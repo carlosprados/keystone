@@ -21,6 +21,7 @@ import (
 	"github.com/carlosprados/keystone/internal/clock"
 	"github.com/carlosprados/keystone/internal/config"
 	"github.com/carlosprados/keystone/internal/runner"
+	"github.com/carlosprados/keystone/internal/security"
 	"github.com/carlosprados/keystone/internal/selfupdate"
 	"github.com/carlosprados/keystone/internal/version"
 )
@@ -74,6 +75,7 @@ func main() {
 	// HTTP adapter flags
 	httpAddr := flag.String("http", "127.0.0.1:8080", "HTTP listen address (empty to disable)")
 	apiToken := flag.String("api-token", "", "Bearer token required for the HTTP API (or KEYSTONE_API_TOKEN); required to bind a non-loopback address")
+	allowNoEKUSigners := flag.Bool("allow-no-eku-signers", false, "Transition only: accept signing certificates that carry no extended key usage. Signers must be issued for codeSigning; certificates made before that was required have no EKU and are refused without this. Logged loudly every time it admits one. Will be removed")
 	insecureSkipVerify := flag.Bool("insecure-skip-verify", false, "Disable mandatory artifact integrity checks (sha256 + signature). Dev/demo only (or KEYSTONE_INSECURE_SKIP_VERIFY=true)")
 
 	// NATS adapter flags
@@ -195,6 +197,19 @@ func main() {
 	applyStringEnv("mqtt-tls-key", mqttTLSKey, "KEYSTONE_MQTT_TLS_KEY")
 	applyStringEnv("mqtt-tls-ca", mqttTLSCA, "KEYSTONE_MQTT_TLS_CA")
 	applyBoolEnv("mqtt-tls-verify", mqttTLSVerify, "KEYSTONE_MQTT_TLS_VERIFY")
+	applyBoolEnv("allow-no-eku-signers", allowNoEKUSigners, "KEYSTONE_ALLOW_NO_EKU_SIGNERS")
+	security.AllowNoEKUSigners(*allowNoEKUSigners)
+	// Refused rather than warned: a CA that issues transport identities and is
+	// also trusted for code lets anyone who can get a connection certificate get
+	// code accepted. This is configuration, fixed once, not a condition that
+	// comes and goes like a broker being away.
+	if err := security.CheckTransportSeparation(os.Getenv("KEYSTONE_TRUST_BUNDLE"),
+		*mqttTLSCA, *mqttTLSCert, *natsTLSCA, *natsTLSCert); err != nil {
+		log.Fatalf("[main] refusing to start: %v", err)
+	}
+	if *allowNoEKUSigners {
+		log.Printf("[main] WARNING --allow-no-eku-signers: signing certificates with no extended key usage are accepted. Reissue them for codeSigning and turn this off")
+	}
 	applyStringEnv("mqtt-user", mqttUser, "KEYSTONE_MQTT_USER")
 	applyStringEnv("mqtt-pass", mqttPass, "KEYSTONE_MQTT_PASS")
 	applyIntEnv("mqtt-qos", mqttQoS, "KEYSTONE_MQTT_QOS")
