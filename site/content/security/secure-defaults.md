@@ -83,9 +83,6 @@ sandbox — a determined workload with capabilities can still hurt the host.
 
 Honest list, tracked as follow-ups:
 
-- **NATS/MQTT `planPath`**: the rejection is implemented for HTTP only. Those
-  adapters are off by default and rely on broker ACLs.
-- **Release signing**: published binaries are not signed yet (no cosign, no SBOM).
 - **Container confinement**: `privileged` containers and host mounts are not gated
   by policy.
 - **Child environment**: recipe-supplied env is not stripped of `LD_PRELOAD` /

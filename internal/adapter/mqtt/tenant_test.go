@@ -1,34 +1,13 @@
 package mqtt
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
 )
 
-// TestNoTenantKeepsEveryTopic is the compatibility contract: an agent with no
-// tenant must use exactly the topics it always did. A changed default would
-// break the broker's ACL and the command channel at once, and a denied publish
-// under MQTT 3.1.1 is dropped silently — the device would just go quiet.
-func TestNoTenantKeepsEveryTopic(t *testing.T) {
-	tp := NewTopics("", "pi-1")
-	v := reflect.ValueOf(*tp)
-	for i := 0; i < v.NumField(); i++ {
-		f := v.Type().Field(i)
-		if f.Type.Kind() != reflect.String || !f.IsExported() {
-			continue
-		}
-		topic := v.Field(i).String()
-		if !strings.HasPrefix(topic, "keystone/pi-1/") {
-			t.Errorf("%s = %q, want it under keystone/pi-1/", f.Name, topic)
-		}
-	}
-	if tp.Status != "keystone/pi-1/status" || tp.CmdSelfUpdate != "keystone/pi-1/cmd/self-update" {
-		t.Errorf("tenant-less topics moved: status %q, self-update %q", tp.Status, tp.CmdSelfUpdate)
-	}
-}
-
-func TestATenantAddsOneLevelToEveryTopic(t *testing.T) {
+func TestEveryTopicIsUnderTheTenant(t *testing.T) {
 	tp := NewTopics("acme", "pi-1")
 	v := reflect.ValueOf(*tp)
 	for i := 0; i < v.NumField(); i++ {
@@ -40,28 +19,48 @@ func TestATenantAddsOneLevelToEveryTopic(t *testing.T) {
 			t.Errorf("%s = %q, want it under keystone/acme/pi-1/", f.Name, topic)
 		}
 	}
-	if tp.CmdWildcard != "keystone/acme/pi-1/cmd/+" {
-		t.Errorf("command subscription = %q", tp.CmdWildcard)
+	if tp.CmdWildcard != "keystone/acme/pi-1/cmd/+" || tp.Status != "keystone/acme/pi-1/status" {
+		t.Errorf("command subscription %q, status %q", tp.CmdWildcard, tp.Status)
 	}
 }
 
-// TestTenantAndDeviceCannotBecomeWildcards: "+" or "#" would make the device's
-// own subscription cover other devices' commands.
-func TestTenantAndDeviceCannotBecomeWildcards(t *testing.T) {
-	for _, bad := range []string{"a/b", "+", "#", "acme#", " acme", ""} {
+// The cases are the control plane's own (its internal/ident tests), copied
+// verbatim: the two sides must accept and refuse exactly the same names, or
+// a device the agent starts with is one whose messages the control plane
+// drops without a word.
+func TestIdentityRulesMatchTheControlPlane(t *testing.T) {
+	a63, a64 := strings.Repeat("a", 63), strings.Repeat("a", 64)
+	x128, x129 := strings.Repeat("x", 128), strings.Repeat("x", 129)
+
+	for _, ok := range []string{"lab", "acme", "a", "0", "a-b", "a1-2b", a63} {
+		if err := ValidateTenant(ok); err != nil {
+			t.Errorf("tenant %q refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "Lab", "ACME", "a.b", "a_b", "-a", "a-", "a/b", "a+b", "a#b", "a b", "a\x00b", a64} {
 		if ValidateTenant(bad) == nil {
 			t.Errorf("tenant %q accepted", bad)
 		}
 	}
-	for _, bad := range []string{"+", "pi#1", "#", ""} {
+	for _, ok := range []string{"pi", "lab-pi-edge", "lab.pi_1", "A.b-C_9", "events", "status", "...", x128} {
+		if err := ValidateDeviceID(ok); err != nil {
+			t.Errorf("device ID %q refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", ".", "..", "cmd", "resp", "a/b", "a+b", "a#b", "a b", "a\x00b", "é", x129} {
 		if ValidateDeviceID(bad) == nil {
 			t.Errorf("device ID %q accepted", bad)
 		}
 	}
-	if err := ValidateTenant("acme"); err != nil {
-		t.Errorf("a plain tenant was refused: %v", err)
-	}
-	if err := ValidateDeviceID("site-3/pi-1"); err != nil {
-		t.Errorf("a device ID with '/', which installs already use, was refused: %v", err)
+}
+
+// TestTheAdapterRefusesToStartWithoutATenant: main checks this too, but the
+// adapter must not be usable around it, publishing under keystone//<device>/.
+func TestTheAdapterRefusesToStartWithoutATenant(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Broker = "tcp://127.0.0.1:1"
+	cfg.DeviceID = "pi-1"
+	if err := New(cfg, plainHandler{}).Start(context.Background()); err == nil {
+		t.Fatal("started with no tenant")
 	}
 }

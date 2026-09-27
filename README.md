@@ -145,7 +145,7 @@ What is done: supervisor with DAG deployments and rollback, process and containe
 
 Known limitations, stated plainly:
 
-- **Self-update is new and only half field-tested.** An MQTT `cmd/self-update` downloads and verifies a new binary, installs it A/B beside the running one, restarts, and a systemd pre-start gate reverts it if it does not confirm (requires `--self-update-root` and the `keystone-ab.service` unit). On hardware, only the gate reverting has been exercised so far; a full update end to end has not. See [MQTT](https://carlosprados.github.io/keystone/control-planes/mqtt/).
+- **Self-update is new.** An MQTT `cmd/self-update` downloads and verifies a new binary, installs it A/B beside the running one, restarts, and a systemd pre-start gate reverts it if it does not confirm (requires `--self-update-root` and the `keystone-ab.service` unit). On hardware (a Raspberry Pi, arm64) a full update has been measured end to end in both directions: an update that cannot reach its control plane is reverted after three starts, one that can confirms in seconds, and supervised processes keep their PID throughout (from v0.12.9 on). See [MQTT](https://carlosprados.github.io/keystone/control-planes/mqtt/).
 - **No built-in TLS for the HTTP API.** Terminate at a reverse proxy, use a VPN, or tunnel with `keystonectl --ssh`. NATS and MQTT do support TLS natively.
 - **No memory or CPU limits for process components.** ProcessRunner applies `RLIMIT_NOFILE` only, and a recipe declaring `memory_limit` or `cpu_quota` under `[resources]` is refused rather than run unbounded. Containers get every limit in `[lifecycle.run.container.resources]`, under containerd and the CLI runtimes alike.
 - **Component re-adoption needs the system manager.** Survivors of an agent crash are recognised by being reparented to PID 1; under a subreaper (`systemd --user`, `tini`) they are neither adopted nor reaped.
@@ -501,6 +501,7 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_DEVICE_ID`                  | Device ID for NATS/MQTT topics (default: hostname).                    |
 | `KEYSTONE_MQTT_BROKER`                | MQTT broker URL (enables MQTT if set and `--mqtt-broker` not passed).  |
 | `KEYSTONE_MQTT_DEVICE_ID`             | MQTT device ID (overrides `KEYSTONE_DEVICE_ID` for MQTT only).         |
+| `KEYSTONE_MQTT_TENANT`                | MQTT tenant, a lowercase DNS label. Required with MQTT unless `KEYSTONE_ENROL_DIR` provides it. |
 | `KEYSTONE_MQTT_CLIENT_ID`             | MQTT client ID.                                                         |
 | `KEYSTONE_MQTT_TLS_CERT`              | Path to MQTT client TLS certificate.                                    |
 | `KEYSTONE_MQTT_TLS_KEY`               | Path to MQTT client TLS private key.                                    |

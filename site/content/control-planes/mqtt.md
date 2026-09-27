@@ -15,39 +15,46 @@ keystone --mqtt-broker tls://broker.acme.com:8883 --mqtt-device-id edge-001
 
 ```mermaid
 flowchart LR
-    ROOT["keystone/{deviceId}"] --> CMD["cmd/*"]
+    ROOT["keystone/{tenant}/{deviceId}"] --> CMD["cmd/*"]
     ROOT --> RESP["resp/*"]
     ROOT --> EV["events/state, events/health"]
     ROOT --> ST["status: online / offline"]
 ```
 
 
-Everything under `keystone/{deviceId}/`:
+Everything under `keystone/{tenant}/{deviceId}/`:
 
 | Direction | Topic | Purpose |
 |---|---|---|
-| agent subscribes | `keystone/{deviceId}/cmd/+` | `apply`, `stop`, `status`, `components`, `graph`, `restart`, `stop-comp`, `health`, `recipes`, `add-recipe` |
-| agent publishes | `keystone/{deviceId}/resp/+` | One response topic per command |
-| agent publishes | `keystone/{deviceId}/events/state` | Component state updates |
-| agent publishes | `keystone/{deviceId}/events/health` | Health updates |
-| agent publishes | `keystone/{deviceId}/status` | Last will: `online` / `offline` |
+| agent subscribes | `keystone/{tenant}/{deviceId}/cmd/+` | `apply`, `stop`, `status`, `components`, `graph`, `restart`, `stop-comp`, `health`, `recipes`, `add-recipe`, `self-update` |
+| agent publishes | `keystone/{tenant}/{deviceId}/resp/+` | One response topic per command |
+| agent publishes | `keystone/{tenant}/{deviceId}/events/state` | Component state updates |
+| agent publishes | `keystone/{tenant}/{deviceId}/events/health` | Health updates |
+| agent publishes | `keystone/{tenant}/{deviceId}/status` | Last will: `online` / `offline` |
 
 The command/response split (rather than MQTT 5 request/response) keeps it
 compatible with 3.1.1 brokers, which is what most industrial gear speaks.
 
-### Tenants
+### Tenant and device ID
 
-`--mqtt-tenant acme` (`KEYSTONE_MQTT_TENANT`) adds one level to every topic:
-`keystone/acme/{deviceId}/…`, the last will included. With no tenant the topics
-are exactly the ones above, so an existing broker, its ACL and whatever sends
-commands keep working unchanged. That is on purpose: under MQTT 3.1.1 a publish
-the ACL denies is dropped silently, and a moved default would make a device go
-quiet instead of failing.
+Every topic is under a tenant: `--mqtt-tenant acme` (`KEYSTONE_MQTT_TENANT`), or
+the tenant of an [enrolment](../../security/enrolment/). **The agent refuses to
+start with MQTT and no tenant.** There is no tenant-less form and no default
+tenant: a default would publish a misconfigured device under the wrong tenant
+without a word, and under MQTT 3.1.1 a publish the broker's ACL denies is dropped
+silently.
 
-A tenant must be a single topic level: no `/`, `+`, `#` or NUL. A device ID must
-not contain `+`, `#` or NUL either, since they would turn the device's own
-subscription into a wildcard over other devices' commands. The agent refuses to
-start on either.
+The names follow the control plane's rules exactly, so a name one side accepts
+the other does not refuse:
+
+| Name | Rule |
+|---|---|
+| Tenant | A DNS label: lowercase letters, digits and inner hyphens, at most 63 characters |
+| Device ID | 1 to 128 of `A-Z a-z 0-9 . _ -`; `.`, `..`, `cmd` and `resp` are reserved |
+
+The default client ID is `keystone-{tenant}-{deviceId}`, so the same device ID
+under two tenants on one broker does not make the two clients evict each other.
+`--mqtt-client-id` overrides it.
 
 ## Replacing the agent itself
 
@@ -168,7 +175,7 @@ reach it, which is exactly what this deployment shape does not allow.
 
 ## Presence via last will
 
-The agent connects with a last-will message on `keystone/{deviceId}/status`. If it
+The agent connects with a last-will message on `keystone/{tenant}/{deviceId}/status`. If it
 drops off the network, the **broker** publishes `offline` on its behalf. Your fleet
 view gets device presence for free, without polling — and, crucially, it works when
 the device is unable to tell you anything itself.
@@ -218,7 +225,7 @@ connection certificate get a recipe accepted. See
 Point `--mqtt-tls-ca` at the broker's own certificate:
 
 ```bash
-keystone --mqtt-broker tls://broker.internal:8883          --mqtt-tls-ca /etc/keystone/broker-cert.pem
+keystone --mqtt-broker tls://broker.internal:8883 --mqtt-tenant acme --mqtt-tls-ca /etc/keystone/broker-cert.pem
 ```
 
 That keeps the encryption **and** the identity check. The certificate being
@@ -232,7 +239,12 @@ either way.
 
 ## Broker ACLs are part of your security
 
-Restrict each device's credentials to its own `keystone/{deviceId}/#` subtree.
+Restrict each device's credentials to its own `keystone/{tenant}/{deviceId}/#` subtree.
 Otherwise one compromised device can publish commands to every other device on the
-broker. As with NATS, the `planPath` rejection is not yet implemented for this
-adapter, so its ACLs are load-bearing.
+broker.
+
+A mistake in the ACL shows as silence, not as an error. Under MQTT 3.1.1 a publish
+the broker denies is dropped, and Mosquitto with an `acl_file` grants every
+subscription and filters at delivery, so a device without read access to its
+`cmd/` topics connects, subscribes, logs nothing wrong, and never receives a
+command. Check a new ACL by sending a command and watching for its response.

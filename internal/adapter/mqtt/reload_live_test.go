@@ -30,6 +30,7 @@ func TestReloadIdentityLive(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Broker = broker
 	cfg.DeviceID = "pi-live"
+	cfg.Tenant = "acme"
 	cfg.TLSCert = filepath.Join(cur, "device.crt")
 	cfg.TLSKey = filepath.Join(cur, "device.key")
 	cfg.TLSCA = filepath.Join(cur, "broker-ca.pem")
@@ -87,6 +88,7 @@ func TestAutomaticReconnectReadsTheNewIdentityLive(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Broker = broker
 	cfg.DeviceID = "pi-live"
+	cfg.Tenant = "acme"
 	cfg.TLSCert = filepath.Join(cur, "device.crt")
 	cfg.TLSKey = filepath.Join(cur, "device.key")
 	cfg.TLSCA = filepath.Join(cur, "broker-ca.pem")

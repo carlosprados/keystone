@@ -28,38 +28,38 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestNewTopics(t *testing.T) {
-	topics := NewTopics("", "device-123")
+	topics := NewTopics("acme", "device-123")
 
 	assert.Equal(t, "device-123", topics.DeviceID())
-	assert.Equal(t, "keystone/device-123/cmd/apply", topics.CmdApply)
-	assert.Equal(t, "keystone/device-123/cmd/stop", topics.CmdStop)
-	assert.Equal(t, "keystone/device-123/cmd/status", topics.CmdStatus)
-	assert.Equal(t, "keystone/device-123/cmd/components", topics.CmdComponents)
-	assert.Equal(t, "keystone/device-123/cmd/graph", topics.CmdGraph)
-	assert.Equal(t, "keystone/device-123/cmd/restart", topics.CmdRestart)
-	assert.Equal(t, "keystone/device-123/cmd/stop-comp", topics.CmdStopComp)
-	assert.Equal(t, "keystone/device-123/cmd/health", topics.CmdHealth)
-	assert.Equal(t, "keystone/device-123/cmd/recipes", topics.CmdRecipes)
-	assert.Equal(t, "keystone/device-123/cmd/add-recipe", topics.CmdAddRecipe)
-	assert.Equal(t, "keystone/device-123/cmd/+", topics.CmdWildcard)
+	assert.Equal(t, "keystone/acme/device-123/cmd/apply", topics.CmdApply)
+	assert.Equal(t, "keystone/acme/device-123/cmd/stop", topics.CmdStop)
+	assert.Equal(t, "keystone/acme/device-123/cmd/status", topics.CmdStatus)
+	assert.Equal(t, "keystone/acme/device-123/cmd/components", topics.CmdComponents)
+	assert.Equal(t, "keystone/acme/device-123/cmd/graph", topics.CmdGraph)
+	assert.Equal(t, "keystone/acme/device-123/cmd/restart", topics.CmdRestart)
+	assert.Equal(t, "keystone/acme/device-123/cmd/stop-comp", topics.CmdStopComp)
+	assert.Equal(t, "keystone/acme/device-123/cmd/health", topics.CmdHealth)
+	assert.Equal(t, "keystone/acme/device-123/cmd/recipes", topics.CmdRecipes)
+	assert.Equal(t, "keystone/acme/device-123/cmd/add-recipe", topics.CmdAddRecipe)
+	assert.Equal(t, "keystone/acme/device-123/cmd/+", topics.CmdWildcard)
 
-	assert.Equal(t, "keystone/device-123/resp/apply", topics.RespApply)
-	assert.Equal(t, "keystone/device-123/resp/stop", topics.RespStop)
-	assert.Equal(t, "keystone/device-123/resp/status", topics.RespStatus)
-	assert.Equal(t, "keystone/device-123/resp/components", topics.RespComponents)
-	assert.Equal(t, "keystone/device-123/resp/graph", topics.RespGraph)
-	assert.Equal(t, "keystone/device-123/resp/restart", topics.RespRestart)
-	assert.Equal(t, "keystone/device-123/resp/stop-comp", topics.RespStopComp)
-	assert.Equal(t, "keystone/device-123/resp/health", topics.RespHealth)
-	assert.Equal(t, "keystone/device-123/resp/recipes", topics.RespRecipes)
-	assert.Equal(t, "keystone/device-123/resp/add-recipe", topics.RespAddRecipe)
+	assert.Equal(t, "keystone/acme/device-123/resp/apply", topics.RespApply)
+	assert.Equal(t, "keystone/acme/device-123/resp/stop", topics.RespStop)
+	assert.Equal(t, "keystone/acme/device-123/resp/status", topics.RespStatus)
+	assert.Equal(t, "keystone/acme/device-123/resp/components", topics.RespComponents)
+	assert.Equal(t, "keystone/acme/device-123/resp/graph", topics.RespGraph)
+	assert.Equal(t, "keystone/acme/device-123/resp/restart", topics.RespRestart)
+	assert.Equal(t, "keystone/acme/device-123/resp/stop-comp", topics.RespStopComp)
+	assert.Equal(t, "keystone/acme/device-123/resp/health", topics.RespHealth)
+	assert.Equal(t, "keystone/acme/device-123/resp/recipes", topics.RespRecipes)
+	assert.Equal(t, "keystone/acme/device-123/resp/add-recipe", topics.RespAddRecipe)
 
-	assert.Equal(t, "keystone/device-123/events/state", topics.EventState)
-	assert.Equal(t, "keystone/device-123/events/health", topics.EventHealth)
+	assert.Equal(t, "keystone/acme/device-123/events/state", topics.EventState)
+	assert.Equal(t, "keystone/acme/device-123/events/health", topics.EventHealth)
 }
 
 func TestTopicsResponseTopic(t *testing.T) {
-	topics := NewTopics("", "device-123")
+	topics := NewTopics("acme", "device-123")
 
 	tests := []struct {
 		cmdTopic string

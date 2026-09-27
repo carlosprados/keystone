@@ -43,7 +43,7 @@ Usage of keystone:
   -mqtt-state-interval duration
     	Interval for publishing state events (0 to disable) (default 10s)
   -mqtt-tenant string
-    	Tenant for MQTT topics: keystone/<tenant>/<device>/... instead of keystone/<device>/.... Empty keeps the tenant-less form
+    	Tenant for MQTT topics, keystone/<tenant>/<device>/...: a DNS label (lowercase letters, digits, inner hyphens). Required with --mqtt-broker unless --enrol-dir provides it
   -mqtt-tls-ca string
     	Path to MQTT CA certificate
   -mqtt-tls-cert string
