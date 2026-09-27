@@ -373,7 +373,8 @@ Environment variable equivalents are supported (flags take precedence):
 
 ### Topic Patterns
 
-All topics use the pattern `keystone/{deviceId}/*`:
+All topics use the pattern `keystone/{deviceId}/*`, or `keystone/{tenant}/{deviceId}/*`
+with `--mqtt-tenant`:
 
 #### Command Topics (Agent Subscribes)
 

@@ -49,6 +49,8 @@ type Config struct {
 	// DeviceID is the unique identifier for this agent.
 	// Used in topic prefixes for multi-tenancy.
 	DeviceID string
+	// Tenant, when set, puts every topic under keystone/<tenant>/<device>/…
+	Tenant string
 
 	// ClientID is the MQTT client ID. If empty, defaults to "keystone-{DeviceID}".
 	ClientID string
@@ -87,7 +89,7 @@ type Config struct {
 
 	// Last Will and Testament (LWT)
 	LWTEnabled bool   // Enable LWT (default: true)
-	LWTTopic   string // LWT topic (default: keystone/{deviceId}/status)
+	LWTTopic   string // LWT topic (default: keystone/{tenant/}{deviceId}/status)
 	LWTPayload string // LWT payload (default: "offline")
 	LWTRetain  bool   // Retain LWT message (default: true)
 }
@@ -119,7 +121,7 @@ func New(cfg Config, handler adapter.CommandHandler) *Adapter {
 	return &Adapter{
 		cfg:         cfg,
 		handler:     handler,
-		topics:      NewTopics(cfg.DeviceID),
+		topics:      NewTopics(cfg.Tenant, cfg.DeviceID),
 		deduper:     newCommandDeduper(cfg.CommandDedupeTTL),
 		brokerLocal: brokerIsLoopback(cfg.Broker),
 	}
@@ -202,7 +204,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 	if a.cfg.LWTEnabled {
 		lwtTopic := a.cfg.LWTTopic
 		if lwtTopic == "" {
-			lwtTopic = fmt.Sprintf("keystone/%s/status", a.cfg.DeviceID)
+			lwtTopic = a.topics.Status
 		}
 		lwtPayload := a.cfg.LWTPayload
 		if lwtPayload == "" {
@@ -228,7 +230,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 		if a.cfg.LWTEnabled {
 			lwtTopic := a.cfg.LWTTopic
 			if lwtTopic == "" {
-				lwtTopic = fmt.Sprintf("keystone/%s/status", a.cfg.DeviceID)
+				lwtTopic = a.topics.Status
 			}
 			c.Publish(lwtTopic, a.cfg.ResponseQoS, a.cfg.LWTRetain, "online")
 		}
@@ -308,7 +310,7 @@ func (a *Adapter) Stop(ctx context.Context) error {
 		if a.cfg.LWTEnabled {
 			lwtTopic := a.cfg.LWTTopic
 			if lwtTopic == "" {
-				lwtTopic = fmt.Sprintf("keystone/%s/status", a.cfg.DeviceID)
+				lwtTopic = a.topics.Status
 			}
 			client.Publish(lwtTopic, a.cfg.ResponseQoS, a.cfg.LWTRetain, "offline")
 		}

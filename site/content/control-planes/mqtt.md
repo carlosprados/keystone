@@ -35,6 +35,20 @@ Everything under `keystone/{deviceId}/`:
 The command/response split (rather than MQTT 5 request/response) keeps it
 compatible with 3.1.1 brokers, which is what most industrial gear speaks.
 
+### Tenants
+
+`--mqtt-tenant acme` (`KEYSTONE_MQTT_TENANT`) adds one level to every topic:
+`keystone/acme/{deviceId}/…`, the last will included. With no tenant the topics
+are exactly the ones above, so an existing broker, its ACL and whatever sends
+commands keep working unchanged. That is on purpose: under MQTT 3.1.1 a publish
+the ACL denies is dropped silently, and a moved default would make a device go
+quiet instead of failing.
+
+A tenant must be a single topic level: no `/`, `+`, `#` or NUL. A device ID must
+not contain `+`, `#` or NUL either, since they would turn the device's own
+subscription into a wildcard over other devices' commands. The agent refuses to
+start on either.
+
 ## Replacing the agent itself
 
 `cmd/self-update` asks the device to replace the agent. The agent downloads the

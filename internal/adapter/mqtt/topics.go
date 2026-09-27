@@ -1,6 +1,9 @@
 package mqtt
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Topic patterns for MQTT communication.
 // All topics are prefixed with "keystone/{deviceId}/" for multi-tenancy.
@@ -33,6 +36,7 @@ const (
 	TopicRespSelfUpdate = "keystone/%s/resp/self-update"
 
 	// Event topics (agent publishes these)
+	TopicStatus      = "keystone/%s/status"        // Presence: last will and "online"
 	TopicEventState  = "keystone/%s/events/state"  // State changes
 	TopicEventHealth = "keystone/%s/events/health" // Health updates
 
@@ -43,6 +47,9 @@ const (
 // Topics holds the resolved topic strings for a specific device.
 type Topics struct {
 	deviceID string
+
+	// Status carries presence: the last will's "offline" and "online".
+	Status string
 
 	// Commands (agent subscribes to these)
 	CmdApply      string
@@ -76,38 +83,79 @@ type Topics struct {
 	EventHealth string
 }
 
-// NewTopics creates a Topics instance with the given device ID.
-func NewTopics(deviceID string) *Topics {
+// DevicePath is the part of every topic that names the device:
+// "<device>" or, with a tenant, "<tenant>/<device>".
+//
+// Without a tenant the path is exactly what it has always been, so existing
+// brokers, ACLs and controllers keep working unchanged. A new default would
+// have broken the ACL and the command channel together, and under MQTT 3.1.1 a
+// publish the ACL denies is dropped silently: the device would simply go mute.
+func DevicePath(tenant, deviceID string) string {
+	if tenant == "" {
+		return deviceID
+	}
+	return tenant + "/" + deviceID
+}
+
+// ValidateTenant refuses a tenant that would not stay one topic level: a "/"
+// would shift every topic, and "+" or "#" would turn the device's subscription
+// into a wildcard over other tenants' devices.
+func ValidateTenant(v string) error {
+	if strings.TrimSpace(v) != v || v == "" {
+		return fmt.Errorf("tenant %q must be non-empty with no surrounding spaces", v)
+	}
+	if strings.ContainsAny(v, "/+#\x00") {
+		return fmt.Errorf("tenant %q must be a single MQTT topic level: no '/', '+', '#' or NUL", v)
+	}
+	return nil
+}
+
+// ValidateDeviceID refuses the characters that make a topic a wildcard. A "/"
+// is still allowed: installs already use it, and it only adds levels.
+func ValidateDeviceID(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return fmt.Errorf("device ID must not be empty")
+	}
+	if strings.ContainsAny(v, "+#\x00") {
+		return fmt.Errorf("device ID %q must not contain '+', '#' or NUL: they would make the device subscribe to other devices' commands", v)
+	}
+	return nil
+}
+
+// NewTopics creates the topics for a device, under a tenant when one is set.
+func NewTopics(tenant, deviceID string) *Topics {
+	path := DevicePath(tenant, deviceID)
 	return &Topics{
 		deviceID: deviceID,
+		Status:   fmt.Sprintf(TopicStatus, path),
 
-		CmdApply:      fmt.Sprintf(TopicCmdApply, deviceID),
-		CmdStop:       fmt.Sprintf(TopicCmdStop, deviceID),
-		CmdStatus:     fmt.Sprintf(TopicCmdStatus, deviceID),
-		CmdComponents: fmt.Sprintf(TopicCmdComponents, deviceID),
-		CmdGraph:      fmt.Sprintf(TopicCmdGraph, deviceID),
-		CmdRestart:    fmt.Sprintf(TopicCmdRestart, deviceID),
-		CmdStopComp:   fmt.Sprintf(TopicCmdStopComp, deviceID),
-		CmdHealth:     fmt.Sprintf(TopicCmdHealth, deviceID),
-		CmdRecipes:    fmt.Sprintf(TopicCmdRecipes, deviceID),
-		CmdAddRecipe:  fmt.Sprintf(TopicCmdAddRecipe, deviceID),
-		CmdSelfUpdate: fmt.Sprintf(TopicCmdSelfUpdate, deviceID),
-		CmdWildcard:   fmt.Sprintf(TopicCmdWildcard, deviceID),
+		CmdApply:      fmt.Sprintf(TopicCmdApply, path),
+		CmdStop:       fmt.Sprintf(TopicCmdStop, path),
+		CmdStatus:     fmt.Sprintf(TopicCmdStatus, path),
+		CmdComponents: fmt.Sprintf(TopicCmdComponents, path),
+		CmdGraph:      fmt.Sprintf(TopicCmdGraph, path),
+		CmdRestart:    fmt.Sprintf(TopicCmdRestart, path),
+		CmdStopComp:   fmt.Sprintf(TopicCmdStopComp, path),
+		CmdHealth:     fmt.Sprintf(TopicCmdHealth, path),
+		CmdRecipes:    fmt.Sprintf(TopicCmdRecipes, path),
+		CmdAddRecipe:  fmt.Sprintf(TopicCmdAddRecipe, path),
+		CmdSelfUpdate: fmt.Sprintf(TopicCmdSelfUpdate, path),
+		CmdWildcard:   fmt.Sprintf(TopicCmdWildcard, path),
 
-		RespApply:      fmt.Sprintf(TopicRespApply, deviceID),
-		RespStop:       fmt.Sprintf(TopicRespStop, deviceID),
-		RespStatus:     fmt.Sprintf(TopicRespStatus, deviceID),
-		RespComponents: fmt.Sprintf(TopicRespComponents, deviceID),
-		RespGraph:      fmt.Sprintf(TopicRespGraph, deviceID),
-		RespRestart:    fmt.Sprintf(TopicRespRestart, deviceID),
-		RespStopComp:   fmt.Sprintf(TopicRespStopComp, deviceID),
-		RespHealth:     fmt.Sprintf(TopicRespHealth, deviceID),
-		RespRecipes:    fmt.Sprintf(TopicRespRecipes, deviceID),
-		RespAddRecipe:  fmt.Sprintf(TopicRespAddRecipe, deviceID),
-		RespSelfUpdate: fmt.Sprintf(TopicRespSelfUpdate, deviceID),
+		RespApply:      fmt.Sprintf(TopicRespApply, path),
+		RespStop:       fmt.Sprintf(TopicRespStop, path),
+		RespStatus:     fmt.Sprintf(TopicRespStatus, path),
+		RespComponents: fmt.Sprintf(TopicRespComponents, path),
+		RespGraph:      fmt.Sprintf(TopicRespGraph, path),
+		RespRestart:    fmt.Sprintf(TopicRespRestart, path),
+		RespStopComp:   fmt.Sprintf(TopicRespStopComp, path),
+		RespHealth:     fmt.Sprintf(TopicRespHealth, path),
+		RespRecipes:    fmt.Sprintf(TopicRespRecipes, path),
+		RespAddRecipe:  fmt.Sprintf(TopicRespAddRecipe, path),
+		RespSelfUpdate: fmt.Sprintf(TopicRespSelfUpdate, path),
 
-		EventState:  fmt.Sprintf(TopicEventState, deviceID),
-		EventHealth: fmt.Sprintf(TopicEventHealth, deviceID),
+		EventState:  fmt.Sprintf(TopicEventState, path),
+		EventHealth: fmt.Sprintf(TopicEventHealth, path),
 	}
 }
 

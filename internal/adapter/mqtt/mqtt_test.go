@@ -28,7 +28,7 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestNewTopics(t *testing.T) {
-	topics := NewTopics("device-123")
+	topics := NewTopics("", "device-123")
 
 	assert.Equal(t, "device-123", topics.DeviceID())
 	assert.Equal(t, "keystone/device-123/cmd/apply", topics.CmdApply)
@@ -59,7 +59,7 @@ func TestNewTopics(t *testing.T) {
 }
 
 func TestTopicsResponseTopic(t *testing.T) {
-	topics := NewTopics("device-123")
+	topics := NewTopics("", "device-123")
 
 	tests := []struct {
 		cmdTopic string
