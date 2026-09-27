@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Keystone is a lightweight edge orchestration agent written in Go (`github.com/carlosprados/keystone`). It manages local components (native processes by default, containers optional), executes deployments atomically with rollback, and converges devices to a desired state. Philosophy: "processes first, containers when needed."
 
-Go 1.24+. Key deps: containerd v2, nats.go, paho.mqtt.golang, prometheus client, go-toml/v2.
+Go 1.24+. Key deps: containerd v2, paho.mqtt.golang, prometheus client, go-toml/v2.
 
 ## Build and Development Commands
 
@@ -28,8 +28,8 @@ task release:tag RELEASE=v0.3.1       # after the merge: tags origin/main
 # Single test
 go test -v -run TestName ./internal/package/...
 
-# Run with NATS
-./keystone --http :8080 --nats-url nats://localhost:4222 --nats-device-id edge-001
+# Run with MQTT (the tenant is required)
+./keystone --http :8080 --mqtt-broker tcp://localhost:1883 --mqtt-tenant lab --mqtt-device-id edge-001
 
 # Run built-in demo (db -> cache -> api dependency chain)
 go run ./cmd/keystone --demo
@@ -49,7 +49,7 @@ Releases via GoReleaser (`.goreleaser.yaml`), triggered by version tags. Builds 
 
 All control flow is driven by three key interfaces:
 
-1. **`adapter.Adapter`** (`internal/adapter/adapter.go`): Pluggable transport — `Name()`, `Start(ctx)`, `Stop(ctx)`. Implementations: HTTP, NATS, MQTT.
+1. **`adapter.Adapter`** (`internal/adapter/adapter.go`): Pluggable transport — `Name()`, `Start(ctx)`, `Stop(ctx)`. Implementations: HTTP, MQTT (NATS was removed in v0.13.0).
 
 2. **`adapter.CommandHandler`** (`internal/adapter/adapter.go`): Business logic contract — `ApplyPlan`, `StopPlan`, `GetComponents`, `RestartComponent`, etc. Implemented by `Agent`.
 
@@ -61,7 +61,6 @@ All control flow is driven by three key interfaces:
 Agent.New(httpAddr)
   → adapter.NewRegistry()
     ├→ httpadapter.New(cfg, agent)    [always, unless --http ""]
-    ├→ natsadapter.New(cfg, agent)    [if --nats-url set]
     └→ mqttadapter.New(cfg, agent)    [if --mqtt-broker set]
   → Registry.StartAll(ctx)
   → <-signal → Registry.StopAll(shutdownCtx, 10s)
@@ -74,7 +73,6 @@ Agent.New(httpAddr)
 | `internal/agent` | Top-level runtime, implements `CommandHandler`, coordinates all subsystems |
 | `internal/adapter` | Transport abstraction + `Registry` for multi-adapter lifecycle |
 | `internal/adapter/http` | REST API adapter (default :8080) |
-| `internal/adapter/nats` | NATS adapter + JetStream job queue |
 | `internal/adapter/mqtt` | MQTT adapter (Paho client, QoS, LWT) |
 | `internal/supervisor` | Component lifecycle FSM (none→installing→starting→running→stopping→stopped/failed), DAG-based topological ordering for parallel startup |
 | `internal/runner` | Runner interface + `ProcessRunner` (process groups, signals, health probes, restart policies) + `ContainerRunner` (containerd v2 client, CLI fallback to docker/nerdctl/podman) |
@@ -162,7 +160,7 @@ Rules that follow from this:
 - `README.md` — Features, quick start, all CLI flags, environment variables
 - `docs/security.md` — Security model: secure-by-default posture, auth, signing, `--insecure-skip-verify`, config reference
 - `docs/component-state.md` — Component states, liveness guarantees of `/v1/components`, reuse rules on re-apply
-- `docs/adapters.md` — Adapter comparison, HTTP auth, NATS/MQTT configuration details
+- `docs/adapters.md` — Adapter comparison, HTTP auth, MQTT configuration details
 - `docs/containers.md` — Container recipe syntax and examples
 - `docs/containerrunner-design.md` — Containerd integration design decisions
 - `KeyStone.md` — Original architecture proposal and delivery plan

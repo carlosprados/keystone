@@ -52,7 +52,7 @@ Two trust boundaries matter:
 | Process privileges | `[lifecycle.run.security]`: user/group, `no_new_privileges`, capability allow-list | inherits the agent unless declared |
 | Schema | Recipe/plan JSON Schema enforced (not best-effort) | secure |
 | Signer certificates | Leaf must list codeSigning EKU, and every CA in the chain must allow it | secure (fail-closed) |
-| Code vs transport CAs | Refuse to start if the trust bundle shares a key with an MQTT/NATS CA or client chain | secure (fail-closed) |
+| Code vs transport CAs | Refuse to start if the trust bundle shares a key with an MQTT CA or client chain | secure (fail-closed) |
 | Device enrolment | `keystone enrol` trusts the server only through the pinned CA (not system roots, not its leaf); the key is generated on the device; an answer for another key or name is not written; `--enrol-dir` values that disagree with explicit `--mqtt-*` settings refuse the start | secure (fail-closed) |
 | Signer transition | `--allow-no-eku-signers` / `KEYSTONE_ALLOW_NO_EKU_SIGNERS=true` admits no-EKU signers, logged each time | off |
 | Dev escape | `--insecure-skip-verify` / `KEYSTONE_INSECURE_SKIP_VERIFY=true` | off |
@@ -83,7 +83,7 @@ KEYSTONE_API_TOKEN="$KEYSTONE_API_TOKEN" ./keystonectl --addr http://host:8080 s
 ```
 
 > HTTP transport-level TLS is not yet built in; terminate TLS at a reverse proxy
-> or use the token over a trusted link. NATS/MQTT support TLS natively (see
+> or use the token over a trusted link. MQTT supports TLS natively (see
 > [adapters.md](adapters.md)).
 
 ### Prefer a tunnel to an exposed port
@@ -394,10 +394,6 @@ NoNewPrivs:	1
 
 Honest list of what is **not** yet covered (tracked as follow-ups):
 
-- **NATS/MQTT `planPath`:** the `planPath` rejection is implemented for HTTP
-  only. NATS/MQTT still accept it; they are disabled by default and rely on
-  broker ACLs.
-- **Release signing:** released binaries are not yet signed (no cosign/SBOM).
 - **Container confinement:** `privileged` containers and host mounts are not
   gated by policy. Process components can now be confined (see *Process
   privileges* below), containers only through `[lifecycle.run.container]`.

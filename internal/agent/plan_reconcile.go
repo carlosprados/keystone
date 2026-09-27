@@ -275,7 +275,7 @@ func (a *Agent) stateMigrationBlockers(oldPlanPath string, desired *plannedState
 //     can only re-apply the failure — and it gets there through
 //     stopPlanInternal, which stops every component in the plan, the healthy
 //     ones included. That turned one component failing to start into a total
-//     outage, reachable from a NATS or MQTT command naming the planPath already
+//     outage, reachable from an MQTT command naming the planPath already
 //     in effect, and from the boot resume.
 //
 // It is the path that decides, not the plan mapping. The rollback loads the plan

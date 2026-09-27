@@ -7,21 +7,23 @@ Keystone uses a pluggable adapter architecture for control plane communication. 
 | Adapter | Protocol | Use Case | Enabled By Default |
 |---------|----------|----------|-------------------|
 | **HTTP** | REST API | Local management, debugging, Prometheus scraping | Yes |
-| **NATS** | Pub/Sub messaging | Cloud-scale fleet management, JetStream persistence | No |
 | **MQTT** | IoT messaging | IoT platforms, AWS IoT Core, edge gateways | No |
 
 ## Adapter Comparison
 
-| Feature | HTTP | NATS | MQTT |
-|---------|------|------|------|
-| **Transport** | HTTP/1.1 | TCP/WebSocket | TCP/WebSocket |
-| **Pattern** | Request/Response | Pub/Sub + Request/Reply | Pub/Sub |
-| **TLS Support** | Terminate at proxy | Yes (mTLS) | Yes (mTLS) |
-| **Authentication** | Bearer token (required off-loopback) | NKey, Creds, Token, User/Pass | User/Pass, Certificates |
-| **Persistence** | N/A | JetStream | Broker-dependent |
-| **Offline Queuing** | No | Yes (JetStream) | Broker-dependent |
-| **Event Streaming** | No | Yes | Yes |
-| **Best For** | Local/debug | Large fleets, cloud | IoT, constrained devices |
+| Feature | HTTP | MQTT |
+|---------|------|------|
+| **Transport** | HTTP/1.1 | TCP/WebSocket |
+| **Pattern** | Request/Response | Pub/Sub |
+| **TLS Support** | Terminate at proxy | Yes (mTLS) |
+| **Authentication** | Bearer token (required off-loopback) | User/Pass, Certificates, [enrolment](../site/content/security/enrolment.md) |
+| **Persistence** | N/A | Broker-dependent |
+| **Offline Queuing** | No | Broker-dependent |
+| **Event Streaming** | No | Yes |
+| **Best For** | Local/debug | Fleets, constrained devices, outbound-only links |
+
+A NATS adapter existed until v0.13.0 and was removed: it had no users we know of, and every
+change to the command protocol had to be made twice.
 
 ---
 
@@ -148,158 +150,6 @@ curl -s localhost:8080/metrics | grep keystone_
 
 ---
 
-## NATS Adapter
-
-The NATS adapter enables asynchronous control plane communication through NATS messaging. It's ideal for large-scale fleet management with support for JetStream persistent job queues.
-
-### Configuration
-
-```bash
-# Basic NATS connection
-./keystone --http :8080 \
-  --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001
-
-# With mTLS
-./keystone --http :8080 \
-  --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
-  --nats-tls-cert /etc/keystone/certs/client.crt \
-  --nats-tls-key /etc/keystone/certs/client.key \
-  --nats-tls-ca /etc/keystone/certs/ca.crt
-
-# With NKey authentication (recommended for production)
-./keystone --http :8080 \
-  --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
-  --nats-nkey /etc/keystone/nats/device.nkey
-
-# With credentials file (JWT + NKey)
-./keystone --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
-  --nats-creds /etc/keystone/nats/device.creds
-
-# With token authentication
-./keystone --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
-  --nats-token mytoken
-
-# With username/password
-./keystone --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
-  --nats-user agent --nats-pass secret
-
-# With JetStream enabled
-./keystone --http :8080 \
-  --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
-  --nats-jetstream \
-  --nats-js-stream MYFLEET_JOBS \
-  --nats-js-workers 2
-```
-
-### CLI Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--nats-url` | (empty) | NATS server URL (empty to disable) |
-| `--nats-device-id` | hostname | Device ID for NATS subjects |
-| `--nats-tls-cert` | (empty) | Path to client TLS certificate |
-| `--nats-tls-key` | (empty) | Path to client TLS key |
-| `--nats-tls-ca` | (empty) | Path to CA certificate |
-| `--nats-tls-verify` | `true` | Verify server certificate |
-| `--nats-creds` | (empty) | Path to credentials file (.creds) |
-| `--nats-nkey` | (empty) | Path to NKey seed file |
-| `--nats-token` | (empty) | Authentication token |
-| `--nats-user` | (empty) | Username for auth |
-| `--nats-pass` | (empty) | Password for auth |
-| `--nats-state-interval` | `10s` | State event publish interval (0 to disable) |
-| `--nats-health-interval` | `30s` | Health event publish interval (0 to disable) |
-| `--nats-jetstream` | `false` | Enable JetStream job queue |
-| `--nats-js-stream` | `KEYSTONE_JOBS` | JetStream stream name |
-| `--nats-js-workers` | `1` | Number of job processor workers |
-
-**Authentication Priority:** NKey > Credentials > Token > Username/Password
-
-### Subject Patterns
-
-All subjects use the pattern `keystone.{deviceId}.*`:
-
-#### Command Subjects (Request/Reply)
-
-| Subject | Description |
-|---------|-------------|
-| `keystone.{deviceId}.cmd.apply` | Apply a deployment plan |
-| `keystone.{deviceId}.cmd.stop` | Stop all components |
-| `keystone.{deviceId}.cmd.status` | Get plan status |
-| `keystone.{deviceId}.cmd.components` | Get components list |
-| `keystone.{deviceId}.cmd.graph` | Get dependency graph |
-| `keystone.{deviceId}.cmd.restart` | Restart a component |
-| `keystone.{deviceId}.cmd.stop-comp` | Stop a specific component |
-| `keystone.{deviceId}.cmd.health` | Get health status |
-| `keystone.{deviceId}.cmd.recipes` | List recipes |
-| `keystone.{deviceId}.cmd.add-recipe` | Add a recipe |
-
-#### Event Subjects (Publish)
-
-| Subject | Description |
-|---------|-------------|
-| `keystone.{deviceId}.events.state` | Component state updates |
-| `keystone.{deviceId}.events.health` | Health status updates |
-
-### Message Formats
-
-**Apply Request:**
-```json
-{
-  "planPath": "/path/to/plan.toml",
-  "dry": false
-}
-```
-
-**Restart Request:**
-```json
-{
-  "component": "myapp",
-  "wait": "health",
-  "timeout": "60s",
-  "dry": false
-}
-```
-
-**Response Format:**
-```json
-{
-  "success": true,
-  "data": { ... },
-  "error": ""
-}
-```
-
-### JetStream Job Queue
-
-JetStream provides durable job processing for scenarios where reliability is critical:
-
-- **Persistence**: Jobs survive network outages and agent restarts
-- **At-least-once delivery**: Failed jobs automatically retry (default: 5 attempts)
-- **Acknowledgment**: Jobs removed only after successful processing
-- **Results stream**: Results published to `keystone.{deviceId}.jobs.results`
-
-**Supported Job Types:** `apply`, `stop`, `restart`, `stop-comp`, `add-recipe`, `delete-recipe`
-
-### Security Features
-
-| Feature | Description |
-|---------|-------------|
-| **mTLS** | Mutual TLS with client certificates |
-| **NKey** | Ed25519 key-based authentication |
-| **Credentials** | JWT + NKey combined file |
-| **Token** | Simple token authentication |
-| **User/Pass** | Basic authentication |
-| **TLS 1.2+** | Enforced minimum TLS version |
-
----
-
 ## MQTT Adapter
 
 The MQTT adapter provides IoT-friendly communication, compatible with popular MQTT brokers like Mosquitto, EMQX, HiveMQ, and cloud services like AWS IoT Core.
@@ -310,17 +160,20 @@ The MQTT adapter provides IoT-friendly communication, compatible with popular MQ
 # Basic MQTT connection
 ./keystone --http :8080 \
   --mqtt-broker tcp://broker:1883 \
+  --mqtt-tenant acme \
   --mqtt-device-id edge-001
 
 # With TLS
 ./keystone --http :8080 \
   --mqtt-broker ssl://broker:8883 \
+  --mqtt-tenant acme \
   --mqtt-device-id edge-001 \
   --mqtt-tls-ca /etc/keystone/certs/ca.crt
 
 # With mTLS
 ./keystone --http :8080 \
   --mqtt-broker ssl://broker:8883 \
+  --mqtt-tenant acme \
   --mqtt-device-id edge-001 \
   --mqtt-tls-cert /etc/keystone/certs/client.crt \
   --mqtt-tls-key /etc/keystone/certs/client.key \
@@ -329,6 +182,7 @@ The MQTT adapter provides IoT-friendly communication, compatible with popular MQ
 # With username/password
 ./keystone --http :8080 \
   --mqtt-broker tcp://broker:1883 \
+  --mqtt-tenant acme \
   --mqtt-device-id edge-001 \
   --mqtt-user agent \
   --mqtt-pass secret
@@ -336,6 +190,7 @@ The MQTT adapter provides IoT-friendly communication, compatible with popular MQ
 # With custom QoS and client ID
 ./keystone --http :8080 \
   --mqtt-broker tcp://broker:1883 \
+  --mqtt-tenant acme \
   --mqtt-device-id edge-001 \
   --mqtt-client-id my-custom-client-id \
   --mqtt-qos 2
@@ -343,6 +198,7 @@ The MQTT adapter provides IoT-friendly communication, compatible with popular MQ
 # Disable event publishing
 ./keystone --http :8080 \
   --mqtt-broker tcp://broker:1883 \
+  --mqtt-tenant acme \
   --mqtt-device-id edge-001 \
   --mqtt-state-interval 0 \
   --mqtt-health-interval 0
@@ -353,8 +209,9 @@ The MQTT adapter provides IoT-friendly communication, compatible with popular MQ
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--mqtt-broker` | (empty) | MQTT broker URL (empty to disable) |
+| `--mqtt-tenant` | (required) | Tenant for topics, a lowercase DNS label |
 | `--mqtt-device-id` | hostname | Device ID for topics |
-| `--mqtt-client-id` | `keystone-{device-id}` | MQTT client ID |
+| `--mqtt-client-id` | `keystone-{tenant}-{device-id}` | MQTT client ID |
 | `--mqtt-tls-cert` | (empty) | Path to client TLS certificate |
 | `--mqtt-tls-key` | (empty) | Path to client TLS key |
 | `--mqtt-tls-ca` | (empty) | Path to CA certificate |
@@ -366,53 +223,53 @@ The MQTT adapter provides IoT-friendly communication, compatible with popular MQ
 | `--mqtt-health-interval` | `30s` | Health event publish interval (0 to disable) |
 
 Environment variable equivalents are supported (flags take precedence):
-`KEYSTONE_MQTT_BROKER`, `KEYSTONE_MQTT_DEVICE_ID`, `KEYSTONE_MQTT_CLIENT_ID`,
+`KEYSTONE_MQTT_BROKER`, `KEYSTONE_MQTT_TENANT`, `KEYSTONE_MQTT_DEVICE_ID`, `KEYSTONE_MQTT_CLIENT_ID`,
 `KEYSTONE_MQTT_TLS_CERT`, `KEYSTONE_MQTT_TLS_KEY`, `KEYSTONE_MQTT_TLS_CA`,
 `KEYSTONE_MQTT_TLS_VERIFY`, `KEYSTONE_MQTT_USER`, `KEYSTONE_MQTT_PASS`,
 `KEYSTONE_MQTT_QOS`, `KEYSTONE_MQTT_STATE_INTERVAL`, `KEYSTONE_MQTT_HEALTH_INTERVAL`.
 
 ### Topic Patterns
 
-All topics use the pattern `keystone/{deviceId}/*`, or `keystone/{tenant}/{deviceId}/*`
-with `--mqtt-tenant`:
+All topics use the pattern `keystone/{tenant}/{deviceId}/*`. The tenant is required
+(`--mqtt-tenant`, or an enrolment):
 
 #### Command Topics (Agent Subscribes)
 
 | Topic | Description |
 |-------|-------------|
-| `keystone/{deviceId}/cmd/apply` | Apply a deployment plan |
-| `keystone/{deviceId}/cmd/stop` | Stop all components |
-| `keystone/{deviceId}/cmd/status` | Get plan status |
-| `keystone/{deviceId}/cmd/components` | Get components list |
-| `keystone/{deviceId}/cmd/graph` | Get dependency graph |
-| `keystone/{deviceId}/cmd/restart` | Restart a component |
-| `keystone/{deviceId}/cmd/stop-comp` | Stop a specific component |
-| `keystone/{deviceId}/cmd/health` | Get health status |
-| `keystone/{deviceId}/cmd/recipes` | List recipes |
-| `keystone/{deviceId}/cmd/add-recipe` | Add a recipe |
+| `keystone/{tenant}/{deviceId}/cmd/apply` | Apply a deployment plan |
+| `keystone/{tenant}/{deviceId}/cmd/stop` | Stop all components |
+| `keystone/{tenant}/{deviceId}/cmd/status` | Get plan status |
+| `keystone/{tenant}/{deviceId}/cmd/components` | Get components list |
+| `keystone/{tenant}/{deviceId}/cmd/graph` | Get dependency graph |
+| `keystone/{tenant}/{deviceId}/cmd/restart` | Restart a component |
+| `keystone/{tenant}/{deviceId}/cmd/stop-comp` | Stop a specific component |
+| `keystone/{tenant}/{deviceId}/cmd/health` | Get health status |
+| `keystone/{tenant}/{deviceId}/cmd/recipes` | List recipes |
+| `keystone/{tenant}/{deviceId}/cmd/add-recipe` | Add a recipe |
 
 #### Response Topics (Agent Publishes)
 
 | Topic | Description |
 |-------|-------------|
-| `keystone/{deviceId}/resp/apply` | Apply response |
-| `keystone/{deviceId}/resp/stop` | Stop response |
-| `keystone/{deviceId}/resp/status` | Status response |
-| `keystone/{deviceId}/resp/components` | Components response |
-| `keystone/{deviceId}/resp/graph` | Graph response |
-| `keystone/{deviceId}/resp/restart` | Restart response |
-| `keystone/{deviceId}/resp/stop-comp` | Stop component response |
-| `keystone/{deviceId}/resp/health` | Health response |
-| `keystone/{deviceId}/resp/recipes` | Recipes response |
-| `keystone/{deviceId}/resp/add-recipe` | Add recipe response |
+| `keystone/{tenant}/{deviceId}/resp/apply` | Apply response |
+| `keystone/{tenant}/{deviceId}/resp/stop` | Stop response |
+| `keystone/{tenant}/{deviceId}/resp/status` | Status response |
+| `keystone/{tenant}/{deviceId}/resp/components` | Components response |
+| `keystone/{tenant}/{deviceId}/resp/graph` | Graph response |
+| `keystone/{tenant}/{deviceId}/resp/restart` | Restart response |
+| `keystone/{tenant}/{deviceId}/resp/stop-comp` | Stop component response |
+| `keystone/{tenant}/{deviceId}/resp/health` | Health response |
+| `keystone/{tenant}/{deviceId}/resp/recipes` | Recipes response |
+| `keystone/{tenant}/{deviceId}/resp/add-recipe` | Add recipe response |
 
 #### Event Topics (Agent Publishes)
 
 | Topic | Description |
 |-------|-------------|
-| `keystone/{deviceId}/events/state` | Component state updates |
-| `keystone/{deviceId}/events/health` | Health status updates |
-| `keystone/{deviceId}/status` | LWT: "online" / "offline" |
+| `keystone/{tenant}/{deviceId}/events/state` | Component state updates |
+| `keystone/{tenant}/{deviceId}/events/health` | Health status updates |
+| `keystone/{tenant}/{deviceId}/status` | LWT: "online" / "offline" |
 
 ### Message Formats
 
@@ -465,7 +322,7 @@ All requests include an optional `correlationId` for matching responses:
 ### Last Will and Testament (LWT)
 
 The MQTT adapter automatically configures an LWT message:
-- **Topic:** `keystone/{deviceId}/status`
+- **Topic:** `keystone/{tenant}/{deviceId}/status`
 - **Online Payload:** `"online"` (published on connect)
 - **Offline Payload:** `"offline"` (published by broker on disconnect)
 - **Retained:** Yes (subscribers see current status immediately)
@@ -489,24 +346,12 @@ This allows monitoring systems to detect agent connectivity status in real-time.
 Adapters can run simultaneously. A typical production setup might use:
 
 ```bash
-# HTTP for local debugging + NATS for fleet management
-./keystone --http :8080 \
-  --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
-  --nats-jetstream
-
 # HTTP for metrics + MQTT for IoT platform
 ./keystone --http :8080 \
   --mqtt-broker ssl://iot.example.com:8883 \
+  --mqtt-tenant acme \
   --mqtt-device-id edge-001 \
   --mqtt-tls-ca /etc/keystone/certs/iot-ca.crt
-
-# All three adapters
-./keystone --http :8080 \
-  --nats-url nats://nats.internal:4222 \
-  --nats-device-id edge-001 \
-  --mqtt-broker tcp://mqtt.internal:1883 \
-  --mqtt-device-id edge-001
 ```
 
 ## Environment Variables
@@ -515,8 +360,9 @@ Adapter settings configurable via environment variables (flags take precedence):
 
 | Variable | Description |
 |----------|-------------|
-| `KEYSTONE_DEVICE_ID` | Default device ID for NATS/MQTT (if not specified via flags). |
+| `KEYSTONE_DEVICE_ID` | Default device ID for MQTT (if not specified via flags). |
 | `KEYSTONE_MQTT_BROKER` | MQTT broker URL (used if `--mqtt-broker` is not passed). |
+| `KEYSTONE_MQTT_TENANT` | MQTT tenant; required unless an enrolment provides it. |
 | `KEYSTONE_MQTT_DEVICE_ID` | MQTT-specific device ID (used if `--mqtt-device-id` is not passed). |
 | `KEYSTONE_MQTT_CLIENT_ID` | MQTT client ID (used if `--mqtt-client-id` is not passed). |
 | `KEYSTONE_MQTT_TLS_CERT` | Path to MQTT client TLS certificate. |
@@ -533,10 +379,6 @@ Adapter settings configurable via environment variables (flags take precedence):
 
 ### Common Issues
 
-**NATS: Connection refused**
-- Check that the NATS server is running and accessible
-- Verify firewall rules allow traffic on port 4222
-
 **MQTT: TLS handshake failed**
 - Ensure CA certificate matches the broker's certificate
 - Check that the broker URL uses `ssl://` for TLS connections
@@ -549,13 +391,10 @@ Adapter settings configurable via environment variables (flags take precedence):
 
 Adapter activities are logged with prefixes:
 - `[http]` - HTTP adapter events
-- `[nats]` - NATS adapter events
 - `[mqtt]` - MQTT adapter events
 
 Example:
 ```
-[nats] connected to nats://control-plane:4222 as edge-001
-[nats] subscribed to keystone.edge-001.cmd.apply
-[mqtt] connected to tcp://broker:1883 as keystone-edge-001
-[mqtt] subscribed to keystone/edge-001/cmd/apply
+[mqtt] connected to tcp://broker:1883 as keystone-acme-edge-001
+[mqtt] subscribed to keystone/acme/edge-001/cmd/apply
 ```

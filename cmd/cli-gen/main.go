@@ -170,8 +170,7 @@ const agentProse = `### The ones you will actually use
 | ` + "`--http`" + ` | Listen address. ` + "`\"\"`" + ` disables the HTTP adapter entirely |
 | ` + "`--api-token`" + ` | Required to bind anything but loopback |
 | ` + "`--insecure-skip-verify`" + ` | Development only. Disables mandatory artifact integrity |
-| ` + "`--nats-url`" + ` / ` + "`--nats-device-id`" + ` | Enable the NATS adapter |
-| ` + "`--mqtt-broker`" + ` / ` + "`--mqtt-device-id`" + ` | Enable the MQTT adapter |
+| ` + "`--mqtt-broker`" + ` / ` + "`--mqtt-tenant`" + ` / ` + "`--mqtt-device-id`" + ` | Enable the MQTT adapter; the tenant is required |
 | ` + "`--demo`" + ` | Run a built-in mock 3-component stack. Good for a first look |
 | ` + "`--version`" + ` | Print version and commit |
 

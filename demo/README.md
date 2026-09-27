@@ -1,7 +1,7 @@
 # Demo de Keystone — despliegue y actualización de 3 componentes
 
 Esta demo muestra cómo Keystone resuelve dependencias, descarga artefactos por
-HTTP con verificación SHA-256, arranca procesos nativos en el orden correcto y
+HTTP verificando su SHA-256 y su firma, arranca procesos nativos en el orden correcto y
 hace una **actualización atómica** de los tres componentes de la versión **1.0.0**
 a la **2.0.0** en una sola llamada.
 
@@ -52,17 +52,18 @@ demo/
 │   └── data-consumer/{v1,v2}/main.go
 ├── recipes/
 │   ├── v1/*.recipe.toml.tmpl   Plantillas con placeholder {{SHA256}}
-│   ├── v1/*.recipe.toml        Generadas por build.sh
+│   ├── v1/*.recipe.toml        Generadas por build.sh, con su .sig al lado
 │   ├── v2/*.recipe.toml.tmpl
 │   └── v2/*.recipe.toml
 ├── plans/
 │   ├── plan-v1.toml
 │   └── plan-v2.toml
-├── artifacts/              Binarios compilados (servidos por keystoneserver)
+├── artifacts/              Binarios compilados y sus .sig (servidos por keystoneserver)
+├── trust/                  CA de demo creada por build.sh (no se versiona)
 └── scripts/
-    ├── build.sh            Compila los 6 binarios y renderiza recipes
+    ├── build.sh            Compila los 6 binarios, renderiza recipes y firma todo
     ├── serve-artifacts.sh  Levanta keystoneserver :9000 sobre demo/artifacts
-    ├── run-agent.sh        Levanta keystone agent :8080 con CWD = raíz del repo
+    ├── run-agent.sh        Levanta el agente en 127.0.0.1:8080 confiando en demo/trust/
     ├── apply-v1.sh         keystonectl apply demo/plans/plan-v1.toml
     ├── apply-v2.sh         keystonectl apply demo/plans/plan-v2.toml
     ├── status.sh           Snapshot del estado (agente + endpoints)
@@ -103,7 +104,7 @@ Todos los scripts se ejecutan desde la **raíz del repo**.
 ### Terminal 1 — repositorio de artefactos
 
 ```bash
-./demo/scripts/build.sh          # compila + renderiza recipes
+./demo/scripts/build.sh          # compila, renderiza recipes y firma binarios y recipes
 ./demo/scripts/serve-artifacts.sh
 ```
 
@@ -115,7 +116,8 @@ Salida esperada: `keystoneserver: sirviendo …/demo/artifacts en http://:9000`.
 ./demo/scripts/run-agent.sh
 ```
 
-Escucha en `:8080`. Deja este terminal visible: los logs en vivo son el plato
+Escucha en `127.0.0.1:8080` y sólo acepta lo firmado por la CA de la demo
+(`demo/trust/`). Deja este terminal visible: los logs en vivo son el plato
 fuerte de la demo (eventos `component=… msg=starting component`, health checks,
 transiciones de estado).
 
@@ -156,7 +158,7 @@ Puntos a remarcar:
 ./demo/scripts/apply-v1.sh
 ```
 
-Mirar el log del agente: se ve cómo descarga cada binario, verifica SHA-256,
+Mirar el log del agente: se ve cómo descarga cada binario, verifica su SHA-256 y su firma,
 ejecuta el install script y arranca en orden `config → producer → consumer`.
 
 ```bash
@@ -236,8 +238,10 @@ recipes renderizadas:
 ## Puntos clave para remarcar
 
 1. **Contrato declarativo**. TOML, no scripts imperativos. El agente converge.
-2. **Integridad**. SHA-256 obligatorio; añadible firma ECDSA/RSA (ver
-   `configs/trust/`).
+2. **Integridad**. SHA-256 y firma obligatorios. `build.sh` firma binarios y
+   recipes con una CA de demo, y el agente rechaza lo que no encadene a ella.
+   Para enseñarlo: estropea una `.sig` en `demo/recipes/v1/`, reaplica el plan
+   y verás `recipe signature verify failed`; `build.sh` la vuelve a firmar.
 3. **Dependencias explícitas**. Orden de arranque y paralelismo derivados del
    DAG — el operador no los escribe.
 4. **Health-gated rollout**. Un componente nuevo no marca "running" hasta que
@@ -252,7 +256,9 @@ recipes renderizadas:
 
 | Síntoma                                              | Causa más probable                                       |
 |------------------------------------------------------|----------------------------------------------------------|
-| `bind: address already in use` al arrancar agente    | Hay un keystone previo o algo en :8080                   |
+| `bind: address already in use` al arrancar agente    | Hay un keystone previo o algo en 127.0.0.1:8080          |
+| `demo/trust/ca.pem no existe` al arrancar el agente  | No se ejecutó `build.sh`, que crea la CA y firma la demo |
+| `signature verify failed` al aplicar                 | Recipe o binario cambiado sin volver a firmar. Re-ejecutar `build.sh` |
 | `install script failed: … no such file`              | No se ejecutó `build.sh` o se limpió `demo/artifacts/`   |
 | `sha256 mismatch` al descargar                       | Binario recompilado sin re-renderizar recipe. Re-ejecutar `build.sh` |
 | `producer: config-service unreachable after 30s`     | El `config` tardó demasiado o el `CONFIG_URL` apunta mal |
@@ -260,7 +266,7 @@ recipes renderizadas:
 
 ## Endpoints de referencia
 
-### Agente Keystone (`:8080`)
+### Agente Keystone (`127.0.0.1:8080`)
 
 - `GET /healthz` — liveness
 - `GET /v1/plan/status` — estado del plan actual
@@ -280,127 +286,83 @@ recipes renderizadas:
 
 - `keystoneserver` — `:9000/<nombre-de-binario>`, `:9000/healthz`
 
-## Extra: ejecutar la demo también sobre NATS o MQTT
+## Extra: ejecutar la demo también sobre MQTT
 
 La demo usa HTTP (`keystonectl apply`) porque es lo más simple para mostrar en
-directo, pero Keystone es **multi-adapter**: puedes arrancar el agente con HTTP
-+ NATS + MQTT simultáneamente y aplicar el mismo plan por cualquiera de los
-tres. Útil si después del demo base queréis ver cómo se orquesta una flota
-remota.
+directo, pero el agente puede atender HTTP y MQTT a la vez y aplicar el mismo
+plan por cualquiera de los dos. Útil si después de la demo base queréis ver cómo
+se orquesta una flota remota.
 
-Referencia completa: `docs/adapters.md`.
-
-### Ruta rápida con NATS (embebido en contenedor)
-
-1. **Arranca un NATS local** (sin autenticación, solo para demo):
-
-   ```bash
-   docker run --rm -d --name nats -p 4222:4222 nats:2
-   ```
-
-2. **Relanza el agente con el adaptador NATS**, además de HTTP:
-
-   ```bash
-   ./keystone \
-     --http :8080 \
-     --nats-url nats://localhost:4222 \
-     --nats-device-id edge-demo
-   ```
-
-3. **Aplica el plan vía NATS** con `nats` CLI (también vale `nats-top`):
-
-   ```bash
-   # Instalar: go install github.com/nats-io/natscli/nats@latest
-   nats request 'keystone.edge-demo.cmd.apply' \
-     "$(cat demo/plans/plan-v1.toml)" \
-     --timeout 10s
-   ```
-
-   El agente responde con el estado del plan. Luego el update v2:
-
-   ```bash
-   nats request 'keystone.edge-demo.cmd.apply' \
-     "$(cat demo/plans/plan-v2.toml)" \
-     --timeout 10s
-   ```
-
-4. **Suscríbete a los eventos de estado y salud** (otra terminal):
-
-   ```bash
-   nats sub 'keystone.edge-demo.events.>'
-   ```
-
-   Verás en tiempo real las transiciones `state:running`, `health:healthy`,
-   restarts, etc. Esto es lo que una plataforma de flota consume.
-
-Subjects relevantes (reemplaza `edge-demo` por tu `--nats-device-id`):
-
-| Subject                              | Uso                               |
-|--------------------------------------|-----------------------------------|
-| `keystone.edge-demo.cmd.apply`       | Apply plan (payload = TOML)       |
-| `keystone.edge-demo.cmd.stop`        | Stop plan                         |
-| `keystone.edge-demo.cmd.status`      | Estado del plan                   |
-| `keystone.edge-demo.cmd.graph`       | Grafo de dependencias             |
-| `keystone.edge-demo.cmd.restart`     | Reinicio de componente            |
-| `keystone.edge-demo.events.state`    | Eventos de estado publicados      |
-| `keystone.edge-demo.events.health`   | Eventos de salud publicados       |
+Referencia completa: `docs/adapters.md` y la página MQTT de la documentación.
 
 ### Ruta rápida con MQTT (Mosquitto local)
 
-1. **Arranca Mosquitto**:
+1. **Arranca Mosquitto** (sin autenticación, sólo para la demo):
 
    ```bash
    docker run --rm -d --name mosquitto -p 1883:1883 eclipse-mosquitto:2 \
      mosquitto -c /mosquitto-no-auth.conf
    ```
 
-2. **Relanza el agente con MQTT**:
+2. **Relanza el agente con MQTT**, con el mismo script, que ya confía en la CA
+   de la demo y pasa los flags extra al agente. El tenant es obligatorio:
 
    ```bash
-   ./keystone \
-     --http :8080 \
+   ./demo/scripts/run-agent.sh \
      --mqtt-broker tcp://localhost:1883 \
+     --mqtt-tenant demo \
      --mqtt-device-id edge-demo
    ```
 
-3. **Aplica el plan publicando el TOML** en el topic `apply`:
+3. **Aplica el plan.** El comando es un JSON con el TOML del plan en `content`,
+   no el TOML a pelo; `jq` hace el escapado. El `commandId` evita que un
+   reenvío de QoS 1 aplique el plan dos veces:
 
    ```bash
-   mosquitto_pub -h localhost \
-     -t 'keystone/edge-demo/cmd/apply' \
-     -f demo/plans/plan-v1.toml -q 1
+   jq -n --arg plan "$(cat demo/plans/plan-v1.toml)" --arg id "demo-$(date +%s)" \
+     '{commandId: $id, content: $plan}' > apply.json
+
+   mosquitto_sub -h localhost -t 'keystone/demo/edge-demo/resp/apply' -C 1 &
+   mosquitto_pub -h localhost -q 1 -t 'keystone/demo/edge-demo/cmd/apply' -f apply.json
    ```
 
-4. **Observa eventos**:
+   Para el update v2, lo mismo con `plan-v2.toml` y otro `commandId`.
+
+4. **Observa eventos** (otra terminal):
 
    ```bash
-   mosquitto_sub -h localhost -t 'keystone/edge-demo/events/#' -q 1
+   mosquitto_sub -h localhost -t 'keystone/demo/edge-demo/events/#' -v
    ```
+
+   Verás en tiempo real las transiciones de estado y salud. Esto es lo que una
+   plataforma de flota consume.
 
 Topics relevantes:
 
-| Topic                                  | Uso                         |
-|----------------------------------------|-----------------------------|
-| `keystone/edge-demo/cmd/apply`         | Apply plan (payload = TOML) |
-| `keystone/edge-demo/cmd/stop`          | Stop plan                   |
-| `keystone/edge-demo/cmd/status`        | Estado del plan             |
-| `keystone/edge-demo/events/state`      | Eventos de estado           |
-| `keystone/edge-demo/events/health`     | Eventos de salud            |
-| `keystone/edge-demo/status` (LWT)      | `online` / `offline`        |
+| Topic                                        | Uso                               |
+|----------------------------------------------|-----------------------------------|
+| `keystone/demo/edge-demo/cmd/apply`          | Aplicar un plan (JSON, `content`) |
+| `keystone/demo/edge-demo/cmd/stop`           | Parar el plan                     |
+| `keystone/demo/edge-demo/cmd/status`         | Estado del plan                   |
+| `keystone/demo/edge-demo/resp/<comando>`     | Respuesta a cada comando          |
+| `keystone/demo/edge-demo/events/state`       | Eventos de estado                 |
+| `keystone/demo/edge-demo/events/health`      | Eventos de salud                  |
+| `keystone/demo/edge-demo/status` (LWT)       | `online` / `offline`              |
 
 ### Qué contar en esta parte de la demo
 
-- **El mismo `Agent` y la misma `CommandHandler` detrás de los tres adaptadores.**
-  Las recipes y el plan son idénticos. El adaptador solo cambia el transporte.
-- **Los eventos MQTT/NATS son el mecanismo para monitorizar una flota remota**:
-  lo que aquí vemos como logs en terminal, una plataforma los consume por
-  subject/topic y los agrega.
-- **LWT (Last Will & Testament) de MQTT** marca el dispositivo como `offline`
-  si pierde conexión — clave para inventarios edge.
-- **Para producción**: añadir TLS (`--nats-tls-ca`, `--mqtt-tls-ca`, …) y
-  autenticación (NKey/creds en NATS, user/pass o mTLS en MQTT). Todo vía flags.
+- **El mismo `Agent` y la misma `CommandHandler` detrás de HTTP y MQTT.** Las
+  recipes y el plan son idénticos. El adaptador sólo cambia el transporte.
+- **Los eventos MQTT son el mecanismo para monitorizar una flota remota**: lo
+  que aquí vemos como logs en terminal, una plataforma lo consume por topic y lo
+  agrega.
+- **LWT (Last Will & Testament)** marca el dispositivo como `offline` si pierde
+  la conexión, clave para inventarios edge.
+- **Para producción**: TLS (`--mqtt-tls-ca`), autenticación (user/pass o mTLS)
+  y, mejor aún, una identidad por dispositivo con `keystone enrol`. Y una ACL en
+  el broker que limite cada dispositivo a su `keystone/<tenant>/<id>/#`.
 
 > Nota: los binarios de demo (`config`, `producer`, `consumer`) siguen
-> expuestos por HTTP desde `keystoneserver :9000`. NATS/MQTT solo transportan
-> el *control plane* (aplicar planes, recibir estado); la descarga de
-> artefactos sigue siendo HTTP(S).
+> expuestos por HTTP desde `keystoneserver :9000`. MQTT sólo transporta el
+> *control plane* (aplicar planes, recibir estado); la descarga de artefactos
+> sigue siendo HTTP(S).

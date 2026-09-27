@@ -18,7 +18,7 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 - **Portable**: Linux x86/ARM, single binary, no mandatory Docker/CRI
 - **Frugal on the link**: downloads resume, and an artifact can opt into being *patched* instead of re-downloaded — 13.4 MB becomes 1.0 MB between two adjacent releases, with a full-download fallback whenever patching is not possible
 - **Fresh data, no restarts**: datasets (an OUI list, a vulnerability feed) refresh on their own schedule from a signed manifest, activate atomically and roll back if the component cannot live with them — see [datasets](https://carlosprados.github.io/keystone/concepts/datasets/)
-- **Connected**: HTTP REST, NATS (+ JetStream), MQTT adapters
+- **Connected**: HTTP REST and MQTT adapters; the agent keeps supervising when no control plane is reachable
 - **Operable**: structured logs, Prometheus metrics, health endpoints, persistence
 - **Verifiable from the outside in**: every release is signed with cosign (keyless, recorded in Sigstore's transparency log) and ships an SPDX SBOM per archive — see [Verifying a release](https://carlosprados.github.io/keystone/security/releases/)
 - **Refuses what it cannot honour**: a declaration that a runtime cannot implement is rejected rather than dropped — and a rollback that would drag a component back across a state migration is refused instead of silently corrupting what it reverts to
@@ -31,14 +31,14 @@ Why Keystone? Because edge fleets need something that is lightweight, predictabl
 | **RAM Baseline** | ~100MB+               | **~23 MB**                |
 | **Complexity**   | High (Cloud-first)    | **Low (Lean & Simple)**   |
 | **Setup**        | Heavy Bootstrap       | **Single Binary**         |
-| **Control Plane**| AWS IoT Core only     | **HTTP, NATS, MQTT**      |
-| **Offline Mode** | Limited               | **Full (JetStream jobs)** |
+| **Control Plane**| AWS IoT Core only     | **HTTP, MQTT**            |
+| **Offline Mode** | Limited               | **Keeps supervising**     |
 
 ## Documentation
 
 📖 **[Read the documentation → carlosprados.github.io/keystone](https://carlosprados.github.io/keystone/)**
 
-Concepts, internals, the security model, worked examples for HTTP/MQTT/NATS, and a
+Concepts, internals, the security model, worked examples for HTTP and MQTT, and a
 generated OpenAPI reference — written to be read start to finish. Source in
 [`site/`](site/).
 
@@ -46,7 +46,7 @@ generated OpenAPI reference — written to be read start to finish. Source in
 |----------|----------------|
 | [docs/security.md](docs/security.md) | **Security model**: threat model, secure-by-default controls, auth, signing, the `--insecure-skip-verify` escape hatch, config reference |
 | [docs/component-state.md](docs/component-state.md) | Component states, liveness guarantees of `GET /v1/components`, and when a re-apply reuses a running component |
-| [docs/adapters.md](docs/adapters.md) | Control-plane adapters: HTTP (auth), NATS (+ JetStream), MQTT — comparison and configuration |
+| [docs/adapters.md](docs/adapters.md) | Control-plane adapters: HTTP (auth) and MQTT — comparison and configuration |
 | [docs/containers.md](docs/containers.md) | Container recipe syntax and examples |
 | [docs/containerrunner-design.md](docs/containerrunner-design.md) | containerd integration design notes |
 | [configs/trust/README.md](configs/trust/README.md) | CA setup and signing recipes/artifacts |
@@ -141,12 +141,12 @@ See everything running at a glance:
 
 **Released and in production evaluation.** See [releases](https://github.com/carlosprados/keystone/releases) for the current version — this file deliberately does not name one, because a version written here goes stale the moment a tag is cut. Each release publishes a `tar.gz` per architecture (Linux `amd64`, `arm64`, `armv7`) containing all three binaries: `keystone`, `keystonectl` and `keystoneserver`, plus a signature and an SBOM (below).
 
-What is done: supervisor with DAG deployments and rollback, process and container runners, artifact manager with resume and optional delta downloads, signature verification that fails closed, privilege dropping, three control-plane adapters (HTTP, NATS, MQTT), and a signed release pipeline. Documentation is published at [carlosprados.github.io/keystone](https://carlosprados.github.io/keystone/) and the OpenAPI document is generated from the route table, so it cannot drift from the code.
+What is done: supervisor with DAG deployments and rollback, process and container runners, artifact manager with resume and optional delta downloads, signature verification that fails closed, privilege dropping, two control-plane adapters (HTTP, MQTT), and a signed release pipeline. Documentation is published at [carlosprados.github.io/keystone](https://carlosprados.github.io/keystone/) and the OpenAPI document is generated from the route table, so it cannot drift from the code.
 
 Known limitations, stated plainly:
 
-- **Self-update is new and only half field-tested.** An MQTT `cmd/self-update` downloads and verifies a new binary, installs it A/B beside the running one, restarts, and a systemd pre-start gate reverts it if it does not confirm (requires `--self-update-root` and the `keystone-ab.service` unit). On hardware, only the gate reverting has been exercised so far; a full update end to end has not. See [MQTT](https://carlosprados.github.io/keystone/control-planes/mqtt/).
-- **No built-in TLS for the HTTP API.** Terminate at a reverse proxy, use a VPN, or tunnel with `keystonectl --ssh`. NATS and MQTT do support TLS natively.
+- **Self-update is new.** An MQTT `cmd/self-update` downloads and verifies a new binary, installs it A/B beside the running one, restarts, and a systemd pre-start gate reverts it if it does not confirm (requires `--self-update-root` and the `keystone-ab.service` unit). On hardware (a Raspberry Pi, arm64) a full update has been measured end to end in both directions: an update that cannot reach its control plane is reverted after three starts, one that can confirms in seconds, and supervised processes keep their PID throughout (from v0.12.9 on). See [MQTT](https://carlosprados.github.io/keystone/control-planes/mqtt/).
+- **No built-in TLS for the HTTP API.** Terminate at a reverse proxy, use a VPN, or tunnel with `keystonectl --ssh`. MQTT does support TLS natively.
 - **No memory or CPU limits for process components.** ProcessRunner applies `RLIMIT_NOFILE` only, and a recipe declaring `memory_limit` or `cpu_quota` under `[resources]` is refused rather than run unbounded. Containers get every limit in `[lifecycle.run.container.resources]`, under containerd and the CLI runtimes alike.
 - **Component re-adoption needs the system manager.** Survivors of an agent crash are recognised by being reparented to PID 1; under a subreaper (`systemd --user`, `tini`) they are neither adopted nor reaped.
 - **Canary rings are not implemented** (Phase 7b below).
@@ -222,7 +222,7 @@ curl -s localhost:8080/metrics | head
 - [x] **Phase 1**: Supervisor + ProcessRunner, lifecycle hooks, health checks (HTTP/TCP/Shell)
 - [x] **Phase 2**: DAG-based deployments, layer-wise rollback, Prometheus metrics
 - [x] **Phase 3**: Security hardening — mTLS adapters, artifact signatures (ECDSA/RSA)
-- [x] **Phase 4**: Control plane adapters — HTTP REST, NATS (+ JetStream), MQTT
+- [x] **Phase 4**: Control plane adapters — HTTP REST, MQTT (a NATS adapter existed until v0.13.0)
 - [x] **Phase 5**: Robustness — download resume, exponential backoff, graceful shutdown
 - [x] **Phase 6**: ContainerRunner — containerd client, CLI fallback (docker/nerdctl/podman)
 - [x] **Phase 6.5**: Delta (patch) artifact downloads, privilege dropping, published documentation site
@@ -245,7 +245,7 @@ See [KeyStone.md](KeyStone.md) for the architecture proposal and delivery plan.
 | **Security** | Trust bundles (PEM), Ed25519/ECDSA/RSA signature verification, mTLS support, signed releases (cosign keyless) with an SPDX SBOM per archive |
 | **Observability** | Prometheus metrics, structured logging, health endpoints, per-process metrics |
 | **Persistence** | Automatic state snapshotting, recovery on restart, atomic writes |
-| **Control Plane** | HTTP REST API, NATS adapter (+ JetStream jobs), MQTT adapter (QoS, LWT), content-only plans on every transport, retained-command refusal and command deduplication, agent version reported over all three |
+| **Control Plane** | HTTP REST API, MQTT adapter (QoS, LWT, tenant topics), content-only plans on every transport, retained-command refusal and command deduplication, agent version reported over both |
 | **CLI** | `keystonectl`: full parity with the HTTP API, self-documenting help with examples, SSH tunnelling, shell completion |
 | **Robustness** | Download resume (HTTP Range), exponential backoff with jitter, context propagation, graceful shutdown |
 
@@ -474,7 +474,7 @@ privileged surface:
   `--token` or `KEYSTONE_API_TOKEN`.
 - Plans are accepted as uploaded content only, on **every** transport. The
   legacy `planPath` field — which named a file on the device for the agent to
-  read and execute — is rejected by HTTP, NATS and MQTT alike.
+  read and execute — is rejected by HTTP and MQTT alike.
 - Commands that change state are refused if they arrive **retained**, and are
   deduplicated by `commandId` where one is supplied: a retained command is
   redelivered on every reconnect, and QoS 1 is at-least-once by design.
@@ -498,9 +498,10 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_TRUST_BUNDLE`               | Path to CA trust bundle (PEM) for signature verification.              |
 | `KEYSTONE_LEAF_CERT`                  | Default certificate (PEM) for signature verification if not in recipe. |
 | `KEYSTONE_IMAGE_VOLUME_DIR`           | Where container image volumes are materialised.                        |
-| `KEYSTONE_DEVICE_ID`                  | Device ID for NATS/MQTT topics (default: hostname).                    |
+| `KEYSTONE_DEVICE_ID`                  | Device ID for MQTT topics (default: hostname).                         |
 | `KEYSTONE_MQTT_BROKER`                | MQTT broker URL (enables MQTT if set and `--mqtt-broker` not passed).  |
 | `KEYSTONE_MQTT_DEVICE_ID`             | MQTT device ID (overrides `KEYSTONE_DEVICE_ID` for MQTT only).         |
+| `KEYSTONE_MQTT_TENANT`                | MQTT tenant, a lowercase DNS label. Required with MQTT unless `KEYSTONE_ENROL_DIR` provides it. |
 | `KEYSTONE_MQTT_CLIENT_ID`             | MQTT client ID.                                                         |
 | `KEYSTONE_MQTT_TLS_CERT`              | Path to MQTT client TLS certificate.                                    |
 | `KEYSTONE_MQTT_TLS_KEY`               | Path to MQTT client TLS private key.                                    |
@@ -544,7 +545,6 @@ Keystone uses a pluggable adapter architecture for control plane communication. 
 | Adapter | Protocol | Use Case | Default |
 |---------|----------|----------|---------|
 | **HTTP** | REST API | Local management, debugging, Prometheus | Enabled (`:8080`) |
-| **NATS** | Pub/Sub | Cloud-scale fleet management | Disabled |
 | **MQTT** | IoT messaging | AWS IoT Core, edge gateways | Disabled |
 
 For complete adapter documentation, see **[docs/adapters.md](docs/adapters.md)**.
@@ -558,7 +558,7 @@ The HTTP adapter exposes a REST API for local management:
 ./keystone --http 127.0.0.1:8080
 
 # Disable HTTP (use only messaging adapters)
-./keystone --http "" --nats-url nats://server:4222 --nats-device-id edge-001
+./keystone --http "" --mqtt-broker tls://broker:8883 --mqtt-tenant acme --mqtt-device-id edge-001
 ```
 
 **Endpoints** (the generated OpenAPI document is [in the docs site](https://carlosprados.github.io/keystone/reference/api/)):
@@ -576,33 +576,6 @@ The HTTP adapter exposes a REST API for local management:
 | `POST /v1/plan/stop` | Stop every component |
 | `GET`/`POST /v1/recipes` | List or add stored recipes (`force`) |
 | `DELETE /v1/recipes/{name}/{version}` | Remove a stored recipe |
-
-### NATS Adapter
-
-Enable NATS for asynchronous fleet management with optional JetStream persistence:
-
-```bash
-# Basic NATS
-./keystone --http 127.0.0.1:8080 \
-  --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001
-
-# With mTLS and JetStream
-./keystone --http 127.0.0.1:8080 \
-  --nats-url nats://control-plane:4222 \
-  --nats-device-id edge-001 \
-  --nats-tls-cert /etc/keystone/certs/client.crt \
-  --nats-tls-key /etc/keystone/certs/client.key \
-  --nats-tls-ca /etc/keystone/certs/ca.crt \
-  --nats-jetstream
-```
-
-**Key Features:**
-- mTLS, NKey, Token, User/Pass authentication
-- JetStream for durable job queues (survives disconnections)
-- Subjects: `keystone.{deviceId}.cmd.*`, `keystone.{deviceId}.events.*`
-
-**Authentication Priority:** NKey > Credentials > Token > User/Pass
 
 ### MQTT Adapter
 
@@ -626,15 +599,14 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 - mTLS, User/Pass authentication
 - Configurable QoS (0, 1, 2)
 - Last Will and Testament for online/offline detection
-- Topics: `keystone/{deviceId}/cmd/*`, `keystone/{deviceId}/resp/*`, `keystone/{deviceId}/events/*`
+- Topics: `keystone/{tenant}/{deviceId}/cmd/*`, `…/resp/*`, `…/events/*`, `…/status`; the tenant is required
 
 ### Running Multiple Adapters
 
 ```bash
-# HTTP + NATS + MQTT simultaneously
+# HTTP + MQTT simultaneously
 ./keystone --http 127.0.0.1:8080 \
-  --nats-url nats://nats.internal:4222 --nats-device-id edge-001 \
-  --mqtt-broker tcp://mqtt.internal:1883 --mqtt-device-id edge-001
+  --mqtt-broker tcp://mqtt.internal:1883 --mqtt-tenant acme --mqtt-device-id edge-001
 ```
 
 ### All CLI Flags
@@ -656,37 +628,14 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 </details>
 
 <details>
-<summary>NATS Adapter Flags</summary>
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--nats-url` | (empty) | NATS server URL (empty to disable) |
-| `--nats-device-id` | hostname | Device ID for subjects |
-| `--nats-tls-cert` | (empty) | Client TLS certificate path |
-| `--nats-tls-key` | (empty) | Client TLS key path |
-| `--nats-tls-ca` | (empty) | CA certificate path |
-| `--nats-tls-verify` | `true` | Verify server certificate |
-| `--nats-creds` | (empty) | Credentials file path (.creds) |
-| `--nats-nkey` | (empty) | NKey seed file path |
-| `--nats-token` | (empty) | Authentication token |
-| `--nats-user` | (empty) | Username |
-| `--nats-pass` | (empty) | Password |
-| `--nats-state-interval` | `10s` | State event interval (0 to disable) |
-| `--nats-health-interval` | `30s` | Health event interval (0 to disable) |
-| `--nats-jetstream` | `false` | Enable JetStream |
-| `--nats-js-stream` | `KEYSTONE_JOBS` | JetStream stream name |
-| `--nats-js-workers` | `1` | Job processor workers |
-
-</details>
-
-<details>
 <summary>MQTT Adapter Flags</summary>
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--mqtt-broker` | (empty) | MQTT broker URL (empty to disable) |
+| `--mqtt-tenant` | (required) | Tenant for topics, a lowercase DNS label |
 | `--mqtt-device-id` | hostname | Device ID for topics |
-| `--mqtt-client-id` | `keystone-{device-id}` | MQTT client ID |
+| `--mqtt-client-id` | `keystone-{tenant}-{device-id}` | MQTT client ID |
 | `--mqtt-tls-cert` | (empty) | Client TLS certificate path |
 | `--mqtt-tls-key` | (empty) | Client TLS key path |
 | `--mqtt-tls-ca` | (empty) | CA certificate path |
@@ -698,7 +647,7 @@ Enable MQTT for IoT-friendly communication with brokers like Mosquitto, EMQX, or
 | `--mqtt-health-interval` | `30s` | Health event interval (0 to disable) |
 
 Environment variable equivalents are also supported (flags take precedence):
-`KEYSTONE_MQTT_BROKER`, `KEYSTONE_MQTT_DEVICE_ID`, `KEYSTONE_MQTT_CLIENT_ID`,
+`KEYSTONE_MQTT_BROKER`, `KEYSTONE_MQTT_TENANT`, `KEYSTONE_MQTT_DEVICE_ID`, `KEYSTONE_MQTT_CLIENT_ID`,
 `KEYSTONE_MQTT_TLS_CERT`, `KEYSTONE_MQTT_TLS_KEY`, `KEYSTONE_MQTT_TLS_CA`,
 `KEYSTONE_MQTT_TLS_VERIFY`, `KEYSTONE_MQTT_USER`, `KEYSTONE_MQTT_PASS`,
 `KEYSTONE_MQTT_QOS`, `KEYSTONE_MQTT_COMMAND_DEDUPE_TTL`,
@@ -725,7 +674,7 @@ This sets `core.hooksPath` to `.githooks`, where the `pre-commit` hook runs `go 
 | **Supervisor** | Enforces lifecycle (install → start → running → stop) and restart policies |
 | **Runner** | Executes components: ProcessRunner (native) or ContainerRunner (containerd/CLI) |
 | **Artifact Manager** | Downloads, verifies (SHA-256 + signatures), caches, and garbage collects artifacts |
-| **Adapter** | Pluggable control plane interface (HTTP, NATS, MQTT) for remote management |
+| **Adapter** | Pluggable control plane interface (HTTP, MQTT) for remote management |
 
 ## Systemd Unit (example)
 

@@ -189,8 +189,8 @@ apply failed and rollback was completed: api start: start readiness timeout
 If the rollback itself fails you get both errors, and the plan status is `failed`.
 
 **There has to be a different plan to go back to.** Re-applying the plan already
-in effect — the boot resume, or a NATS or MQTT command naming the current
-`planPath` — has no predecessor: the rollback would re-read the same file and
+in effect — the boot resume, or the same plan applied again —
+has no predecessor: the rollback would re-read the same file and
 re-apply the same failure, after stopping every component in the plan to get
 there. The agent detects this and says so instead:
 

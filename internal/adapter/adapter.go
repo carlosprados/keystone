@@ -1,6 +1,6 @@
 // Package adapter defines the interface for control plane adapters.
 // Adapters handle communication between the agent and external systems
-// (HTTP API, NATS, MQTT, etc.) while delegating business logic to the CommandHandler.
+// (HTTP API, MQTT) while delegating business logic to the CommandHandler.
 package adapter
 
 import (
@@ -12,7 +12,7 @@ import (
 )
 
 // Adapter defines the interface for control plane adapters.
-// Each adapter handles a specific transport protocol (HTTP, NATS, MQTT, etc.)
+// Each adapter handles a specific transport protocol (HTTP, MQTT)
 // and translates external requests into CommandHandler calls.
 type Adapter interface {
 	// Name returns the adapter identifier for logging and diagnostics.

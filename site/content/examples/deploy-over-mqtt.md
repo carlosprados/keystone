@@ -10,6 +10,7 @@ device connects out; you never need to reach in.
 ```bash
 keystone --http 127.0.0.1:8080 \
          --mqtt-broker tls://broker.acme.com:8883 \
+         --mqtt-tenant acme \
          --mqtt-device-id edge-001 \
          --mqtt-tls-ca /etc/keystone/ca.pem \
          --mqtt-qos 1
@@ -110,7 +111,7 @@ operator reaches for when things are already going wrong.
 Assembling that JSON by hand is unpleasant; let `jq` do the escaping:
 
 ```bash
-DEV=edge-001
+DEV=acme/edge-001
 
 jq -n \
   --arg plan "$(cat plan.toml)" \
@@ -129,7 +130,7 @@ mosquitto_pub -h broker.acme.com -p 8883 --cafile /etc/keystone/ca.pem \
 wait
 ```
 
-The response, on `keystone/edge-001/resp/apply`:
+The response, on `keystone/acme/edge-001/resp/apply`:
 
 ```json
 { "correlationId": "rollout-20260806T143000Z", "success": true }
@@ -140,8 +141,8 @@ rollback summary if one happened.
 
 ## The other commands
 
-Every command is `keystone/{deviceId}/cmd/<name>` with the response on
-`keystone/{deviceId}/resp/<name>`:
+Every command is `keystone/{tenant}/{deviceId}/cmd/<name>` with the response on
+`keystone/{tenant}/{deviceId}/resp/<name>`:
 
 ```bash
 # what is running
@@ -169,10 +170,10 @@ you want the response matched.
 
 ```bash
 # every device's state, live
-mosquitto_sub -h broker.acme.com -t 'keystone/+/events/state'
+mosquitto_sub -h broker.acme.com -t 'keystone/acme/+/events/state'
 
 # who is up
-mosquitto_sub -h broker.acme.com -t 'keystone/+/status' -v
+mosquitto_sub -h broker.acme.com -t 'keystone/acme/+/status' -v
 ```
 
 ## Two things to get right
@@ -182,7 +183,7 @@ because applying the same plan twice changes nothing — but if you wrap Keyston
 your own automation, keep that property.
 
 **Broker ACLs are part of your security.** Restrict each device's credentials to
-its own `keystone/{deviceId}/#` subtree, and make each device **subscribe-only**
+its own `keystone/{tenant}/{deviceId}/#` subtree, and make each device **subscribe-only**
 on its command topics. A device publishes responses and events; it never issues
 commands. If a compromised gateway can publish to a command topic — its own or
 another's — the ACL is decoration, and that is the property that makes sharing a

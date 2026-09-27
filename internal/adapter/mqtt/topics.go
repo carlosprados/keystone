@@ -2,7 +2,7 @@ package mqtt
 
 import (
 	"fmt"
-	"strings"
+	"regexp"
 )
 
 // Topic patterns for MQTT communication.
@@ -84,45 +84,47 @@ type Topics struct {
 }
 
 // DevicePath is the part of every topic that names the device:
-// "<device>" or, with a tenant, "<tenant>/<device>".
-//
-// Without a tenant the path is exactly what it has always been, so existing
-// brokers, ACLs and controllers keep working unchanged. A new default would
-// have broken the ACL and the command channel together, and under MQTT 3.1.1 a
-// publish the ACL denies is dropped silently: the device would simply go mute.
-func DevicePath(tenant, deviceID string) string {
-	if tenant == "" {
-		return deviceID
-	}
-	return tenant + "/" + deviceID
-}
+// "<tenant>/<device>".
+func DevicePath(tenant, deviceID string) string { return tenant + "/" + deviceID }
 
-// ValidateTenant refuses a tenant that would not stay one topic level: a "/"
-// would shift every topic, and "+" or "#" would turn the device's subscription
-// into a wildcard over other tenants' devices.
+// The identity rules are the control plane's, exactly. With looser rules here,
+// the agent would accept a name the control plane refuses, and under MQTT
+// 3.1.1 its messages would then be dropped without either side saying so.
+var (
+	tenantRule = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	deviceRule = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+)
+
+// reservedDeviceIDs would read as topic keywords, or as path navigation.
+var reservedDeviceIDs = map[string]bool{".": true, "..": true, "cmd": true, "resp": true}
+
+// ValidateTenant accepts a DNS label: lowercase letters, digits and inner
+// hyphens, at most 63 characters. Required: every topic is under a tenant.
 func ValidateTenant(v string) error {
-	if strings.TrimSpace(v) != v || v == "" {
-		return fmt.Errorf("tenant %q must be non-empty with no surrounding spaces", v)
+	if v == "" {
+		return fmt.Errorf("a tenant is required (--mqtt-tenant, KEYSTONE_MQTT_TENANT, or an enrolment): every topic is keystone/<tenant>/<device>/…")
 	}
-	if strings.ContainsAny(v, "/+#\x00") {
-		return fmt.Errorf("tenant %q must be a single MQTT topic level: no '/', '+', '#' or NUL", v)
+	if !tenantRule.MatchString(v) {
+		return fmt.Errorf("tenant %q must be a DNS label: lowercase letters, digits and inner hyphens, at most 63 characters", v)
 	}
 	return nil
 }
 
-// ValidateDeviceID refuses the characters that make a topic a wildcard. A "/"
-// is still allowed: installs already use it, and it only adds levels.
+// ValidateDeviceID accepts letters, digits, ".", "_" and "-", 1 to 128
+// characters, except the reserved ".", "..", "cmd" and "resp". A "/" is not
+// allowed: it would add topic levels and change which filters the device's
+// topics match.
 func ValidateDeviceID(v string) error {
-	if strings.TrimSpace(v) == "" {
-		return fmt.Errorf("device ID must not be empty")
+	if !deviceRule.MatchString(v) {
+		return fmt.Errorf("device ID %q must be 1 to 128 of A-Z a-z 0-9 . _ -", v)
 	}
-	if strings.ContainsAny(v, "+#\x00") {
-		return fmt.Errorf("device ID %q must not contain '+', '#' or NUL: they would make the device subscribe to other devices' commands", v)
+	if reservedDeviceIDs[v] {
+		return fmt.Errorf("device ID %q is reserved", v)
 	}
 	return nil
 }
 
-// NewTopics creates the topics for a device, under a tenant when one is set.
+// NewTopics creates the topics for a device under its tenant.
 func NewTopics(tenant, deviceID string) *Topics {
 	path := DevicePath(tenant, deviceID)
 	return &Topics{

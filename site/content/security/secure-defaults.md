@@ -73,7 +73,7 @@ checking on file-loaded recipes, and it does not open the HTTP API.
 
 Keystone assumes the **artifact store and the network are untrusted**: anything
 downloaded must prove its origin cryptographically. It assumes the **control plane
-is authenticated** — by a token over HTTP, or by broker ACLs and TLS for NATS and
+is authenticated** — by a token over HTTP, or by broker ACLs and TLS for
 MQTT. It assumes the **local filesystem is trusted**: whoever can write
 `runtime/state` or the recipe store already owns the device. And it assumes
 **components are semi-trusted**: they can be confined, but Keystone is not a
@@ -83,9 +83,6 @@ sandbox — a determined workload with capabilities can still hurt the host.
 
 Honest list, tracked as follow-ups:
 
-- **NATS/MQTT `planPath`**: the rejection is implemented for HTTP only. Those
-  adapters are off by default and rely on broker ACLs.
-- **Release signing**: published binaries are not signed yet (no cosign, no SBOM).
 - **Container confinement**: `privileged` containers and host mounts are not gated
   by policy.
 - **Child environment**: recipe-supplied env is not stripped of `LD_PRELOAD` /

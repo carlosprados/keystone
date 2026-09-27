@@ -118,10 +118,9 @@ Prometheus pulling from a fleet behind NAT usually does not work. Two options th
 do:
 
 - **Push**: a Prometheus agent or Grafana Alloy on the device with remote-write.
-- **Events**: enable the NATS or MQTT adapter and consume
-  `events.state` / `events.health` centrally. You lose PromQL over raw samples but
-  gain a view that works through NAT and survives the device being offline (via
-  JetStream or a retaining broker).
+- **Events**: enable the MQTT adapter and consume `events/state` /
+  `events/health` centrally. You lose PromQL over raw samples but gain a view that
+  works through NAT.
 
 ## Do not alert on the agent alone
 

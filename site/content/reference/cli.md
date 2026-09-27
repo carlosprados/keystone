@@ -43,7 +43,7 @@ Usage of keystone:
   -mqtt-state-interval duration
     	Interval for publishing state events (0 to disable) (default 10s)
   -mqtt-tenant string
-    	Tenant for MQTT topics: keystone/<tenant>/<device>/... instead of keystone/<device>/.... Empty keeps the tenant-less form
+    	Tenant for MQTT topics, keystone/<tenant>/<device>/...: a DNS label (lowercase letters, digits, inner hyphens). Required with --mqtt-broker unless --enrol-dir provides it
   -mqtt-tls-ca string
     	Path to MQTT CA certificate
   -mqtt-tls-cert string
@@ -54,38 +54,6 @@ Usage of keystone:
     	Verify MQTT server TLS certificate (default true)
   -mqtt-user string
     	MQTT username
-  -nats-creds string
-    	Path to NATS credentials file (.creds)
-  -nats-device-id string
-    	Device ID for NATS subjects (required if NATS enabled)
-  -nats-health-interval duration
-    	Interval for publishing health events (0 to disable) (default 30s)
-  -nats-jetstream
-    	Enable JetStream for persistent job queue
-  -nats-js-stream string
-    	JetStream stream name for jobs (default "KEYSTONE_JOBS")
-  -nats-js-workers int
-    	Number of concurrent job processor workers (default 1)
-  -nats-nkey string
-    	Path to NATS NKey seed file
-  -nats-pass string
-    	NATS password
-  -nats-state-interval duration
-    	Interval for publishing state events (0 to disable) (default 10s)
-  -nats-tls-ca string
-    	Path to NATS CA certificate
-  -nats-tls-cert string
-    	Path to NATS client TLS certificate
-  -nats-tls-key string
-    	Path to NATS client TLS key
-  -nats-tls-verify
-    	Verify NATS server TLS certificate (default true)
-  -nats-token string
-    	NATS authentication token
-  -nats-url string
-    	NATS server URL (empty to disable NATS adapter)
-  -nats-user string
-    	NATS username
   -reconcile-interval duration
     	Re-apply the plan in effect on this interval so dead components are restarted (0 disables it)
   -reconcile-jitter duration
@@ -105,8 +73,7 @@ Usage of keystone:
 | `--http` | Listen address. `""` disables the HTTP adapter entirely |
 | `--api-token` | Required to bind anything but loopback |
 | `--insecure-skip-verify` | Development only. Disables mandatory artifact integrity |
-| `--nats-url` / `--nats-device-id` | Enable the NATS adapter |
-| `--mqtt-broker` / `--mqtt-device-id` | Enable the MQTT adapter |
+| `--mqtt-broker` / `--mqtt-tenant` / `--mqtt-device-id` | Enable the MQTT adapter; the tenant is required |
 | `--demo` | Run a built-in mock 3-component stack. Good for a first look |
 | `--version` | Print version and commit |
 

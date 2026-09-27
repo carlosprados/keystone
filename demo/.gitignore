@@ -5,3 +5,9 @@ artifacts/*
 # Rendered recipes (generated from *.tmpl by scripts/build.sh)
 recipes/v1/*.recipe.toml
 recipes/v2/*.recipe.toml
+recipes/v1/*.recipe.toml.sig
+recipes/v2/*.recipe.toml.sig
+
+# Throwaway signing CA made by scripts/build.sh (keys are not secret, but they
+# are this machine's, and a committed one would be trusted by whoever copies it)
+trust/

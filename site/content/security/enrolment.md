@@ -37,7 +37,8 @@ by the user the agent runs as (`keystone` in the shipped units, mode `0600`):
   certificate for the same name.
 - **`tenant`** and **`device`** become the certificate's name,
   `CN=<tenant>/<device>`, and the MQTT topic path `keystone/<tenant>/<device>/…`.
-  Neither may contain `/`, `+`, `#`; the device name may not contain `:` either.
+  They follow the [MQTT naming rules](../../control-planes/mqtt/#tenant-and-device-id):
+  the tenant is a lowercase DNS label, the device ID 1 to 128 of `A-Z a-z 0-9 . _ -`.
 
 A file with an unknown `version`, or any field the agent does not know, is refused.
 
@@ -159,7 +160,6 @@ runs the same check and warns at once if the result would be refused.
 
 ## Not covered
 
-- **NATS** does not use the enrolled identity.
 - **The broker's certificate** is checked against the system clock, not the
   agent's. A device with no RTC should get its time before connecting.
 - **Revocation** is the server's business. The agent learns of it only as a

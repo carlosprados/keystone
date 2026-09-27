@@ -106,7 +106,7 @@ it under systemd:
 |---|---|
 | `KEYSTONE_MQTT_BROKER` | `--mqtt-broker` |
 | `KEYSTONE_MQTT_DEVICE_ID` | `--mqtt-device-id` |
-| `KEYSTONE_MQTT_TENANT` | `--mqtt-tenant` |
+| `KEYSTONE_MQTT_TENANT` | `--mqtt-tenant`: required with MQTT, unless an enrolment provides it |
 | `KEYSTONE_MQTT_CLIENT_ID` | `--mqtt-client-id` |
 | `KEYSTONE_MQTT_USER` / `KEYSTONE_MQTT_PASS` | `--mqtt-user` / `--mqtt-pass` |
 | `KEYSTONE_MQTT_TLS_CERT` / `_KEY` / `_CA` | the matching `--mqtt-tls-*` |
@@ -123,10 +123,7 @@ An invalid value (a non-numeric integer, an unparseable duration, a bad boolean)
 logged and ignored rather than crashing the agent — but check your logs, because
 "ignored" means the default is in force.
 
-{{% notice style="note" title="KEYSTONE_JOBS is not one of these" %}}
-`KEYSTONE_JOBS` is the *default value* of the `--nats-js-stream` flag — the name
-of the JetStream stream. The agent never reads it from the environment.
-{{% /notice %}}
+
 
 ## keystonectl
 
