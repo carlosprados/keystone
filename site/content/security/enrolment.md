@@ -160,7 +160,6 @@ runs the same check and warns at once if the result would be refused.
 
 ## Not covered
 
-- **NATS** does not use the enrolled identity.
 - **The broker's certificate** is checked against the system clock, not the
   agent's. A device with no RTC should get its time before connecting.
 - **Revocation** is the server's business. The agent learns of it only as a

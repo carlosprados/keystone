@@ -15,7 +15,6 @@ import (
 	"github.com/carlosprados/keystone/internal/adapter"
 	httpadapter "github.com/carlosprados/keystone/internal/adapter/http"
 	mqttadapter "github.com/carlosprados/keystone/internal/adapter/mqtt"
-	natsadapter "github.com/carlosprados/keystone/internal/adapter/nats"
 	reconcileadapter "github.com/carlosprados/keystone/internal/adapter/reconcile"
 	"github.com/carlosprados/keystone/internal/agent"
 	"github.com/carlosprados/keystone/internal/clock"
@@ -28,9 +27,7 @@ import (
 )
 
 // resolveDeviceID settles on a name for this device: what the caller asked for,
-// then KEYSTONE_DEVICE_ID, then the hostname, then a constant. Every adapter
-// that labels its traffic per device resolves it the same way, so a device does
-// not answer to one name over NATS and another over MQTT.
+// then KEYSTONE_DEVICE_ID, then the hostname, then a constant.
 func resolveDeviceID(explicit string) string {
 	if explicit != "" {
 		return explicit
@@ -82,28 +79,6 @@ func main() {
 	apiToken := flag.String("api-token", "", "Bearer token required for the HTTP API (or KEYSTONE_API_TOKEN); required to bind a non-loopback address")
 	allowNoEKUSigners := flag.Bool("allow-no-eku-signers", false, "Transition only: accept signing certificates that carry no extended key usage. Signers must be issued for codeSigning; certificates made before that was required have no EKU and are refused without this. Logged loudly every time it admits one. Will be removed")
 	insecureSkipVerify := flag.Bool("insecure-skip-verify", false, "Disable mandatory artifact integrity checks (sha256 + signature). Dev/demo only (or KEYSTONE_INSECURE_SKIP_VERIFY=true)")
-
-	// NATS adapter flags
-	natsURL := flag.String("nats-url", "", "NATS server URL (empty to disable NATS adapter)")
-	natsDeviceID := flag.String("nats-device-id", "", "Device ID for NATS subjects (required if NATS enabled)")
-	natsTLSCert := flag.String("nats-tls-cert", "", "Path to NATS client TLS certificate")
-	natsTLSKey := flag.String("nats-tls-key", "", "Path to NATS client TLS key")
-	natsTLSCA := flag.String("nats-tls-ca", "", "Path to NATS CA certificate")
-	natsTLSVerify := flag.Bool("nats-tls-verify", true, "Verify NATS server TLS certificate")
-	natsStateInterval := flag.Duration("nats-state-interval", 10*time.Second, "Interval for publishing state events (0 to disable)")
-	natsHealthInterval := flag.Duration("nats-health-interval", 30*time.Second, "Interval for publishing health events (0 to disable)")
-
-	// NATS authentication flags (mutually exclusive, priority: nkey > creds > token > user)
-	natsCreds := flag.String("nats-creds", "", "Path to NATS credentials file (.creds)")
-	natsNKey := flag.String("nats-nkey", "", "Path to NATS NKey seed file")
-	natsToken := flag.String("nats-token", "", "NATS authentication token")
-	natsUser := flag.String("nats-user", "", "NATS username")
-	natsPass := flag.String("nats-pass", "", "NATS password")
-
-	// JetStream flags (persistent job queue)
-	jsEnabled := flag.Bool("nats-jetstream", false, "Enable JetStream for persistent job queue")
-	jsStreamName := flag.String("nats-js-stream", "KEYSTONE_JOBS", "JetStream stream name for jobs")
-	jsWorkers := flag.Int("nats-js-workers", 1, "Number of concurrent job processor workers")
 
 	// MQTT adapter flags
 	mqttBroker := flag.String("mqtt-broker", "", "MQTT broker URL (empty to disable MQTT adapter)")
@@ -221,7 +196,7 @@ func main() {
 	// code accepted. This is configuration, fixed once, not a condition that
 	// comes and goes like a broker being away.
 	if err := security.CheckTransportSeparation(os.Getenv("KEYSTONE_TRUST_BUNDLE"),
-		*mqttTLSCA, *mqttTLSCert, *natsTLSCA, *natsTLSCert); err != nil {
+		*mqttTLSCA, *mqttTLSCert); err != nil {
 		log.Fatalf("[main] refusing to start: %v", err)
 	}
 	if *allowNoEKUSigners {
@@ -279,45 +254,6 @@ func main() {
 		log.Printf("[main] HTTP adapter configured on %s", *httpAddr)
 	}
 
-	// Register NATS adapter (if configured)
-	if *natsURL != "" {
-		*natsDeviceID = resolveDeviceID(*natsDeviceID)
-
-		natsCfg := natsadapter.DefaultConfig()
-		natsCfg.URL = *natsURL
-		natsCfg.DeviceID = *natsDeviceID
-		natsCfg.TLSCert = *natsTLSCert
-		natsCfg.TLSKey = *natsTLSKey
-		natsCfg.TLSCA = *natsTLSCA
-		natsCfg.TLSVerify = *natsTLSVerify
-		natsCfg.PublishStateInterval = *natsStateInterval
-		natsCfg.PublishHealthInterval = *natsHealthInterval
-
-		// Authentication configuration
-		natsCfg.CredentialsFile = *natsCreds
-		natsCfg.NKeyFile = *natsNKey
-		natsCfg.Token = *natsToken
-		natsCfg.Username = *natsUser
-		natsCfg.Password = *natsPass
-
-		// JetStream configuration
-		natsCfg.JetStream.Enabled = *jsEnabled
-		if *jsStreamName != "" {
-			natsCfg.JetStream.StreamName = *jsStreamName
-		}
-		if *jsWorkers > 0 {
-			natsCfg.JetStream.WorkerCount = *jsWorkers
-		}
-
-		nats := natsadapter.New(natsCfg, a)
-		registry.Register(nats)
-		jsStatus := "disabled"
-		if *jsEnabled {
-			jsStatus = fmt.Sprintf("enabled (stream=%s, workers=%d)", natsCfg.JetStream.StreamName, natsCfg.JetStream.WorkerCount)
-		}
-		log.Printf("[main] NATS adapter configured for %s (device: %s, jetstream: %s)", *natsURL, *natsDeviceID, jsStatus)
-	}
-
 	// Register MQTT adapter (if configured)
 	var mqttAdapter *mqttadapter.Adapter
 	if *mqttBroker != "" {
@@ -363,7 +299,7 @@ func main() {
 		// a loopback HTTP adapter there is nobody to be mute to, and requiring
 		// a report would mean no update could ever confirm — every one of them
 		// reverted by a guardrail meant to catch the broken ones.
-		requireReport := *mqttBroker != "" || *natsURL != ""
+		requireReport := *mqttBroker != ""
 		// The version this run confirms is the install directory it was started
 		// from, the same name the pending marker and the gate use. The compiled-in
 		// version is only a fallback for a binary started outside the layout.

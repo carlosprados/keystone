@@ -11,6 +11,8 @@
 /keystone
 /keystonectl
 /keystoneserver
+/openapi-gen
+/cli-gen
 
 # Test binary, built with `go test -c`
 *.test
