@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"sync"
 	"time"
@@ -193,11 +194,23 @@ func (a *Adapter) Start(ctx context.Context) error {
 	// silently ignored and the connection still failed against a self-signed
 	// broker — the one case the flag exists for.
 	if a.cfg.TLSCert != "" || a.cfg.TLSCA != "" || !a.cfg.TLSVerify {
-		tlsCfg, err := a.buildTLSConfig()
+		tlsCfg, err := a.buildTLSConfig(true)
 		if err != nil {
 			return fmt.Errorf("failed to configure TLS: %w", err)
 		}
 		opts.SetTLSConfig(tlsCfg)
+		// Re-read certificate, key and CA from disk on every attempt, so an
+		// identity renewed in place is used from the next connection on
+		// without restarting the agent. A file that cannot be read now keeps
+		// the last configuration that could.
+		opts.SetConnectionAttemptHandler(func(_ *url.URL, cfg *tls.Config) *tls.Config {
+			fresh, err := a.buildTLSConfig(false)
+			if err != nil {
+				log.Printf("[mqtt] WARNING could not reload TLS files (%v); connecting with the previous ones", err)
+				return cfg
+			}
+			return fresh
+		})
 	}
 
 	// Last Will and Testament
@@ -748,7 +761,7 @@ func (a *Adapter) publishHealth() {
 }
 
 // buildTLSConfig creates a TLS configuration from the adapter config.
-func (a *Adapter) buildTLSConfig() (*tls.Config, error) {
+func (a *Adapter) buildTLSConfig(announce bool) (*tls.Config, error) {
 	tlsCfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 	}
@@ -760,7 +773,9 @@ func (a *Adapter) buildTLSConfig() (*tls.Config, error) {
 			return nil, fmt.Errorf("failed to load client certificate: %w", err)
 		}
 		tlsCfg.Certificates = []tls.Certificate{cert}
-		log.Printf("[mqtt] loaded client certificate from %s", a.cfg.TLSCert)
+		if announce {
+			log.Printf("[mqtt] loaded client certificate from %s", a.cfg.TLSCert)
+		}
 	}
 
 	// Load CA certificate for server verification
@@ -776,12 +791,14 @@ func (a *Adapter) buildTLSConfig() (*tls.Config, error) {
 		}
 
 		tlsCfg.RootCAs = caCertPool
-		log.Printf("[mqtt] loaded CA certificate from %s", a.cfg.TLSCA)
+		if announce {
+			log.Printf("[mqtt] loaded CA certificate from %s", a.cfg.TLSCA)
+		}
 	}
 
 	// Skip verification only if explicitly disabled
 	tlsCfg.InsecureSkipVerify = !a.cfg.TLSVerify
-	if tlsCfg.InsecureSkipVerify {
+	if tlsCfg.InsecureSkipVerify && announce {
 		// Said out loud, like --insecure-skip-verify for artifacts. Skipping
 		// verification accepts ANY certificate, so anyone who can intercept the
 		// connection can impersonate the broker — and this is the channel that
@@ -792,6 +809,30 @@ func (a *Adapter) buildTLSConfig() (*tls.Config, error) {
 	}
 
 	return tlsCfg, nil
+}
+
+// ReloadIdentity reconnects so a client certificate renewed on disk is used
+// now rather than at the next reconnect. The live connection keeps working
+// with the old certificate until then, but the server has already superseded
+// it, and a broker that checks that would drop the device at a moment of its
+// choosing. A clean disconnect sends no last will.
+func (a *Adapter) ReloadIdentity() {
+	a.mu.RLock()
+	c := a.client
+	a.mu.RUnlock()
+	if c == nil || (a.ctx != nil && a.ctx.Err() != nil) {
+		return
+	}
+	log.Printf("[mqtt] reconnecting to use the renewed client certificate")
+	c.Disconnect(250)
+	token := c.Connect()
+	go func() {
+		if !token.WaitTimeout(a.cfg.ConnectTimeout) {
+			log.Printf("[mqtt] WARNING reconnect with the renewed certificate is taking longer than %s; retrying in the background", a.cfg.ConnectTimeout)
+		} else if err := token.Error(); err != nil {
+			log.Printf("[mqtt] WARNING reconnect with the renewed certificate failed: %v", err)
+		}
+	}()
 }
 
 // Publish sends a message to a topic (for external use).

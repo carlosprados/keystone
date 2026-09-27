@@ -1021,6 +1021,10 @@ func (a *Agent) applyPlan(planPath string) error {
 
 // stageArtifactToWorkDir copies a downloaded artifact into the component workDir
 // using the artifact basename. Existing files are overwritten.
+// Clock is the agent's source of time for anything judged against
+// certificate validity.
+func (a *Agent) Clock() *clock.Source { return a.clock }
+
 // verificationTime is the time certificate validity is judged against: the
 // later of the system clock and the agent's own evidence that time has already
 // passed. Under the strict clock policy it returns an error instead, refusing

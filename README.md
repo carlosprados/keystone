@@ -506,6 +506,7 @@ Keystone supports loading environment variables from a `.env` file in the curren
 | `KEYSTONE_MQTT_TLS_KEY`               | Path to MQTT client TLS private key.                                    |
 | `KEYSTONE_MQTT_TLS_CA`                | Path to MQTT CA certificate bundle.                                     |
 | `KEYSTONE_MQTT_TLS_VERIFY`            | Verify MQTT broker certificate (`true`/`false`).                        |
+| `KEYSTONE_ENROL_DIR`                  | Identity written by `keystone enrol`: MQTT client certificate, key, broker CA, tenant and device ID, renewed automatically. |
 | `KEYSTONE_MQTT_USER`                  | MQTT username.                                                          |
 | `KEYSTONE_MQTT_PASS`                  | MQTT password.                                                          |
 | `KEYSTONE_MQTT_QOS`                   | MQTT QoS for command/response (0, 1, 2).                               |
