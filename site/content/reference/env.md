@@ -106,6 +106,7 @@ it under systemd:
 |---|---|
 | `KEYSTONE_MQTT_BROKER` | `--mqtt-broker` |
 | `KEYSTONE_MQTT_DEVICE_ID` | `--mqtt-device-id` |
+| `KEYSTONE_MQTT_TENANT` | `--mqtt-tenant` |
 | `KEYSTONE_MQTT_CLIENT_ID` | `--mqtt-client-id` |
 | `KEYSTONE_MQTT_USER` / `KEYSTONE_MQTT_PASS` | `--mqtt-user` / `--mqtt-pass` |
 | `KEYSTONE_MQTT_TLS_CERT` / `_KEY` / `_CA` | the matching `--mqtt-tls-*` |

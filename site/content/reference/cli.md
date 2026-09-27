@@ -40,6 +40,8 @@ Usage of keystone:
     	Default QoS level for commands and responses (0, 1, or 2) (default 1)
   -mqtt-state-interval duration
     	Interval for publishing state events (0 to disable) (default 10s)
+  -mqtt-tenant string
+    	Tenant for MQTT topics: keystone/<tenant>/<device>/... instead of keystone/<device>/.... Empty keeps the tenant-less form
   -mqtt-tls-ca string
     	Path to MQTT CA certificate
   -mqtt-tls-cert string

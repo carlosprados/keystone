@@ -152,7 +152,7 @@ func TestSelfUpdateOnAnAgentWithoutIt(t *testing.T) {
 // TestSelfUpdateTopicMapsToItsResponse guards the wiring: a response published
 // to the wrong topic is a command that looks like it vanished.
 func TestSelfUpdateTopicMapsToItsResponse(t *testing.T) {
-	tp := NewTopics("dev")
+	tp := NewTopics("", "dev")
 	if got := tp.ResponseTopic(tp.CmdSelfUpdate); got != tp.RespSelfUpdate {
 		t.Errorf("ResponseTopic(cmd/self-update) = %q, want %q", got, tp.RespSelfUpdate)
 	}
