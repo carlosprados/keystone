@@ -2,7 +2,7 @@
 # Limpia el estado de demo: para el plan, borra runtime/ y artefactos generados.
 #
 # Uso: ./demo/scripts/clean.sh [--deep]
-#   --deep  también borra los binarios renderizados y las recipes generadas.
+#   --deep  también borra los binarios, las recipes generadas, sus firmas y la CA de demo.
 
 set -u
 
@@ -20,8 +20,9 @@ rm -rf "${ROOT}/runtime"
 if $DEEP; then
   echo "[clean] --deep: borrando artefactos demo y recipes renderizadas"
   rm -f "${ROOT}/demo/artifacts"/*
-  rm -f "${ROOT}/demo/recipes/v1/"*.toml
-  rm -f "${ROOT}/demo/recipes/v2/"*.toml
+  rm -f "${ROOT}/demo/recipes/v1/"*.toml "${ROOT}/demo/recipes/v1/"*.toml.sig
+  rm -f "${ROOT}/demo/recipes/v2/"*.toml "${ROOT}/demo/recipes/v2/"*.toml.sig
+  rm -rf "${ROOT}/demo/trust"
 fi
 
 echo "[clean] OK"

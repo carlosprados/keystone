@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Compila los 6 binarios de demo (v1 y v2), calcula SHA-256
-# y renderiza las plantillas de recipes con los hashes reales.
+# Compila los 6 binarios de demo (v1 y v2), calcula SHA-256,
+# renderiza las plantillas de recipes con los hashes reales y firma
+# binarios y recipes con una CA de demo.
 #
 # Uso: ./demo/scripts/build.sh
 # CWD esperado: raíz del repo keystone.
@@ -47,6 +48,17 @@ render "${DEMO}/recipes/v1/com.demo.consumer.recipe.toml.tmpl" "${DEMO}/recipes/
 render "${DEMO}/recipes/v2/com.demo.config.recipe.toml.tmpl"   "${DEMO}/recipes/v2/com.demo.config.recipe.toml"   "config-service-v2"
 render "${DEMO}/recipes/v2/com.demo.producer.recipe.toml.tmpl" "${DEMO}/recipes/v2/com.demo.producer.recipe.toml" "data-producer-v2"
 render "${DEMO}/recipes/v2/com.demo.consumer.recipe.toml.tmpl" "${DEMO}/recipes/v2/com.demo.consumer.recipe.toml" "data-consumer-v2"
+
+# The agent verifies everything it installs, and the demo shows that rather
+# than switching it off: a throwaway CA in demo/trust/ signs every binary (its
+# .sig is served next to it, at the recipe's sig_uri) and every recipe (the
+# agent reads <recipe>.sig beside the file).
+echo "[build] firmando binarios y recipes con la CA de demo (demo/trust/)"
+KEYSTONE_TRUST_DIR="${DEMO}/trust" "${ROOT}/scripts/dev-sign.sh" \
+  "${ARTIFACTS}"/config-service-v1 "${ARTIFACTS}"/config-service-v2 \
+  "${ARTIFACTS}"/data-producer-v1 "${ARTIFACTS}"/data-producer-v2 \
+  "${ARTIFACTS}"/data-consumer-v1 "${ARTIFACTS}"/data-consumer-v2 \
+  "${DEMO}"/recipes/v1/*.recipe.toml "${DEMO}"/recipes/v2/*.recipe.toml
 
 echo "[build] OK"
 ls -lh "${ARTIFACTS}"
