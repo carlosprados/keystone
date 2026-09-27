@@ -1,7 +1,7 @@
 # Demo de Keystone — despliegue y actualización de 3 componentes
 
 Esta demo muestra cómo Keystone resuelve dependencias, descarga artefactos por
-HTTP con verificación SHA-256, arranca procesos nativos en el orden correcto y
+HTTP verificando su SHA-256 y su firma, arranca procesos nativos en el orden correcto y
 hace una **actualización atómica** de los tres componentes de la versión **1.0.0**
 a la **2.0.0** en una sola llamada.
 
@@ -52,17 +52,18 @@ demo/
 │   └── data-consumer/{v1,v2}/main.go
 ├── recipes/
 │   ├── v1/*.recipe.toml.tmpl   Plantillas con placeholder {{SHA256}}
-│   ├── v1/*.recipe.toml        Generadas por build.sh
+│   ├── v1/*.recipe.toml        Generadas por build.sh, con su .sig al lado
 │   ├── v2/*.recipe.toml.tmpl
 │   └── v2/*.recipe.toml
 ├── plans/
 │   ├── plan-v1.toml
 │   └── plan-v2.toml
-├── artifacts/              Binarios compilados (servidos por keystoneserver)
+├── artifacts/              Binarios compilados y sus .sig (servidos por keystoneserver)
+├── trust/                  CA de demo creada por build.sh (no se versiona)
 └── scripts/
-    ├── build.sh            Compila los 6 binarios y renderiza recipes
+    ├── build.sh            Compila los 6 binarios, renderiza recipes y firma todo
     ├── serve-artifacts.sh  Levanta keystoneserver :9000 sobre demo/artifacts
-    ├── run-agent.sh        Levanta keystone agent :8080 con CWD = raíz del repo
+    ├── run-agent.sh        Levanta el agente en 127.0.0.1:8080 confiando en demo/trust/
     ├── apply-v1.sh         keystonectl apply demo/plans/plan-v1.toml
     ├── apply-v2.sh         keystonectl apply demo/plans/plan-v2.toml
     ├── status.sh           Snapshot del estado (agente + endpoints)
@@ -103,7 +104,7 @@ Todos los scripts se ejecutan desde la **raíz del repo**.
 ### Terminal 1 — repositorio de artefactos
 
 ```bash
-./demo/scripts/build.sh          # compila + renderiza recipes
+./demo/scripts/build.sh          # compila, renderiza recipes y firma binarios y recipes
 ./demo/scripts/serve-artifacts.sh
 ```
 
@@ -115,7 +116,8 @@ Salida esperada: `keystoneserver: sirviendo …/demo/artifacts en http://:9000`.
 ./demo/scripts/run-agent.sh
 ```
 
-Escucha en `:8080`. Deja este terminal visible: los logs en vivo son el plato
+Escucha en `127.0.0.1:8080` y sólo acepta lo firmado por la CA de la demo
+(`demo/trust/`). Deja este terminal visible: los logs en vivo son el plato
 fuerte de la demo (eventos `component=… msg=starting component`, health checks,
 transiciones de estado).
 
@@ -156,7 +158,7 @@ Puntos a remarcar:
 ./demo/scripts/apply-v1.sh
 ```
 
-Mirar el log del agente: se ve cómo descarga cada binario, verifica SHA-256,
+Mirar el log del agente: se ve cómo descarga cada binario, verifica su SHA-256 y su firma,
 ejecuta el install script y arranca en orden `config → producer → consumer`.
 
 ```bash
@@ -236,8 +238,10 @@ recipes renderizadas:
 ## Puntos clave para remarcar
 
 1. **Contrato declarativo**. TOML, no scripts imperativos. El agente converge.
-2. **Integridad**. SHA-256 obligatorio; añadible firma ECDSA/RSA (ver
-   `configs/trust/`).
+2. **Integridad**. SHA-256 y firma obligatorios. `build.sh` firma binarios y
+   recipes con una CA de demo, y el agente rechaza lo que no encadene a ella.
+   Para enseñarlo: estropea una `.sig` en `demo/recipes/v1/`, reaplica el plan
+   y verás `recipe signature verify failed`; `build.sh` la vuelve a firmar.
 3. **Dependencias explícitas**. Orden de arranque y paralelismo derivados del
    DAG — el operador no los escribe.
 4. **Health-gated rollout**. Un componente nuevo no marca "running" hasta que
@@ -252,7 +256,9 @@ recipes renderizadas:
 
 | Síntoma                                              | Causa más probable                                       |
 |------------------------------------------------------|----------------------------------------------------------|
-| `bind: address already in use` al arrancar agente    | Hay un keystone previo o algo en :8080                   |
+| `bind: address already in use` al arrancar agente    | Hay un keystone previo o algo en 127.0.0.1:8080          |
+| `demo/trust/ca.pem no existe` al arrancar el agente  | No se ejecutó `build.sh`, que crea la CA y firma la demo |
+| `signature verify failed` al aplicar                 | Recipe o binario cambiado sin volver a firmar. Re-ejecutar `build.sh` |
 | `install script failed: … no such file`              | No se ejecutó `build.sh` o se limpió `demo/artifacts/`   |
 | `sha256 mismatch` al descargar                       | Binario recompilado sin re-renderizar recipe. Re-ejecutar `build.sh` |
 | `producer: config-service unreachable after 30s`     | El `config` tardó demasiado o el `CONFIG_URL` apunta mal |
@@ -260,7 +266,7 @@ recipes renderizadas:
 
 ## Endpoints de referencia
 
-### Agente Keystone (`:8080`)
+### Agente Keystone (`127.0.0.1:8080`)
 
 - `GET /healthz` — liveness
 - `GET /v1/plan/status` — estado del plan actual
@@ -298,11 +304,11 @@ Referencia completa: `docs/adapters.md` y la página MQTT de la documentación.
      mosquitto -c /mosquitto-no-auth.conf
    ```
 
-2. **Relanza el agente con MQTT**. El tenant es obligatorio:
+2. **Relanza el agente con MQTT**, con el mismo script, que ya confía en la CA
+   de la demo y pasa los flags extra al agente. El tenant es obligatorio:
 
    ```bash
-   ./keystone \
-     --http 127.0.0.1:8080 \
+   ./demo/scripts/run-agent.sh \
      --mqtt-broker tcp://localhost:1883 \
      --mqtt-tenant demo \
      --mqtt-device-id edge-demo

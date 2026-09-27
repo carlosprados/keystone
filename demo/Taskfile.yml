@@ -22,7 +22,7 @@ tasks:
     dir: "{{.ROOT}}"
 
   build:
-    desc: Compila los 6 binarios y renderiza las recipes con SHA-256
+    desc: Compila los 6 binarios, renderiza las recipes con SHA-256 y firma binarios y recipes
     dir: "{{.ROOT}}"
     cmds:
       - ./demo/scripts/build.sh
@@ -35,7 +35,7 @@ tasks:
       - ./demo/scripts/serve-artifacts.sh
 
   agent:
-    desc: "Levanta el agente keystone en :8080 (foreground)"
+    desc: "Levanta el agente keystone en 127.0.0.1:8080, confiando en la CA de demo (foreground)"
     dir: "{{.ROOT}}"
     deps: [keystone-bins]
     cmds:
