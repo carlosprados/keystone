@@ -53,10 +53,9 @@ device that could never run anything bigger.
 
 ## How you talk to it
 
-Three interchangeable front doors, called **adapters**, all driving the same logic:
+Two interchangeable front doors, called **adapters**, all driving the same logic:
 
 - **HTTP** — a small REST API. On by default, bound to loopback.
-- **NATS** — subject-based messaging, with an optional JetStream job queue.
 - **MQTT** — broker topics, QoS, last-will. The classic IoT choice.
 
 You can enable several at once. See [Control planes](../../control-planes/).

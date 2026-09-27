@@ -15,7 +15,7 @@ reaches for.
 ```mermaid
 flowchart TB
     FM["Fleet manager"]
-    BRK["Broker<br/>NATS or MQTT"]
+    BRK["MQTT broker"]
     KS["keystone agent"]
     ART["Artifact store"]
     PROM["Prometheus"]
@@ -36,7 +36,6 @@ the fleet manager.
 flowchart TD
     subgraph ADAPTERS["Adapters — how commands arrive"]
         H["HTTP<br/><small>REST, :8080</small>"]
-        N["NATS<br/><small>+ JetStream</small>"]
         M["MQTT<br/><small>QoS, LWT</small>"]
     end
     CH["CommandHandler<br/><small>the business contract</small>"]
@@ -50,7 +49,6 @@ flowchart TD
     ST["State<br/><small>runtime/state</small>"]
 
     H --> CH
-    N --> CH
     M --> CH
     CH --> AG
     AG --> SUP
@@ -87,8 +85,8 @@ type CommandHandler interface {
 }
 ```
 
-Every adapter speaks this, and `Agent` is the only implementation. This is why HTTP,
-NATS and MQTT cannot drift apart in behaviour: there is exactly one code path
+Every adapter speaks this, and `Agent` is the only implementation. This is why HTTP
+and MQTT cannot drift apart in behaviour: there is exactly one code path
 behind them.
 
 ## Interface 3: Runner
@@ -120,7 +118,6 @@ The whole startup, from `cmd/keystone/main.go`:
 Agent.New(opts)
   → adapter.NewRegistry()
       ├→ httpadapter.New(cfg, agent)    // unless --http ""
-      ├→ natsadapter.New(cfg, agent)    // if --nats-url
       └→ mqttadapter.New(cfg, agent)    // if --mqtt-broker
   → Registry.StartAll(ctx)
   → <-signal
@@ -134,7 +131,6 @@ flowchart TB
     subgraph AD["internal/adapter"]
         direction TB
         H["http"]
-        N["nats"]
         M["mqtt"]
     end
     REG["Registry"] --> AD
@@ -142,7 +138,7 @@ flowchart TB
     CH --> A["Agent"]
 ```
 
-The agent is the only implementation of `CommandHandler`, which is why the three
+The agent is the only implementation of `CommandHandler`, which is why the two
 transports cannot drift apart in behaviour.
 
 ```mermaid
@@ -182,7 +178,7 @@ execution logic never tangle.
 |---|---|
 | `internal/agent` | Top-level runtime; implements `CommandHandler`; owns reconcile |
 | `internal/adapter` | Transport abstraction and lifecycle registry |
-| `internal/adapter/{http,nats,mqtt}` | The three control planes |
+| `internal/adapter/{http,mqtt}` | The two control planes |
 | `internal/supervisor` | Component FSM, dependency graph, layered start |
 | `internal/runner` | `ProcessRunner`, `ContainerRunner`, privilege dropping |
 | `internal/recipe` | Recipe parsing |

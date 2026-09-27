@@ -73,7 +73,7 @@ checking on file-loaded recipes, and it does not open the HTTP API.
 
 Keystone assumes the **artifact store and the network are untrusted**: anything
 downloaded must prove its origin cryptographically. It assumes the **control plane
-is authenticated** — by a token over HTTP, or by broker ACLs and TLS for NATS and
+is authenticated** — by a token over HTTP, or by broker ACLs and TLS for
 MQTT. It assumes the **local filesystem is trusted**: whoever can write
 `runtime/state` or the recipe store already owns the device. And it assumes
 **components are semi-trusted**: they can be confined, but Keystone is not a

@@ -232,7 +232,7 @@ func parsePEMCerts(b []byte) ([]*x509.Certificate, error) {
 }
 
 // CheckTransportSeparation refuses a trust bundle that shares a key with the
-// certificates used for transport: the MQTT or NATS CA file, or a client
+// certificates used for transport: the MQTT CA file, or a client
 // certificate chain.
 //
 // The trust bundle decides what code a device runs. A CA that issues transport

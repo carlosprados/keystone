@@ -213,8 +213,7 @@ certificate, key, broker CA, tenant and device ID from what `keystone enrol` wro
 renews the certificate itself, and reconnects with the new one without a restart.
 
 **The transport CA must not be a code CA.** The agent refuses to start if any
-certificate in `--mqtt-tls-ca` or in the `--mqtt-tls-cert` chain (or the NATS
-equivalents) shares a key with a certificate in `KEYSTONE_TRUST_BUNDLE`. The
+certificate in `--mqtt-tls-ca` or in the `--mqtt-tls-cert` chain shares a key with a certificate in `KEYSTONE_TRUST_BUNDLE`. The
 error names the certificate and both files. A CA that issues broker or device
 certificates, if also trusted for code, would let anyone who can obtain a
 connection certificate get a recipe accepted. See

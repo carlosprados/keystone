@@ -10,7 +10,6 @@ between transports.
 | Adapter | Best for | On by default |
 |---|---|---|
 | [HTTP](http/) | Local management, debugging, Prometheus | yes (loopback) |
-| [NATS](nats/) | Large fleets, cloud, offline queueing with JetStream | no |
 | [MQTT](mqtt/) | IoT platforms, constrained devices, existing brokers | no |
 
 You can run several at once — HTTP on loopback for local debugging while MQTT

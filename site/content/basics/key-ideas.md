@@ -67,8 +67,8 @@ recipe.
 ## Agent
 
 **The `keystone` binary on the device.** It owns the plan, the components, and the
-truth about them. Everything else — the CLI, the REST API, the NATS and MQTT
-adapters — is a way of asking the agent to do something.
+truth about them. Everything else — the CLI, the REST API, the MQTT
+adapter — is a way of asking the agent to do something.
 
 ## How they fit together
 

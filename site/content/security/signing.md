@@ -98,8 +98,7 @@ device in this order:
 ### The trust bundle is for code only
 
 The agent refuses to start when a certificate in the trust bundle shares a key
-with one used for transport: `--mqtt-tls-ca`, the `--mqtt-tls-cert` chain, or the
-NATS equivalents. It is compared by key, so a CA reissued under a new serial
+with one used for transport: `--mqtt-tls-ca` or the `--mqtt-tls-cert` chain. It is compared by key, so a CA reissued under a new serial
 still counts. Keep one CA, or a set of them, for signing code, and different
 ones for broker and device identities.
 

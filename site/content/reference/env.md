@@ -123,10 +123,7 @@ An invalid value (a non-numeric integer, an unparseable duration, a bad boolean)
 logged and ignored rather than crashing the agent — but check your logs, because
 "ignored" means the default is in force.
 
-{{% notice style="note" title="KEYSTONE_JOBS is not one of these" %}}
-`KEYSTONE_JOBS` is the *default value* of the `--nats-js-stream` flag — the name
-of the JetStream stream. The agent never reads it from the environment.
-{{% /notice %}}
+
 
 ## keystonectl
 

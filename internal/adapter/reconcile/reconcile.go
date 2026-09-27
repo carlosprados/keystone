@@ -2,7 +2,7 @@
 // the plan already in effect on an interval, so a device repairs itself with no
 // message from anybody.
 //
-// It is an adapter for the same reason HTTP and NATS are. An adapter turns
+// It is an adapter for the same reason HTTP and MQTT are. An adapter turns
 // external events into CommandHandler calls, and a clock is a transport whose
 // events happen to be scheduled. Everything this package knows about repair it
 // delegates to CommandHandler.ReconcileNow; what lives here is when to ask.
@@ -75,7 +75,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 		return nil
 	}
 	// Detached from the caller's context on purpose: Stop is the single way this
-	// loop ends, the same contract the HTTP, NATS and MQTT adapters follow.
+	// loop ends, the same contract the HTTP and MQTT adapters follow.
 	// Letting the start context also kill it would leave Stop unable to tell
 	// whether a pass is still running.
 	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
