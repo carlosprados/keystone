@@ -92,6 +92,11 @@ survivor that is not adopted is reaped just before its replacement starts. See
 If everything restarted anyway, the survivors were not there to adopt: the agent
 was stopped cleanly (`systemctl stop` or `restart` stop components on purpose),
 `KillMode=process` is missing from the unit, or the agent runs under a subreaper.
+After a self-update, check the version that *exited*: up to v0.12.8 it killed
+every process component on its way out (a shell component's children lingered),
+so an update from those versions restarts them even to a fixed one. The log
+shows `leaving N supervised component(s) running` and then no `survived the
+previous run` line.
 
 To keep a device idle across reboots, stop the plan properly
 (`POST /v1/plan/stop`) rather than killing the agent — a `stopped` status is
