@@ -80,6 +80,21 @@ not the flag, which it never sees: set it in `/etc/keystone/keystone.env`, or th
 gate refuses what the agent proposed and the update rolls back.
 {{% /notice %}}
 
+{{% notice style="warning" title="Upgrading a device from v0.12.7 or earlier" %}}
+Versions before v0.12.8 verify signers for serverAuth, so they **refuse** a
+certificate issued only for codeSigning. The update itself is verified by the
+version already installed, both by the agent and by the self-update gate, so
+re-signing the new binary with a new signer makes the update fail. Move a
+device in this order:
+
+1. Set `KEYSTONE_ALLOW_NO_EKU_SIGNERS=true` in `/etc/keystone/keystone.env`.
+   Older versions ignore it.
+2. Update to v0.12.8 or later, with the binary and recipes still signed by the
+   existing no-EKU signer.
+3. Once the update is confirmed, reissue the signer for codeSigning, re-sign
+   recipes and artifacts, and remove the variable.
+{{% /notice %}}
+
 ### The trust bundle is for code only
 
 The agent refuses to start when a certificate in the trust bundle shares a key
