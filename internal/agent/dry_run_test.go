@@ -55,6 +55,25 @@ func cmdlineOf(pid int) string {
 	return strings.TrimSpace(strings.ReplaceAll(string(b), "\x00", " "))
 }
 
+// runsVersion reports whether pid is version v of the component. The marker is
+// in the command line before and after the shell execs into sleep, so a reading
+// taken either side of the exec counts.
+func runsVersion(pid, v int) bool {
+	return strings.HasSuffix(cmdlineOf(pid), fmt.Sprintf("sleep 300%d", v))
+}
+
+// wantVersion fails unless pid is, or within a few seconds becomes, version v.
+func wantVersion(t *testing.T, pid, v int, what string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !runsVersion(pid, v) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s runs %q, want v%d (sleep 300%d)", what, cmdlineOf(pid), v, v)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // applyV1 starts an agent in a fresh directory running v1, the way the HTTP
 // API does it, and returns it with the PID of the component.
 func applyV1(t *testing.T) (*Agent, int, string, string) {
@@ -67,9 +86,7 @@ func applyV1(t *testing.T) (*Agent, int, string, string) {
 	}
 	pid := waitForPID(t, a, "app")
 	t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
-	if got := cmdlineOf(pid); got != "sleep 3001" {
-		t.Fatalf("v1 runs %q, want sleep 3001", got)
-	}
+	wantVersion(t, pid, 1, "after applying v1, the component")
 	return a, pid, v1, v2
 }
 
@@ -123,7 +140,7 @@ func TestADryRunChangesNothing(t *testing.T) {
 	waitUntil(t, 15*time.Second, func() bool {
 		ci, ok := a.comps.Get("app")
 		newPID = ci.PID
-		return ok && ci.State == "running" && newPID != pid && cmdlineOf(newPID) == "sleep 3002"
+		return ok && ci.State == "running" && newPID != pid && runsVersion(newPID, 2)
 	}, "after the dry run, applying v2 for real did not start v2")
 }
 
@@ -157,9 +174,7 @@ func TestARestartedAgentResumesThePlanInForceAfterADryRun(t *testing.T) {
 			}
 			pid := waitForPID(t, b, "app")
 			t.Cleanup(func() { _ = syscall.Kill(-pid, syscall.SIGKILL) })
-			if got := cmdlineOf(pid); got != "sleep 3001" {
-				t.Errorf("after the restart the component runs %q, want v1 (sleep 3001)", got)
-			}
+			wantVersion(t, pid, 1, "after the restart, the component")
 		})
 	}
 }
@@ -186,9 +201,7 @@ func TestRestartingAComponentAfterADryRunUsesThePlanInForce(t *testing.T) {
 	if newPID == pid {
 		t.Errorf("the component was not restarted (pid %d)", pid)
 	}
-	if got := cmdlineOf(newPID); got != "sleep 3001" {
-		t.Errorf("the restarted component runs %q, want v1 (sleep 3001)", got)
-	}
+	wantVersion(t, newPID, 1, "the restarted component")
 }
 
 // TestAReconcileAfterADryRunStillRuns: a reconcile skips a plan whose status
