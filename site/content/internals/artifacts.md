@@ -54,6 +54,48 @@ protections that matter when the archive comes off the network:
 - **Size cap** — `KEYSTONE_MAX_EXTRACT_BYTES` (2 GiB by default) bounds the
   decompressed size, so a small archive cannot fill the disk.
 
+## Staging into the workdir
+
+An artifact without `unpack` appears in the component's working directory under
+its file name, as a **second name for the cached file** — a hard link, not a
+copy. The cache keeps the file to verify it and to reuse it; the workdir is
+where the component finds it. With a link, both are the same bytes on disk.
+
+It used to be a copy, and the copy cost more than the disk it took:
+
+| | Copy (before) | Link |
+|---|---|---|
+| Disk per staged artifact | twice its size, on filesystems without reflinks (ext4) | once |
+| Every start (apply, component restart, agent restart) | the artifact copied again | nothing written |
+| Staging over a running executable | fails: `text file busy` | works |
+| While it happens | the file is empty, then partial | the old file or the new one |
+
+Measured on a device running four components on ext4: 934 MiB of artifacts
+were stored twice, and restarting one component rewrote 636 MiB of them.
+
+The last two rows matter on the resume after an agent restart. A survivor that
+is about to be adopted is still running its executable when that executable is
+staged again; a copy cannot open it for writing, so the apply failed and the
+survivor was reaped. The new name is made under a temporary name in the same
+directory and renamed over the old one, so a running process keeps what it has
+and a reader never sees a file in between.
+
+**An artifact is immutable.** A component that wants to change one copies it
+out first. Writing into it in place now writes into the cache too: the next
+start finds the digest wrong, downloads the artifact again and stages it fresh.
+It used to be overwritten silently instead. A device that cannot reach the
+artifact's URI at that point fails the start, as it would for any artifact that
+does not verify.
+
+The permission bits and the owner of the file being replaced carry over, so an
+executable bit set by an install hook — which runs once per workdir — survives a
+fresh download of the artifact.
+
+Where a link is not possible — `runtime/components` on another filesystem than
+`runtime/artifacts`, or a filesystem without hard links — the artifact is
+copied instead, still to a temporary name and renamed into place, and the agent
+logs `cannot hard-link … copying it instead`.
+
 ## Delta downloads
 
 An artifact can opt into being **patched** instead of downloaded whole. The agent
@@ -168,3 +210,8 @@ Two mechanisms keep it bounded:
 
 Version the directory, not the file: keeping `<version>` in the path is what lets a
 rollback reuse the previous artifact without downloading it again.
+
+A staged artifact shares its file with the workdir (see
+[Staging into the workdir](#staging-into-the-workdir)), so removing a version's
+cache directory frees nothing while its workdir still names the files; the
+space goes when the last name does.
