@@ -31,7 +31,7 @@ On startup the agent reads the snapshot and decides from the persisted plan stat
 | `applying` | yes | An apply was interrupted mid-flight; re-apply from scratch |
 | *(empty)* | yes | Legacy or first run; safest default |
 | `stopped` | **no** | An operator stopped it deliberately. Respect that |
-| `dry-run` | **no** | Nothing was ever installed |
+| `dry-run` | **no** | Nothing was ever installed. Only a snapshot from an older agent carries it: a dry run no longer writes it. Such a device resumes again with its next real apply |
 
 Unknown future values default to resuming: silently supervising nothing is the
 worse failure.

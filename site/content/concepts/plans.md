@@ -42,8 +42,16 @@ To preview without touching anything:
 curl -X POST --data-binary @plan.toml "http://127.0.0.1:8080/v1/plan/apply?dry=true"
 ```
 
-A dry run logs the stop, start and no-touch sets and updates the reported plan
-status to `dry-run`, but installs and starts nothing.
+A dry run logs the stop, start and no-touch sets in the agent's log and changes
+nothing: it installs and starts nothing, and the plan in force, its status and
+the persisted state stay exactly as they were. A dry run on a running device is
+safe — previewing the next plan, or the one already in force, has no effect on
+the next apply, on a restart of the agent or of a component, or on a reconcile.
+
+It used to record the previewed plan as the one in force, under the status
+`dry-run`. The next apply then found nothing to do, and an agent restarted
+after a preview — an upgrade, a power cut — resumed nothing, because `dry-run`
+means nothing was ever installed.
 
 It is also stricter than a real apply on one point: it **refuses any key the
 agent does not recognise**, where an apply accepts it and reports it. That is
@@ -171,7 +179,7 @@ flowchart TB
 | `applying` | An apply is in flight |
 | `running` | The last apply succeeded |
 | `failed` | The last apply failed (and rolled back, if it could) |
-| `dry-run` | The last operation was a preview |
+| `dry-run` | Left by an older agent after a dry run; a dry run no longer changes the status |
 | `stopped` | Someone called `/v1/plan/stop` |
 
 Only one apply runs at a time; a second concurrent request is rejected rather than

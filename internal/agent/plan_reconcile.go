@@ -131,15 +131,17 @@ func (a *Agent) applyPlanReconcileUnlocked(planPath string, dry, allowRollback b
 	// So the lists say what was decided, and the lines below say what happened.
 	log.Printf("[agent] reconcile plan stop_order=%v start_order=%v no_touch=%v", actions.stopOrder, actions.startOrder, sortedKeys(actions.noTouch))
 
+	// A dry run reports and changes nothing — not the plan in force, not its
+	// path, not its status, not the snapshot. It used to record the previewed
+	// plan as the one in force, under the status "dry-run", and every one of
+	// those fields was then read as the truth: the next real apply compared the
+	// plan with itself and did nothing; a restarted agent did not resume
+	// ("dry-run" means nothing was ever installed), so a device that had only
+	// been previewed came back from a power cut running nothing; a component
+	// restart loaded the plan from a staging file already deleted; and a
+	// reconcile skipped the plan as one an operator had stopped. A preview of
+	// the plan in force did all of that too.
 	if dry {
-		a.mu.Lock()
-		a.planPath = planPath
-		a.planStatus = "dry-run"
-		a.planErr = ""
-		a.planUnknown = nil
-		a.planComps = desired.planMap
-		a.mu.Unlock()
-		a.persistSnapshot()
 		log.Printf("[agent] dry-run stop=%v start=%v no_touch=%v", sortedKeys(actions.stopTargets), sortedKeys(actions.startTargets), sortedKeys(actions.noTouch))
 		return nil
 	}
