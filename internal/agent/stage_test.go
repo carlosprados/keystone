@@ -1,9 +1,12 @@
 package agent
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -12,10 +15,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/carlosprados/keystone/internal/artifact"
 	"github.com/carlosprados/keystone/internal/dataset"
 	"github.com/carlosprados/keystone/internal/manifest"
 	"github.com/carlosprados/keystone/internal/recipe"
@@ -376,12 +381,21 @@ func TestStagingRemovesLeftoversOfADeadAgent(t *testing.T) {
 
 func serveBytes(t *testing.T, data []byte) (url, sum string) {
 	t.Helper()
+	url, sum, _ = serveCounted(t, "app", data)
+	return url, sum
+}
+
+// serveCounted serves data as name and counts the downloads.
+func serveCounted(t *testing.T, name string, data []byte) (url, sum string, hits *atomic.Int32) {
+	t.Helper()
+	hits = new(atomic.Int32)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
 		_, _ = w.Write(data)
 	}))
 	t.Cleanup(srv.Close)
 	h := sha256.Sum256(data)
-	return srv.URL + "/app", hex.EncodeToString(h[:])
+	return srv.URL + "/" + name, hex.EncodeToString(h[:]), hits
 }
 
 // TestAWriteThroughTheWorkdirIsDetectedAndRepaired is the one behaviour a link
@@ -416,7 +430,7 @@ func TestAWriteThroughTheWorkdirIsDetectedAndRepaired(t *testing.T) {
 	if got := mustRead(t, dst); !bytes.Equal(got, content) {
 		t.Fatal("the workdir file was not repaired")
 	}
-	if statT(t, dst).Ino != statT(t, filepath.Join(artDir, "app")).Ino {
+	if statT(t, dst).Ino != statT(t, filepath.Join(artDir, stagedCacheName, "app")).Ino {
 		t.Error("workdir file is not the downloaded file")
 	}
 	if fi, _ := os.Stat(dst); fi.Mode().Perm() != 0o755 {
@@ -439,5 +453,279 @@ func TestADatasetPayloadIsLinkedIntoItsVersion(t *testing.T) {
 	cached := filepath.Join("runtime", "artifacts", "datasets", "oui", "app")
 	if statT(t, filepath.Join(dir, "app")).Ino != statT(t, cached).Ino {
 		t.Error("the dataset payload was copied, not linked")
+	}
+}
+
+// stageAsAnOlderAgent is how every agent before linking staged an artifact,
+// step for step: its cached copy at the top of the version's directory, then
+// the workdir file opened with O_TRUNC and the cached file copied into it.
+func stageAsAnOlderAgent(t *testing.T, artDir, workDir, uri, sum string) {
+	t.Helper()
+	src, _, err := artifact.Ensure(artDir, uri, sum, 0, artifact.HTTPOptions{})
+	if err != nil {
+		t.Fatalf("older agent: %v", err)
+	}
+	st, err := os.Stat(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	out, err := os.OpenFile(filepath.Join(workDir, filepath.Base(src)), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, st.Mode().Perm())
+	if err != nil {
+		t.Fatalf("older agent: %v", err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		t.Fatalf("older agent: %v", err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestGoingBackToAnOlderAgentEmptiesNothing is why the linked copy lives under
+// .staged. An older agent stages with O_TRUNC: had it found its cached copy at
+// the path it knows, that copy would be the workdir file itself, and truncating
+// the one would empty both. It finds nothing there, downloads a copy of its
+// own, and writes the same bytes into the shared file. Back on a newer agent,
+// that second copy is removed.
+func TestGoingBackToAnOlderAgentEmptiesNothing(t *testing.T) {
+	t.Chdir(t.TempDir())
+	content := bytes.Repeat([]byte("artifact "), 4096)
+	url, sum, hits := serveCounted(t, "app", content)
+	a := &Agent{insecureSkipVerify: true}
+	adef := recipe.Artifact{URI: url, SHA256: sum}
+	artDir, workDir := "runtime/artifacts/app/1", "runtime/components/app/1"
+	dst := filepath.Join(workDir, "app")
+	staged := filepath.Join(artDir, stagedCacheName, "app")
+	older := filepath.Join(artDir, "app")
+
+	if err := a.ensureAndVerifyArtifact(artDir, workDir, adef); err != nil {
+		t.Fatalf("staging: %v", err)
+	}
+	if _, err := os.Lstat(older); !os.IsNotExist(err) {
+		t.Errorf("%s exists (%v): an older agent would find the workdir file there", older, err)
+	}
+
+	stageAsAnOlderAgent(t, artDir, workDir, url, sum)
+	for _, p := range []string{dst, staged} {
+		if got := mustRead(t, p); !bytes.Equal(got, content) {
+			t.Fatalf("after an older agent staged, %s holds %d bytes, want %d", p, len(got), len(content))
+		}
+	}
+	if n := hits.Load(); n != 2 {
+		t.Errorf("%d downloads, want 2: the older agent fetches a copy of its own", n)
+	}
+	linked := statT(t, dst).Ino
+
+	if err := a.ensureAndVerifyArtifact(artDir, workDir, adef); err != nil {
+		t.Fatalf("staging again: %v", err)
+	}
+	if statT(t, dst).Ino != linked {
+		t.Error("the workdir file was replaced: the staged copy it names is the one to keep, not the older agent's")
+	}
+	if _, err := os.Lstat(older); !os.IsNotExist(err) {
+		t.Errorf("the older agent's copy is still at %s (%v): the artifact is stored twice", older, err)
+	}
+	if statT(t, dst).Ino != statT(t, staged).Ino {
+		t.Error("workdir file is not the staged copy")
+	}
+	if n := statT(t, dst).Nlink; n != 2 {
+		t.Errorf("link count %d, want 2 (the staged copy and the workdir)", n)
+	}
+	if n := hits.Load(); n != 2 {
+		t.Errorf("%d downloads, want 2: coming back downloads nothing", n)
+	}
+	if got := mustRead(t, dst); !bytes.Equal(got, content) {
+		t.Errorf("back on a newer agent, the workdir file holds %d bytes, want %d", len(got), len(content))
+	}
+}
+
+// TestUpgradingMovesTheCachedCopyInsteadOfDownloadingIt is the first start
+// after upgrading from an agent that copied: its cached copy at the top of the
+// version's directory, a separate copy in the workdir. The cached copy is moved
+// under .staged — the same file, no download — and the workdir copy gives way to
+// a link to it, keeping the mode the install hook gave it.
+func TestUpgradingMovesTheCachedCopyInsteadOfDownloadingIt(t *testing.T) {
+	t.Chdir(t.TempDir())
+	content := bytes.Repeat([]byte("artifact "), 4096)
+	url, sum, hits := serveCounted(t, "app", content)
+	artDir, workDir := "runtime/artifacts/app/1", "runtime/components/app/1"
+	older := filepath.Join(artDir, "app")
+	staged := filepath.Join(artDir, stagedCacheName, "app")
+	dst := filepath.Join(workDir, "app")
+
+	stageAsAnOlderAgent(t, artDir, workDir, url, sum)
+	if err := os.Chmod(dst, 0o755); err != nil { // the install hook
+		t.Fatal(err)
+	}
+	cached := statT(t, older).Ino
+	before := hits.Load()
+
+	a := &Agent{insecureSkipVerify: true}
+	adef := recipe.Artifact{URI: url, SHA256: sum}
+	for i := 0; i < 2; i++ { // the second start reuses what the first moved
+		if err := a.ensureAndVerifyArtifact(artDir, workDir, adef); err != nil {
+			t.Fatalf("staging %d: %v", i, err)
+		}
+	}
+	if n := hits.Load() - before; n != 0 {
+		t.Errorf("%d downloads, want 0: the cached copy was there to move", n)
+	}
+	if statT(t, staged).Ino != cached {
+		t.Error("the staged copy is not the file the older agent cached")
+	}
+	if _, err := os.Lstat(older); !os.IsNotExist(err) {
+		t.Errorf("the older agent's copy is still at %s (%v)", older, err)
+	}
+	if statT(t, dst).Ino != cached {
+		t.Error("workdir file is not the staged copy")
+	}
+	if fi, _ := os.Stat(dst); fi.Mode().Perm() != 0o755 {
+		t.Errorf("mode %v, want the 0755 the install hook set", fi.Mode().Perm())
+	}
+}
+
+// TestAMovedCopyIsVerifiedLikeAnyOther: moving the older agent's cached copy
+// does not vouch for it. One that no longer matches its digest is replaced by a
+// download, as it would have been where it was.
+func TestAMovedCopyIsVerifiedLikeAnyOther(t *testing.T) {
+	t.Chdir(t.TempDir())
+	content := bytes.Repeat([]byte("artifact "), 4096)
+	url, sum, hits := serveCounted(t, "app", content)
+	artDir, workDir := "runtime/artifacts/app/1", "runtime/components/app/1"
+
+	stageAsAnOlderAgent(t, artDir, workDir, url, sum)
+	f, err := os.OpenFile(filepath.Join(artDir, "app"), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteAt([]byte("tampered"), 0)
+	_ = f.Close()
+	before := hits.Load()
+
+	a := &Agent{insecureSkipVerify: true}
+	if err := a.ensureAndVerifyArtifact(artDir, workDir, recipe.Artifact{URI: url, SHA256: sum}); err != nil {
+		t.Fatalf("staging: %v", err)
+	}
+	if n := hits.Load() - before; n != 1 {
+		t.Errorf("%d downloads, want 1: the moved copy did not match its digest", n)
+	}
+	dst := filepath.Join(workDir, "app")
+	if got := mustRead(t, dst); !bytes.Equal(got, content) {
+		t.Fatal("the workdir file does not hold the artifact")
+	}
+	if statT(t, dst).Ino != statT(t, filepath.Join(artDir, stagedCacheName, "app")).Ino {
+		t.Error("workdir file is not the staged copy")
+	}
+}
+
+func tarGz(t *testing.T, name string, data []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// TestAnUnpackedArtifactStaysWhereDeltasLookForIt: an archive with unpack is
+// extracted, never linked, so an older agent has nothing to truncate. And its
+// cached copy is what a delta download looks for in the index at the top of
+// each version, so it stays there.
+func TestAnUnpackedArtifactStaysWhereDeltasLookForIt(t *testing.T) {
+	t.Chdir(t.TempDir())
+	url, sum, _ := serveCounted(t, "app.tar.gz", tarGz(t, "bin/app", []byte("the app")))
+	artDir, workDir := "runtime/artifacts/app/1", "runtime/components/app/1"
+
+	a := &Agent{insecureSkipVerify: true}
+	if err := a.ensureAndVerifyArtifact(artDir, workDir, recipe.Artifact{URI: url, SHA256: sum, Unpack: true}); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if got := string(mustRead(t, filepath.Join(workDir, "bin", "app"))); got != "the app" {
+		t.Fatalf("unpacked %q, want the archive's file", got)
+	}
+	idx, _ := artifact.LoadIndex(artDir)
+	if e, ok := idx.Get(url); !ok || filepath.Dir(e.Path) != artDir {
+		t.Errorf("the archive is not in its version's own index, where a delta looks for a base: %+v", e)
+	}
+	if _, err := os.Stat(filepath.Join(artDir, stagedCacheName)); !os.IsNotExist(err) {
+		t.Errorf("%s exists for an unpacked artifact (%v)", stagedCacheName, err)
+	}
+}
+
+// TestAnOlderAgentRematerialisingADatasetLeavesTheCacheWhole: a dataset's
+// cached payload keeps its place, unlike a staged artifact's, because an older
+// agent never writes into a file a newer one linked. Every agent that knows
+// datasets prepares a version by removing its directory and creating it again,
+// so the file its copy opens is always a new one.
+func TestAnOlderAgentRematerialisingADatasetLeavesTheCacheWhole(t *testing.T) {
+	t.Chdir(t.TempDir())
+	content := []byte("oui,vendor\n")
+	url, sum := serveBytes(t, content)
+	store := dataset.NewStore(filepath.Join("runtime", "datasets"))
+	cacheDir := filepath.Join("runtime", "artifacts", "datasets", "oui")
+	m := &manifest.Manifest{Artifact: manifest.Artifact{URI: url, SHA256: sum}}
+
+	dir, err := store.Prepare("oui", "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Agent{}).materialiseDataset(dataset.Spec{Name: "oui"}, m, dir); err != nil {
+		t.Fatalf("materialise: %v", err)
+	}
+
+	// an older agent materialising the same version
+	if dir, err = store.Prepare("oui", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	stageAsAnOlderAgent(t, cacheDir, dir, url, sum)
+	if got := mustRead(t, filepath.Join(cacheDir, "app")); !bytes.Equal(got, content) {
+		t.Fatalf("the cached payload holds %d bytes after an older agent, want %d", len(got), len(content))
+	}
+}
+
+// TestOnlyTheVersionsOwnFilesAreMoved: an index entry naming a file outside the
+// version's directory is not this cache's to move or remove, whatever put it
+// there. The artifact is downloaded instead.
+func TestOnlyTheVersionsOwnFilesAreMoved(t *testing.T) {
+	t.Chdir(t.TempDir())
+	content := []byte("the artifact")
+	url, sum, hits := serveCounted(t, "app", content)
+	artDir, workDir := "runtime/artifacts/app/1", "runtime/components/app/1"
+	elsewhere := filepath.Join("elsewhere", "app")
+	writeArtifact(t, elsewhere, content, 0o644)
+	idx, _ := artifact.LoadIndex(artDir)
+	idx.Put(artifact.IndexEntry{URI: url, SHA256: sum, Path: elsewhere, Size: int64(len(content))})
+	if err := idx.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &Agent{insecureSkipVerify: true}
+	if err := a.ensureAndVerifyArtifact(artDir, workDir, recipe.Artifact{URI: url, SHA256: sum}); err != nil {
+		t.Fatalf("staging: %v", err)
+	}
+	if got, err := os.ReadFile(elsewhere); err != nil || !bytes.Equal(got, content) {
+		t.Errorf("the file outside the version's directory was moved or changed: %q, %v", got, err)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("%d downloads, want 1", n)
 	}
 }

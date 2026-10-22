@@ -90,7 +90,10 @@ If the new version fails to start, or starts and cannot prove itself, the
 pre-start gate rolls it back without anyone asking. Proving itself means two
 things: the plan converged, **and** a control plane has heard from the device —
 see [self-update]({{% relref "/concepts/plans" %}}) for why starting is not
-enough on its own.
+enough on its own. Rolling back to a version from before staged artifacts were
+linked costs that version a download of every one of them, so their URIs have
+to be reachable: see
+[Going back to an older agent](../../internals/artifacts/#going-back-to-an-older-agent).
 
 **Proving itself has a deadline.** The gate counts *starts*, and nothing else
 restarts a version that starts fine and then cannot confirm — it converges and

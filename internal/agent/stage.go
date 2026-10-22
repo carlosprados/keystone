@@ -12,11 +12,105 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
+
+	"github.com/carlosprados/keystone/internal/artifact"
 )
 
 // linkArtifact is os.Link, behind a variable so the tests can make linking fail
 // the way a workdir on another filesystem does.
 var linkArtifact = os.Link
+
+// stagedCacheName is the subdirectory of a version's cache that holds the
+// cached copy of every artifact staged into the workdir — the file the workdir
+// links to.
+//
+// It is not where the cache used to keep them, on purpose. An agent from before
+// linking stages by opening the workdir file with O_TRUNC and copying its cached
+// file into it. Were that cached file at the path such an agent knows, it would
+// be the very file the workdir names: truncating the destination would empty
+// the source, and the copy would read nothing. Every staged artifact would be
+// left at 0 bytes the moment a device went back to an older agent — which is
+// what the self-update gate does, unasked, when a new version fails. Kept here,
+// an older agent finds no cached copy, downloads its own, and its copy writes
+// the same bytes into the shared file.
+const stagedCacheName = ".staged"
+
+// ensureStagedArtifact is artifact.Ensure for an artifact that is staged into
+// the workdir: its cached copy lives under stagedCacheName.
+//
+// A copy an older agent cached at the top of the version's directory is moved
+// there, so the first start after an upgrade costs a rename and not a download;
+// its digest is checked by the Ensure that follows, as any cached copy's is.
+// If the staged copy already exists, the older one is a second copy — an older
+// agent ran in between and downloaded it again — and is removed.
+//
+// Either way, the path an older agent knows ends up naming nothing, and going
+// back to one costs that agent a download of every staged artifact: their
+// sources have to be reachable for it to start its components.
+func ensureStagedArtifact(artDir, uri, sha string, timeout time.Duration, httpOpts artifact.HTTPOptions) (string, error) {
+	stagedDir := filepath.Join(artDir, stagedCacheName)
+	older, hasOlder := olderCachedCopy(artDir, uri)
+	if hasOlder && !hasCachedCopy(stagedDir, uri) {
+		moveCachedCopy(older, stagedDir)
+	}
+	path, _, err := artifact.Ensure(stagedDir, uri, sha, timeout, httpOpts)
+	if err != nil {
+		return "", err
+	}
+	if hasOlder {
+		if err := os.Remove(older.Path); err == nil {
+			log.Printf("[artifact] removed %s, a second cached copy left by an older agent", older.Path)
+		}
+	}
+	return path, nil
+}
+
+// olderCachedCopy returns the entry an agent from before linking left for uri
+// in the index at the top of the version's cache, if its file is still there.
+// Only a file in that directory counts: nothing else is this cache's to move.
+func olderCachedCopy(artDir, uri string) (artifact.IndexEntry, bool) {
+	idx, _ := artifact.LoadIndex(artDir)
+	e, ok := idx.Get(uri)
+	if !ok || filepath.Dir(e.Path) != filepath.Clean(artDir) {
+		return e, false
+	}
+	fi, err := os.Lstat(e.Path)
+	return e, err == nil && fi.Mode().IsRegular()
+}
+
+// hasCachedCopy reports whether the index in dir names a file for uri that is
+// still there. Whether it verifies is Ensure's to find out.
+func hasCachedCopy(dir, uri string) bool {
+	idx, _ := artifact.LoadIndex(dir)
+	e, ok := idx.Get(uri)
+	if !ok {
+		return false
+	}
+	_, err := os.Stat(e.Path)
+	return err == nil
+}
+
+// moveCachedCopy renames an older agent's cached copy into dir and indexes it
+// there. A failure only costs the download it was meant to save.
+func moveCachedCopy(older artifact.IndexEntry, dir string) {
+	dst := filepath.Join(dir, filepath.Base(older.Path))
+	err := os.MkdirAll(dir, 0o755)
+	if err == nil {
+		err = os.Rename(older.Path, dst)
+	}
+	if err != nil {
+		log.Printf("[artifact] cannot move the cached %s into %s (%v); downloading it again", filepath.Base(dst), dir, err)
+		return
+	}
+	idx, _ := artifact.LoadIndex(dir)
+	older.Path = dst
+	idx.Put(older)
+	if err := idx.Save(); err != nil {
+		log.Printf("[artifact] warning: failed to save index: %v", err)
+	}
+	log.Printf("[artifact] moved the cached %s into %s", filepath.Base(dst), dir)
+}
 
 // stageArtifactToWorkDir puts a verified artifact from the cache into the
 // component workDir under its basename, as a hard link to the cached file.

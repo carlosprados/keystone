@@ -1113,7 +1113,13 @@ func (a *Agent) ensureAndVerifyArtifact(artDir, workDir string, adef recipe.Arti
 		return nil
 	}
 
-	path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
+	var path string
+	var err error
+	if adef.Unpack {
+		path, _, err = artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
+	} else {
+		path, err = ensureStagedArtifact(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
+	}
 	if err != nil {
 		return err
 	}

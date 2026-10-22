@@ -198,8 +198,9 @@ Everything is relative to the agent's working directory:
 ```
 runtime/
 ├── artifacts/<recipe-name>/<version>/    downloaded, verified artifacts
+│   └── .staged/                          the cached files the workdir links to (unpack = false)
 ├── components/<recipe-name>/<version>/   working directory per component
-│   ├── <artifact>                        hard link to the cached file (unpack = false)
+│   ├── <artifact>                        hard link to .staged/<artifact> (unpack = false)
 │   └── .installed                        marker making install idempotent
 ├── recipes/                              the recipe store (API-uploaded)
 └── state/snapshot.json                   plan + component state for recovery

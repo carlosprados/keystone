@@ -96,6 +96,30 @@ Where a link is not possible — `runtime/components` on another filesystem than
 copied instead, still to a temporary name and renamed into place, and the agent
 logs `cannot hard-link … copying it instead`.
 
+### Going back to an older agent
+
+The cached file a workdir links to lives in its version's `.staged/`
+subdirectory (`runtime/artifacts/<recipe-name>/<version>/.staged/`, with an
+index of its own), not at the top of the version's directory, where the cache
+used to keep it. That is for going back to an agent from before linking — by
+hand, or by the self-update gate rolling back a version that failed.
+
+Such an agent stages by opening the workdir file for writing, truncating it,
+and copying its cached file into it. Had it found its cached file where it used
+to keep it, that file would be the workdir file itself: truncating the one would
+empty both, and the copy would read nothing, leaving every staged artifact
+empty. As it is, it finds no cached copy, downloads one of its own, and writes
+the same bytes into the shared file. So going back to an older agent downloads
+every staged artifact again, and **their URIs have to be reachable** for it to
+start its components. Back on a newer agent, those extra copies are removed.
+
+The other way round costs nothing: the first start after upgrading from an
+agent that copied moves its cached copies into `.staged/` — a rename, not a
+download — and replaces the copies in the workdir with links to them.
+
+Artifacts with `unpack` are never linked, so they stay where they were, which
+is also where a [delta download](#delta-downloads) looks for its base.
+
 ## Delta downloads
 
 An artifact can opt into being **patched** instead of downloaded whole. The agent
@@ -198,8 +222,10 @@ Current limits, deliberately:
 
 ## The cache
 
-Artifacts live in `runtime/artifacts/<recipe-name>/<version>/` and are reused
-across applies — re-applying a plan downloads nothing.
+Artifacts live in `runtime/artifacts/<recipe-name>/<version>/` — the ones staged
+into the workdir in its `.staged/` subdirectory, see
+[Going back to an older agent](#going-back-to-an-older-agent) — and are reused
+across applies: re-applying a plan downloads nothing.
 
 Two mechanisms keep it bounded:
 
