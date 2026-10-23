@@ -2194,6 +2194,8 @@ func processIsInitOrphan(pid int) bool {
 // killed mid-flight; without resuming, the plan stays silently unsupervised).
 // It refuses to resume only when the operator explicitly stopped the plan or
 // when the last persisted state was a dry-run that never installed anything.
+// A dry run no longer writes that status; a snapshot an older agent left after
+// one may still carry it.
 func shouldResumeLastPlan(planStatus string) bool {
 	switch strings.ToLower(strings.TrimSpace(planStatus)) {
 	case "stopped", "dry-run":
