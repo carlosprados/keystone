@@ -148,7 +148,7 @@ func (a *Agent) fetchAndVerifyManifest(ctx context.Context, spec dataset.Spec) (
 // against the digest the manifest carries, and puts it in dir.
 func (a *Agent) materialiseDataset(spec dataset.Spec, m *manifest.Manifest, dir string) error {
 	httpOpts := artifact.HTTPOptions{Headers: spec.Headers, GithubToken: spec.GithubToken}
-	cacheDir := filepath.Join("runtime", "artifacts", "datasets", spec.Name)
+	cacheDir := filepath.Join("runtime", "artifacts", datasetCacheRoot, spec.Name)
 
 	// The digest comes from the signed manifest, so Ensure's URI cache cannot
 	// serve stale bytes: a mismatch re-downloads.
