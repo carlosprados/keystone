@@ -1190,7 +1190,8 @@ func (a *Agent) tryDeltaArtifact(artDir, workDir string, adef recipe.Artifact) b
 	}
 	// The patch reconstructs an uncompressed tar, so there has to be
 	// something to unpack. A single-file artifact staged verbatim is not
-	// covered yet.
+	// covered yet; when it is, findDeltaBase will have to look in each
+	// version's .staged/ as well, where such an artifact is cached.
 	if !adef.Unpack {
 		log.Printf("[artifact] delta skipped for %s: only unpacked archives are supported", adef.URI)
 		return false

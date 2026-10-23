@@ -135,46 +135,26 @@ func forgetCachedCopy(dir, uri string) {
 }
 
 // stageArtifactToWorkDir puts a verified artifact from the cache into the
-// component workDir under its basename, as a hard link to the cached file.
+// component workDir under its basename, as a hard link to the cached file. Why
+// it links rather than copies is in site/content/internals/artifacts.md.
 //
-// It used to copy, and that copy was the whole cost of an artifact twice over:
-//
-//   - Disk. The cache keeps the file for reuse and verification, so the copy
-//     doubled every staged artifact for as long as its version lived. On ext4,
-//     which cannot share extents, that is the full size again; on XFS and btrfs
-//     the copy was already a reflink and cost nothing.
-//   - Writes. Staging runs on every start, not once: an apply, a component
-//     restart and the resume after an agent restart all re-copied every staged
-//     artifact over itself.
-//   - A running executable. A copy opens the destination for writing, which
-//     Linux refuses with ETXTBSY while the file is being executed. That is the
-//     normal state on a resume that adopts a survivor: the copy failed, the
-//     apply failed, and the survivor it meant to keep was reaped.
-//   - A window. Opening with O_TRUNC left the destination empty, then partial,
-//     until the copy finished.
-//
-// A link costs one directory entry. The cache verifies the bytes on every
-// staging (artifact.Ensure checks the sha256 before reusing a file), so the
-// file a component runs is now the very file that was just verified.
-//
-// The destination is never opened for writing. The new name is made under a
+// The destination is never opened for writing. The link is made under a
 // temporary name in the same directory and renamed over the destination, so a
 // running process keeps the inode it has, and a reader sees the old file or the
 // new one and nothing in between. When the destination already is the cached
 // file, there is nothing to do: rename(2) would leave the temporary name behind
 // if both names were links to the same inode.
 //
-// What a link changes: the workdir file and the cached file are the same file.
-// Artifacts are immutable, and a component that wants to change one has to copy
-// it out first, as before. One that writes into it in place now changes the
-// cache too, which the next staging detects and answers by downloading the
-// artifact again; it used to be overwritten silently instead.
+// The owner and the permission bits of a file being replaced carry over, owner
+// first (see keepOwnerAndMode). An install hook runs once per workdir and may
+// have made the file executable; a fresh download must not take that away.
 //
-// The permission bits and the owner of a file being replaced carry over, which
-// is what opening it with O_TRUNC used to give for free. A recipe's install
-// hook runs once per workdir and may have made the file executable; without
-// this, a fresh download of the artifact would come back without the bit, and
-// the component would no longer start.
+// The workdir file and the cached file are one file, so a write into it in
+// place is a write into the cache. The next staging detects it only when the
+// recipe declares the artifact's sha256, which it must unless the agent runs
+// with --insecure-skip-verify: the digest no longer matches, and the artifact
+// is downloaded again. Without one, the cache reuses the file unchecked and the
+// write stays.
 //
 // Where a link is not possible — a workdir on another filesystem, or a
 // filesystem without hard links — the artifact is copied instead, the same way:

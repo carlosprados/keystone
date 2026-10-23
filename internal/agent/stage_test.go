@@ -400,8 +400,8 @@ func serveCounted(t *testing.T, name string, data []byte) (url, sum string, hits
 
 // TestAWriteThroughTheWorkdirIsDetectedAndRepaired is the one behaviour a link
 // changes. Writing in place into a staged file now writes into the cache; the
-// next staging finds the digest wrong, downloads the artifact again, and puts
-// it back, with the mode the install hook gave it.
+// next staging finds the digest the recipe declares wrong, downloads the
+// artifact again, and puts it back, with the mode the install hook gave it.
 func TestAWriteThroughTheWorkdirIsDetectedAndRepaired(t *testing.T) {
 	t.Chdir(t.TempDir())
 	content := bytes.Repeat([]byte("artifact "), 4096)
@@ -763,6 +763,40 @@ func TestOnlyTheVersionsOwnFilesAreMoved(t *testing.T) {
 	}
 	if n := hits.Load(); n != 1 {
 		t.Errorf("%d downloads, want 1", n)
+	}
+}
+
+// TestWithoutASHA256AWriteThroughTheWorkdirStays is where the test above
+// stops: the digest is what finds the write, and a recipe need not declare one
+// when the agent runs with --insecure-skip-verify. The cache then reuses its
+// file unchecked, so the write stays, and every later start runs it.
+func TestWithoutASHA256AWriteThroughTheWorkdirStays(t *testing.T) {
+	t.Chdir(t.TempDir())
+	content := bytes.Repeat([]byte("artifact "), 4096)
+	url, _, hits := serveCounted(t, "app", content)
+	a := &Agent{insecureSkipVerify: true}
+	adef := recipe.Artifact{URI: url}
+	artDir, workDir := "runtime/artifacts/app/1", "runtime/components/app/1"
+
+	if err := a.ensureAndVerifyArtifact(artDir, workDir, adef); err != nil {
+		t.Fatalf("first staging: %v", err)
+	}
+	dst := filepath.Join(workDir, "app")
+	f, err := os.OpenFile(dst, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteAt([]byte("tampered"), 0)
+	_ = f.Close()
+
+	if err := a.ensureAndVerifyArtifact(artDir, workDir, adef); err != nil {
+		t.Fatalf("staging after the write: %v", err)
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("%d downloads, want 1: without a digest there is nothing to find the write with", n)
+	}
+	if got := mustRead(t, dst); !bytes.HasPrefix(got, []byte("tampered")) {
+		t.Error("the write was undone; the docs say it stays when the recipe declares no sha256")
 	}
 }
 

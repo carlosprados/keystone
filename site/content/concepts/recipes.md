@@ -71,7 +71,8 @@ mandatory** unless the agent runs with `--insecure-skip-verify`. Details in
 Without `unpack`, the file appears in the working directory under its name, as a
 hard link to the cached copy. Treat it as read-only: an install hook or a
 component that needs to change it copies it out first. Writing into it in place
-changes the cache too, and the next start downloads the artifact again.
+changes the cache too: the next start downloads the artifact again if the recipe
+declares its `sha256`, and keeps the changed file if it does not.
 
 ### Patching instead of downloading
 

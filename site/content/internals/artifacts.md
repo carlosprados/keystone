@@ -81,11 +81,14 @@ directory and renamed over the old one, so a running process keeps what it has
 and a reader never sees a file in between.
 
 **An artifact is immutable.** A component that wants to change one copies it
-out first. Writing into it in place now writes into the cache too: the next
-start finds the digest wrong, downloads the artifact again and stages it fresh.
-It used to be overwritten silently instead. A device that cannot reach the
+out first. Writing into it in place now writes into the cache too. When the
+recipe declares the artifact's `sha256`, the next start finds the digest wrong,
+downloads the artifact again and stages it fresh; a device that cannot reach the
 artifact's URI at that point fails the start, as it would for any artifact that
-does not verify.
+does not verify. The `sha256` is mandatory unless the agent runs with
+`--insecure-skip-verify`. Without it, the cache reuses its file unchecked, so the
+write stays and every later start runs it. Restaging a copy used to undo such a
+write at every start, silently.
 
 The permission bits and the owner of the file being replaced carry over, so an
 executable bit set by an install hook — which runs once per workdir — survives a
