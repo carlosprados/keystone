@@ -114,7 +114,10 @@ empty both, and the copy would read nothing, leaving every staged artifact
 empty. As it is, it finds no cached copy, downloads one of its own, and writes
 the same bytes into the shared file. So going back to an older agent downloads
 every staged artifact again, and **their URIs have to be reachable** for it to
-start its components. Back on a newer agent, those extra copies are removed.
+start its components. If they are not, its plan fails and every component stays
+stopped until the agent next starts with them reachable. Back on a newer agent,
+those extra copies are removed, and going forward needs no download, network or
+not.
 
 The other way round costs nothing: the first start after upgrading from an
 agent that copied moves its cached copies into `.staged/` — a rename, not a
