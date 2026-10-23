@@ -45,14 +45,15 @@ const stagedCacheName = ".staged"
 // If the staged copy already exists, the older one is a second copy — an older
 // agent ran in between and downloaded it again — and is removed.
 //
-// Either way, the path an older agent knows ends up naming nothing, and going
-// back to one costs that agent a download of every staged artifact: their
-// sources have to be reachable for it to start its components.
+// Either way, the path an older agent knows ends up naming nothing, and its
+// entry goes from the index at the top of the version. Going back to one costs
+// that agent a download of every staged artifact: their sources have to be
+// reachable for it to start its components.
 func ensureStagedArtifact(artDir, uri, sha string, timeout time.Duration, httpOpts artifact.HTTPOptions) (string, error) {
 	stagedDir := filepath.Join(artDir, stagedCacheName)
 	older, hasOlder := olderCachedCopy(artDir, uri)
 	if hasOlder && !hasCachedCopy(stagedDir, uri) {
-		moveCachedCopy(older, stagedDir)
+		moveCachedCopy(older, artDir, stagedDir)
 	}
 	path, _, err := artifact.Ensure(stagedDir, uri, sha, timeout, httpOpts)
 	if err != nil {
@@ -61,6 +62,7 @@ func ensureStagedArtifact(artDir, uri, sha string, timeout time.Duration, httpOp
 	if hasOlder {
 		if err := os.Remove(older.Path); err == nil {
 			log.Printf("[artifact] removed %s, a second cached copy left by an older agent", older.Path)
+			forgetCachedCopy(artDir, uri)
 		}
 	}
 	return path, nil
@@ -91,9 +93,15 @@ func hasCachedCopy(dir, uri string) bool {
 	return err == nil
 }
 
-// moveCachedCopy renames an older agent's cached copy into dir and indexes it
-// there. A failure only costs the download it was meant to save.
-func moveCachedCopy(older artifact.IndexEntry, dir string) {
+// moveCachedCopy renames an older agent's cached copy from artDir into dir and
+// indexes it there. A failure only costs the download it was meant to save, and
+// leaves the copy and its entry where they were.
+//
+// The entry in artDir's index is dropped once the file has moved, never
+// before. An agent cut off in between leaves an entry naming nothing, which
+// Ensure stats and takes for no cached copy at all; the other order would leave
+// a whole artifact in artDir that no index names.
+func moveCachedCopy(older artifact.IndexEntry, artDir, dir string) {
 	dst := filepath.Join(dir, filepath.Base(older.Path))
 	err := os.MkdirAll(dir, 0o755)
 	if err == nil {
@@ -109,7 +117,21 @@ func moveCachedCopy(older artifact.IndexEntry, dir string) {
 	if err := idx.Save(); err != nil {
 		log.Printf("[artifact] warning: failed to save index: %v", err)
 	}
+	forgetCachedCopy(artDir, older.URI)
 	log.Printf("[artifact] moved the cached %s into %s", filepath.Base(dst), dir)
+}
+
+// forgetCachedCopy drops uri's entry from the index in dir, once its file has
+// gone: left there, it would name a path that no longer exists.
+func forgetCachedCopy(dir, uri string) {
+	idx, _ := artifact.LoadIndex(dir)
+	if _, ok := idx.Get(uri); !ok {
+		return
+	}
+	idx.Delete(uri)
+	if err := idx.Save(); err != nil {
+		log.Printf("[artifact] warning: failed to save index: %v", err)
+	}
 }
 
 // stageArtifactToWorkDir puts a verified artifact from the cache into the

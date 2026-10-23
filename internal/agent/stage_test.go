@@ -456,6 +456,27 @@ func TestADatasetPayloadIsLinkedIntoItsVersion(t *testing.T) {
 	}
 }
 
+// indexEntry reads uri's entry from the index in dir, as the next start will.
+func indexEntry(dir, uri string) (artifact.IndexEntry, bool) {
+	idx, _ := artifact.LoadIndex(dir)
+	return idx.Get(uri)
+}
+
+// indexFiles returns the bytes of a version's two indexes, to tell whether
+// anything rewrote them.
+func indexFiles(t *testing.T, artDir string) string {
+	t.Helper()
+	var out string
+	for _, dir := range []string{artDir, filepath.Join(artDir, stagedCacheName)} {
+		b, err := os.ReadFile(filepath.Join(dir, "index.json"))
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		out += dir + ": " + string(b) + "\n"
+	}
+	return out
+}
+
 // stageAsAnOlderAgent is how every agent before linking staged an artifact,
 // step for step: its cached copy at the top of the version's directory, then
 // the workdir file opened with O_TRUNC and the cached file copied into it.
@@ -533,6 +554,9 @@ func TestGoingBackToAnOlderAgentEmptiesNothing(t *testing.T) {
 	if _, err := os.Lstat(older); !os.IsNotExist(err) {
 		t.Errorf("the older agent's copy is still at %s (%v): the artifact is stored twice", older, err)
 	}
+	if e, ok := indexEntry(artDir, url); ok {
+		t.Errorf("the index at the top of the version still names the removed copy: %+v", e)
+	}
 	if statT(t, dst).Ino != statT(t, staged).Ino {
 		t.Error("workdir file is not the staged copy")
 	}
@@ -570,10 +594,16 @@ func TestUpgradingMovesTheCachedCopyInsteadOfDownloadingIt(t *testing.T) {
 
 	a := &Agent{insecureSkipVerify: true}
 	adef := recipe.Artifact{URI: url, SHA256: sum}
-	for i := 0; i < 2; i++ { // the second start reuses what the first moved
-		if err := a.ensureAndVerifyArtifact(artDir, workDir, adef); err != nil {
-			t.Fatalf("staging %d: %v", i, err)
-		}
+	if err := a.ensureAndVerifyArtifact(artDir, workDir, adef); err != nil {
+		t.Fatalf("staging: %v", err)
+	}
+	indexes := indexFiles(t, artDir)
+	// the second start reuses what the first moved, and has nothing to tidy
+	if err := a.ensureAndVerifyArtifact(artDir, workDir, adef); err != nil {
+		t.Fatalf("staging again: %v", err)
+	}
+	if again := indexFiles(t, artDir); again != indexes {
+		t.Errorf("the second start rewrote an index:\n%s\nthen\n%s", indexes, again)
 	}
 	if n := hits.Load() - before; n != 0 {
 		t.Errorf("%d downloads, want 0: the cached copy was there to move", n)
@@ -583,6 +613,12 @@ func TestUpgradingMovesTheCachedCopyInsteadOfDownloadingIt(t *testing.T) {
 	}
 	if _, err := os.Lstat(older); !os.IsNotExist(err) {
 		t.Errorf("the older agent's copy is still at %s (%v)", older, err)
+	}
+	if e, ok := indexEntry(artDir, url); ok {
+		t.Errorf("the index at the top of the version still names the moved copy: %+v", e)
+	}
+	if e, ok := indexEntry(filepath.Join(artDir, stagedCacheName), url); !ok || e.Path != staged {
+		t.Errorf("the index of %s does not name the moved copy: %+v", stagedCacheName, e)
 	}
 	if statT(t, dst).Ino != cached {
 		t.Error("workdir file is not the staged copy")
@@ -727,5 +763,59 @@ func TestOnlyTheVersionsOwnFilesAreMoved(t *testing.T) {
 	}
 	if n := hits.Load(); n != 1 {
 		t.Errorf("%d downloads, want 1", n)
+	}
+}
+
+// TestAMoveThatFailsKeepsTheOlderCopyIndexed: the entry at the top of the
+// version goes only once its file has. A move that fails leaves both where they
+// were, so an older agent still finds its copy there.
+func TestAMoveThatFailsKeepsTheOlderCopyIndexed(t *testing.T) {
+	t.Chdir(t.TempDir())
+	content := bytes.Repeat([]byte("artifact "), 4096)
+	url, sum, _ := serveCounted(t, "app", content)
+	artDir, workDir := "runtime/artifacts/app/1", "runtime/components/app/1"
+	older := filepath.Join(artDir, "app")
+	stagedDir := filepath.Join(artDir, stagedCacheName)
+
+	stageAsAnOlderAgent(t, artDir, workDir, url, sum)
+	writeArtifact(t, stagedDir, nil, 0o644) // a file in the way: the move cannot create the directory
+	e, ok := olderCachedCopy(artDir, url)
+	if !ok {
+		t.Fatal("the older agent's copy is not there to move")
+	}
+	moveCachedCopy(e, artDir, stagedDir)
+
+	if got := mustRead(t, older); !bytes.Equal(got, content) {
+		t.Fatalf("the older agent's copy holds %d bytes after a failed move, want %d", len(got), len(content))
+	}
+	if e, ok := indexEntry(artDir, url); !ok || e.Path != older {
+		t.Errorf("a failed move dropped the entry of a copy that is still there: %+v", e)
+	}
+}
+
+// TestMovingACopyLeavesTheRestOfTheIndex: only the moved copy's entry goes.
+// The index at the top of a version also names its unpacked archives, which is
+// where a delta download looks for its base.
+func TestMovingACopyLeavesTheRestOfTheIndex(t *testing.T) {
+	t.Chdir(t.TempDir())
+	url, sum, _ := serveCounted(t, "app", bytes.Repeat([]byte("artifact "), 4096))
+	tarURL, tarSum, _ := serveCounted(t, "app.tar.gz", tarGz(t, "bin/app", []byte("the app")))
+	artDir, workDir := "runtime/artifacts/app/1", "runtime/components/app/1"
+
+	// an older agent cached both: the archive where everyone keeps it
+	if _, _, err := artifact.Ensure(artDir, tarURL, tarSum, 0, artifact.HTTPOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	stageAsAnOlderAgent(t, artDir, workDir, url, sum)
+
+	a := &Agent{insecureSkipVerify: true}
+	if err := a.ensureAndVerifyArtifact(artDir, workDir, recipe.Artifact{URI: url, SHA256: sum}); err != nil {
+		t.Fatalf("staging: %v", err)
+	}
+	if e, ok := indexEntry(artDir, url); ok {
+		t.Errorf("the moved copy is still in the index at the top of the version: %+v", e)
+	}
+	if e, ok := indexEntry(artDir, tarURL); !ok || filepath.Dir(e.Path) != artDir {
+		t.Errorf("moving the staged copy dropped the archive's entry, where a delta looks for a base: %+v", e)
 	}
 }
