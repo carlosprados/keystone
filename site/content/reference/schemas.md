@@ -39,7 +39,7 @@ That is the entire plan schema. Everything else is in the recipe.
 | `sha256` | string | — | Mandatory unless `--insecure-skip-verify` |
 | `sig_uri` | string | `<uri>.sig` | Detached signature |
 | `cert_uri` | string | — | Leaf certificate, if not provisioned on the device |
-| `unpack` | bool | `false` | Extract into the working directory |
+| `unpack` | bool | `false` | Extract into the working directory. Without it, the file is placed there as a hard link to the cached copy |
 | `github_token` | string | — | Sets `Authorization` for private GitHub assets |
 | `headers` | table | — | Extra HTTP headers for this download |
 | `delta` | table | — | Opt into patching instead of downloading — see below |

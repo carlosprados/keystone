@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -1025,8 +1024,6 @@ func (a *Agent) applyPlan(planPath string) error {
 	return err
 }
 
-// stageArtifactToWorkDir copies a downloaded artifact into the component workDir
-// using the artifact basename. Existing files are overwritten.
 // Clock is the agent's source of time for anything judged against
 // certificate validity.
 func (a *Agent) Clock() *clock.Source { return a.clock }
@@ -1116,7 +1113,13 @@ func (a *Agent) ensureAndVerifyArtifact(artDir, workDir string, adef recipe.Arti
 		return nil
 	}
 
-	path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
+	var path string
+	var err error
+	if adef.Unpack {
+		path, _, err = artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
+	} else {
+		path, err = ensureStagedArtifact(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
+	}
 	if err != nil {
 		return err
 	}
@@ -1187,7 +1190,8 @@ func (a *Agent) tryDeltaArtifact(artDir, workDir string, adef recipe.Artifact) b
 	}
 	// The patch reconstructs an uncompressed tar, so there has to be
 	// something to unpack. A single-file artifact staged verbatim is not
-	// covered yet.
+	// covered yet; when it is, findDeltaBase will have to look in each
+	// version's .staged/ as well, where such an artifact is cached.
 	if !adef.Unpack {
 		log.Printf("[artifact] delta skipped for %s: only unpacked archives are supported", adef.URI)
 		return false
@@ -1220,40 +1224,6 @@ func (a *Agent) tryDeltaArtifact(artDir, workDir string, adef recipe.Artifact) b
 	}
 	log.Printf("[artifact] %s installed from a delta patch", adef.URI)
 	return true
-}
-
-func stageArtifactToWorkDir(srcPath, workDir string) error {
-	st, err := os.Stat(srcPath)
-	if err != nil {
-		return err
-	}
-	if st.IsDir() {
-		return fmt.Errorf("artifact path is a directory: %s", srcPath)
-	}
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		return err
-	}
-	dstPath := filepath.Join(workDir, filepath.Base(srcPath))
-
-	in, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	mode := st.Mode().Perm()
-	if mode == 0 {
-		mode = 0o644
-	}
-	out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 func defaultString(s, def string) string {
