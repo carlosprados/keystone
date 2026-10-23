@@ -390,6 +390,13 @@ func (r *ProcessRunner) RunManaged(ctx context.Context, name string, opts Option
 				return nil
 			case err := <-exitCh:
 				ticker.Stop()
+				// A caller that cancelled ctx is stopping this instance, and
+				// may already have started the next one: the exit is theirs,
+				// not a failure of the component. Both cases can be ready at
+				// once, and select picks either.
+				if ctx.Err() != nil {
+					return nil
+				}
 				// Process exited
 				if policy != RestartNever {
 					if policy == RestartAlways || (policy == RestartOnFailure && err != nil) {

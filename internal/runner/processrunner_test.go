@@ -125,3 +125,36 @@ func TestOpenFilesLimitsTheComponentNotTheAgent(t *testing.T) {
 		t.Errorf("child limit = %+v, want 64/64", child)
 	}
 }
+
+// TestRunManagedLeavesAnExitAfterCancelToTheCaller: a caller that cancels the
+// loop is stopping the instance itself, and an agent restarting the component
+// starts the next one right after. The exit of the old instance must not reach
+// onExit, or the agent records it as a terminal failure of the new one.
+//
+// onStart cancels and kills, so both cases of the loop's select are ready by
+// the time it runs, and select picks either at random. Each round would miss
+// a regression half the time; twelve miss it once in 4096.
+func TestRunManagedLeavesAnExitAfterCancelToTheCaller(t *testing.T) {
+	for round := 0; round < 12; round++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		exited := make(chan error, 1)
+		err := New().RunManaged(ctx, "stopped", Options{Name: "stopped", Command: "sleep", Args: []string{"30"}},
+			HealthConfig{Interval: time.Hour}, RestartNever, 0,
+			func(h Handle) {
+				cancel()
+				_ = unix.Kill(h.(*ProcessHandle).PID(), unix.SIGKILL)
+			},
+			nil,
+			func(err error) { exited <- err },
+		)
+		cancel()
+		if err != nil {
+			t.Fatalf("round %d: RunManaged returned %v after its context was cancelled, want nil", round, err)
+		}
+		select {
+		case err := <-exited:
+			t.Fatalf("round %d: onExit(%v) for an instance its caller was stopping", round, err)
+		default:
+		}
+	}
+}
