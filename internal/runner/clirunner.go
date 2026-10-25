@@ -261,6 +261,11 @@ func (r *CLIRunner) RunManaged(ctx context.Context, name string, opts Options, h
 				} else {
 					log.Printf("[clirunner] component=%s container_id=%s msg=container exited cleanly", name, ch.containerID[:12])
 				}
+				// See ProcessRunner.RunManaged: an exit after cancellation
+				// belongs to the caller that cancelled.
+				if ctx.Err() != nil {
+					return nil
+				}
 				if policy != RestartNever {
 					if policy == RestartAlways || (policy == RestartOnFailure && err != nil) {
 						retries++

@@ -141,3 +141,12 @@ with the exit error — `nil` for a clean exit. The agent treats both as termina
 and in both cases clears the PID, resets the health verdict, deregisters the handle
 and releases the runner. Treating a clean exit as "nothing to report" is what used
 to freeze a dead component at `running/healthy`.
+
+An exit the agent asked for is **not** reported. A stop, a restart, a plan stop
+and the agent's own shutdown all cancel the runner's loop before they stop the
+workload, and an exit that arrives after that cancellation belongs to whoever
+cancelled it. That matters most for a restart: the agent starts the next instance
+as soon as the old one is gone, and the old one's exit, reported as terminal,
+used to land on the new instance — under `never`, `keystonectl restart` stopped a
+component and left it down, with the restart timing out waiting for a PID. The
+restart policy only ever decides about exits nobody asked for.
