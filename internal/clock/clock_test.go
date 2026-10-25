@@ -159,9 +159,19 @@ func TestTickWritesOnceThenRarely(t *testing.T) {
 	// The first tick lays down a mark, so an immediate power cut still leaves
 	// this boot's evidence behind.
 	s.Tick()
-	first, err := os.Stat(path)
+	// Persist renames a new file over the mark, so a write, and only a write,
+	// gives the mark another inode. Modification times cannot tell: the mark
+	// has a fixed size, and two writes microseconds apart get the same mtime
+	// wherever file timestamps are coarse. The first file is held open so its
+	// inode number cannot be reused by a later write.
+	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("the first tick did not establish a mark: %v", err)
+	}
+	defer f.Close()
+	first, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// Every tick after it, for the next quarter of an hour, must not touch disk.
@@ -172,7 +182,7 @@ func TestTickWritesOnceThenRarely(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !again.ModTime().Equal(first.ModTime()) {
+	if !os.SameFile(again, first) {
 		t.Error("the mark was rewritten on a later tick; the poller runs twice a second")
 	}
 
@@ -185,7 +195,7 @@ func TestTickWritesOnceThenRarely(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if third.ModTime().Equal(first.ModTime()) && third.Size() == first.Size() {
+	if os.SameFile(third, first) {
 		t.Errorf("no write after %s had passed", persistThreshold)
 	}
 }
