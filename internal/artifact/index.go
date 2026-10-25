@@ -67,6 +67,13 @@ func (i *Index) Put(e IndexEntry) {
 	i.mu.Unlock()
 }
 
+// Delete removes the entry for uri, if there is one.
+func (i *Index) Delete(uri string) {
+	i.mu.Lock()
+	delete(i.M, uri)
+	i.mu.Unlock()
+}
+
 // EnforceCacheLimit trims artifacts by LRU (oldest Updated first) to keep total size <= maxBytes.
 // It deletes files on disk and removes their index entries.
 func EnforceCacheLimit(root string, maxBytes int64) error {

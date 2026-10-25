@@ -32,6 +32,8 @@ journalctl -t keystone/<name>        # what the component itself printed
 | `install script failed: exit status 1` | Your install hook | The trimmed output follows in the log |
 | `start readiness timeout` | It never became healthy in time | Raise `interval`/`failure_threshold`, or fix the probe |
 | `signature verification failed` | Artifact or recipe is unsigned or signed by an unknown key | See [Signing](../../security/signing/) |
+| `cached artifact SHA mismatch, re-downloading` on every start | The cached file changes between starts. A staged artifact is the cached file, so the usual cause is a hook or the component writing into its own artifact | Copy the file out before changing it: artifacts are immutable. See [Staging into the workdir](../../internals/artifacts/#staging-into-the-workdir) |
+| `cannot hard-link … copying it instead` | `runtime/components` is on another filesystem than `runtime/artifacts`, or the filesystem has no hard links | Nothing breaks, but every staged artifact is stored twice: keep both under one filesystem |
 | `privdrop: …` | A privilege restriction could not be applied | See [Process privileges](../../security/process-privileges/) |
 | `mandatory (hard) dependency "x" not present in plan` | The recipe needs something the plan does not include | Add it, or make the dependency `soft` |
 

@@ -15,6 +15,10 @@ with **detached signatures** verified against a **trust bundle** on the device.
 | Recipe file | `<recipe>.toml.sig` | Before any lifecycle hook runs |
 | Recipe via API | — | Trusted by the API authentication instead |
 
+A staged artifact is the verified file itself — the workdir holds a hard link
+to the cached copy — so tampering with it in place is caught at the next start.
+See [Staging into the workdir](../../internals/artifacts/#staging-into-the-workdir).
+
 The order matters for recipes: the install hook is arbitrary shell, so verifying
 after running it would be pointless.
 

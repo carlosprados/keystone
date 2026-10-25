@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -150,6 +149,9 @@ func New(opts Options) *Agent {
 	// can use variables (e.g., tokens for artifact downloads).
 	config.LoadDotEnvDefault()
 
+	// Set when the last plan has to be resumed, and started at the end.
+	var resumeLastPlan func()
+
 	// Create default context - can be overridden via SetContext
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -255,7 +257,7 @@ func New(opts Options) *Agent {
 			if strings.EqualFold(strings.TrimSpace(a.planStatus), "applying") {
 				log.Printf("[agent] previous apply was interrupted (status=applying); recovering by re-applying from scratch")
 			}
-			go func() {
+			resumeLastPlan = func() {
 				log.Printf("[agent] resuming last plan: %s", a.planPath)
 				if err := a.applyPlanAs(a.planPath, false, applyByResume); err != nil {
 					log.Printf("[agent] resume failed: %v", err)
@@ -265,7 +267,7 @@ func New(opts Options) *Agent {
 				// Leaving it alive would mean a process running that nothing
 				// supervises and nothing reports.
 				a.reapSurvivors()
-			}()
+			}
 		}
 	}
 	a.selfUpdateRoot = opts.SelfUpdateRoot
@@ -286,6 +288,13 @@ func New(opts Options) *Agent {
 	}
 	a.startStatePoller()
 	a.startDatasetRefresher()
+	// Last, once the agent is whole. The resume verifies recipe signatures
+	// against the trust pool and honours --insecure-skip-verify, both set
+	// above; started where it is decided, it raced them, and a resume that
+	// lost found no trust bundle and left the device running nothing.
+	if resumeLastPlan != nil {
+		go resumeLastPlan()
+	}
 	return a
 }
 
@@ -1005,16 +1014,7 @@ func (a *Agent) applyPlan(planPath string) error {
 	a.mu.Unlock()
 	a.persistSnapshot()
 	// GC artifacts best-effort: keep ones used by this plan
-	keep := make(map[string]struct{})
-	for _, it := range p.Components {
-		// keep all artifact dirs under component name
-		rcp, _ := recipe.Load(it.RecipePath)
-		if rcp != nil {
-			dir := fmt.Sprintf("%s/%s", rcp.Metadata.Name, rcp.Metadata.Version)
-			keep[dir] = struct{}{}
-		}
-	}
-	_ = artifact.GC("runtime/artifacts", keep)
+	_ = artifact.GC("runtime/artifacts", artifactsInUse(p.Components))
 	// Enforce artifact cache budget
 	_ = artifact.EnforceCacheLimit("runtime/artifacts", a.artifactCacheLimit)
 	// Save plan mapping
@@ -1025,8 +1025,6 @@ func (a *Agent) applyPlan(planPath string) error {
 	return err
 }
 
-// stageArtifactToWorkDir copies a downloaded artifact into the component workDir
-// using the artifact basename. Existing files are overwritten.
 // Clock is the agent's source of time for anything judged against
 // certificate validity.
 func (a *Agent) Clock() *clock.Source { return a.clock }
@@ -1116,7 +1114,13 @@ func (a *Agent) ensureAndVerifyArtifact(artDir, workDir string, adef recipe.Arti
 		return nil
 	}
 
-	path, _, err := artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
+	var path string
+	var err error
+	if adef.Unpack {
+		path, _, err = artifact.Ensure(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
+	} else {
+		path, err = ensureStagedArtifact(artDir, adef.URI, adef.SHA256, a.artifactDownloadTimeout, httpOpts)
+	}
 	if err != nil {
 		return err
 	}
@@ -1187,7 +1191,8 @@ func (a *Agent) tryDeltaArtifact(artDir, workDir string, adef recipe.Artifact) b
 	}
 	// The patch reconstructs an uncompressed tar, so there has to be
 	// something to unpack. A single-file artifact staged verbatim is not
-	// covered yet.
+	// covered yet; when it is, findDeltaBase will have to look in each
+	// version's .staged/ as well, where such an artifact is cached.
 	if !adef.Unpack {
 		log.Printf("[artifact] delta skipped for %s: only unpacked archives are supported", adef.URI)
 		return false
@@ -1220,40 +1225,6 @@ func (a *Agent) tryDeltaArtifact(artDir, workDir string, adef recipe.Artifact) b
 	}
 	log.Printf("[artifact] %s installed from a delta patch", adef.URI)
 	return true
-}
-
-func stageArtifactToWorkDir(srcPath, workDir string) error {
-	st, err := os.Stat(srcPath)
-	if err != nil {
-		return err
-	}
-	if st.IsDir() {
-		return fmt.Errorf("artifact path is a directory: %s", srcPath)
-	}
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		return err
-	}
-	dstPath := filepath.Join(workDir, filepath.Base(srcPath))
-
-	in, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	mode := st.Mode().Perm()
-	if mode == 0 {
-		mode = 0o644
-	}
-	out, err := os.OpenFile(dstPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 func defaultString(s, def string) string {
@@ -1679,17 +1650,18 @@ func (a *Agent) persistSnapshot() {
 			comps[i].PID = pid
 		}
 	}
+	// The plan fields are read under the same lock their writers hold: an
+	// apply, a resume or a stop can be changing them while the state poller
+	// or Close persists, and the snapshot must not mix two moments.
+	plan := state.PlanStatus{Path: a.planPath, Status: a.planStatus, Error: a.planErr}
+	planComps := append([]state.PlanComponent(nil), a.planComps...)
 	a.mu.RUnlock()
+	plan.Updated = time.Now()
 
 	snap := state.Snapshot{
-		Plan: state.PlanStatus{
-			Path:    a.planPath,
-			Status:  a.planStatus,
-			Error:   a.planErr,
-			Updated: time.Now(),
-		},
+		Plan:           plan,
 		Components:     comps,
-		PlanComponents: a.planComps,
+		PlanComponents: planComps,
 		Datasets:       a.datasetSnapshot(),
 	}
 
@@ -1697,7 +1669,7 @@ func (a *Agent) persistSnapshot() {
 	// renames the file every time; skip the write when nothing observable
 	// changed. Updated is deliberately excluded from the fingerprint, or every
 	// tick would look like a change.
-	fingerprint := fmt.Sprintf("%s|%s|%s|%v|%v|%v", a.planPath, a.planStatus, a.planErr, comps, a.planComps, snap.Datasets)
+	fingerprint := fmt.Sprintf("%s|%s|%s|%v|%v|%v", plan.Path, plan.Status, plan.Error, comps, planComps, snap.Datasets)
 	if fingerprint == a.lastSnapshot {
 		return
 	}
@@ -1710,10 +1682,13 @@ func (a *Agent) persistSnapshot() {
 
 // restartFromPlan restarts a single component using the current plan's recipe.
 func (a *Agent) restartFromPlan(name string) error {
-	if a.planPath == "" {
+	a.mu.RLock()
+	planPath := a.planPath
+	a.mu.RUnlock()
+	if planPath == "" {
 		return fmt.Errorf("no plan applied")
 	}
-	p, err := deploy.Load(a.planPath)
+	p, err := deploy.Load(planPath)
 	if err != nil {
 		return err
 	}
@@ -2519,4 +2494,30 @@ func (a *Agent) runComponentShutdownScript(ctx context.Context, name string) err
 		return fmt.Errorf("shutdown script failed for %s: %w", name, err)
 	}
 	return nil
+}
+
+// datasetCacheRoot is the directory under runtime/artifacts that caches the
+// payloads of datasets, one subdirectory per dataset name.
+const datasetCacheRoot = "datasets"
+
+// artifactsInUse is the set artifact.GC keeps after an apply: the cache of
+// every recipe version the plan runs, and the cache of every dataset those
+// recipes declare. A dataset's cache sits two levels down, like a recipe
+// version's, so leaving it out made the GC delete it on every apply and the
+// next refresh download the payload again.
+func artifactsInUse(components []deploy.Component) map[string]struct{} {
+	keep := make(map[string]struct{})
+	for _, it := range components {
+		rcp, _ := recipe.Load(it.RecipePath)
+		if rcp == nil {
+			continue
+		}
+		keep[rcp.Metadata.Name+"/"+rcp.Metadata.Version] = struct{}{}
+		for _, d := range rcp.Datasets {
+			if spec, err := dataset.ParseSpec(d); err == nil {
+				keep[datasetCacheRoot+"/"+spec.Name] = struct{}{}
+			}
+		}
+	}
+	return keep
 }
