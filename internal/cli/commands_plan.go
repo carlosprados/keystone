@@ -94,18 +94,21 @@ and supervised are left running rather than restarted.
 			return applyPlan(args[0], dry)
 		}),
 	}
-	cmd.Flags().BoolVar(&dry, "dry", false, "Validate and report the reconcile, changing nothing")
+	cmd.Flags().BoolVar(&dry, "dry", false, "Validate and log the reconcile in the agent's log, changing nothing")
 	return cmd
 }
 
 func applyDryCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "apply-dry <plan.toml>",
-		Short:   "Apply a plan in dry-run mode and show the reconcile",
+		Short:   "Validate a plan and log the reconcile it would run, changing nothing",
 		GroupID: groupPlan,
 		Args:    cobra.ExactArgs(1),
-		Long: `Exactly ` + "`apply --dry`" + `: validate the plan and report what applying it
+		Long: `Exactly ` + "`apply --dry`" + `: validate the plan and work out what applying it
 would do, without installing or starting anything.
+
+The command prints ` + "`OK`" + ` when the plan is valid. The reconcile itself — the
+stop, start and no-touch sets — goes to the agent's log, not to the response.
 
 ` + apiNote(http.MethodPost, "/v1/plan/apply?dry=true"),
 		Example: `  keystonectl apply-dry plan.toml`,
