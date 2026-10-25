@@ -97,6 +97,26 @@ sudo sed -i 's/^KEYSTONE_UPDATE_CONFIRMED=.*/KEYSTONE_UPDATE_CONFIRMED=v0.12.7/'
 sudo systemctl restart keystone
 ```
 
+## Updating from v0.13.0 or earlier: a rollback needs the network
+
+Later versions keep the cached copy of every staged artifact (one without
+`unpack`) in its version's `.staged/` directory, where v0.13.0 and earlier do
+not look. If the gate rolls such an update back, the version it goes back to
+finds no cached copy and **downloads every staged artifact again** before it can
+start its components. On a device that cannot reach its artifact URIs at that
+moment, the download fails after its retries, the plan fails, and **every
+component stays stopped**, not only the ones that stage an artifact. It stays
+that way when the URIs come back: the failed plan is retried at the agent's next
+start, which then downloads what it needs. Going back by hand costs the same. A
+rollback between two versions on the same side of this change still works
+offline, and so does going forward again.
+
+**Devices that cannot reach their artifact URIs should not rely on the gate's
+rollback for this upgrade.** Keep the source reachable until the update is
+confirmed. The upgrade itself downloads nothing: the first start moves the cached
+copies into `.staged/`. Why the copies moved is in
+[Going back to an older agent](../../internals/artifacts/#going-back-to-an-older-agent).
+
 ## Log volume
 
 Component stdout and stderr are streamed into the agent's log, so a chatty

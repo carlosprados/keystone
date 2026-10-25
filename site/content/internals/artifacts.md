@@ -54,6 +54,78 @@ protections that matter when the archive comes off the network:
 - **Size cap** — `KEYSTONE_MAX_EXTRACT_BYTES` (2 GiB by default) bounds the
   decompressed size, so a small archive cannot fill the disk.
 
+## Staging into the workdir
+
+An artifact without `unpack` appears in the component's working directory under
+its file name, as a **second name for the cached file** — a hard link, not a
+copy. The cache keeps the file to verify it and to reuse it; the workdir is
+where the component finds it. With a link, both are the same bytes on disk.
+
+It used to be a copy, and the copy cost more than the disk it took:
+
+| | Copy (before) | Link |
+|---|---|---|
+| Disk per staged artifact | twice its size, on filesystems without reflinks (ext4) | once |
+| Every start (apply, component restart, agent restart) | the artifact copied again | nothing written |
+| Staging over a running executable | fails: `text file busy` | works |
+| While it happens | the file is empty, then partial | the old file or the new one |
+
+Measured on a device running four components on ext4: 934 MiB of artifacts
+were stored twice, and restarting one component rewrote 636 MiB of them.
+
+The last two rows matter on the resume after an agent restart. A survivor that
+is about to be adopted is still running its executable when that executable is
+staged again; a copy cannot open it for writing, so the apply failed and the
+survivor was reaped. The new name is made under a temporary name in the same
+directory and renamed over the old one, so a running process keeps what it has
+and a reader never sees a file in between.
+
+**An artifact is immutable.** A component that wants to change one copies it
+out first. Writing into it in place now writes into the cache too. When the
+recipe declares the artifact's `sha256`, the next start finds the digest wrong,
+downloads the artifact again and stages it fresh; a device that cannot reach the
+artifact's URI at that point fails the start, as it would for any artifact that
+does not verify. The `sha256` is mandatory unless the agent runs with
+`--insecure-skip-verify`. Without it, the cache reuses its file unchecked, so the
+write stays and every later start runs it. Restaging a copy used to undo such a
+write at every start, silently.
+
+The permission bits and the owner of the file being replaced carry over, so an
+executable bit set by an install hook — which runs once per workdir — survives a
+fresh download of the artifact.
+
+Where a link is not possible — `runtime/components` on another filesystem than
+`runtime/artifacts`, or a filesystem without hard links — the artifact is
+copied instead, still to a temporary name and renamed into place, and the agent
+logs `cannot hard-link … copying it instead`.
+
+### Going back to an older agent
+
+The cached file a workdir links to lives in its version's `.staged/`
+subdirectory (`runtime/artifacts/<recipe-name>/<version>/.staged/`, with an
+index of its own), not at the top of the version's directory, where the cache
+used to keep it. That is for going back to an agent from before linking — by
+hand, or by the self-update gate rolling back a version that failed.
+
+Such an agent stages by opening the workdir file for writing, truncating it,
+and copying its cached file into it. Had it found its cached file where it used
+to keep it, that file would be the workdir file itself: truncating the one would
+empty both, and the copy would read nothing, leaving every staged artifact
+empty. As it is, it finds no cached copy, downloads one of its own, and writes
+the same bytes into the shared file. So going back to an older agent downloads
+every staged artifact again, and **their URIs have to be reachable** for it to
+start its components. If they are not, its plan fails and every component stays
+stopped until the agent next starts with them reachable. Back on a newer agent,
+those extra copies are removed, and going forward needs no download, network or
+not.
+
+The other way round costs nothing: the first start after upgrading from an
+agent that copied moves its cached copies into `.staged/` — a rename, not a
+download — and replaces the copies in the workdir with links to them.
+
+Artifacts with `unpack` are never linked, so they stay where they were, which
+is also where a [delta download](#delta-downloads) looks for its base.
+
 ## Delta downloads
 
 An artifact can opt into being **patched** instead of downloaded whole. The agent
@@ -156,8 +228,10 @@ Current limits, deliberately:
 
 ## The cache
 
-Artifacts live in `runtime/artifacts/<recipe-name>/<version>/` and are reused
-across applies — re-applying a plan downloads nothing.
+Artifacts live in `runtime/artifacts/<recipe-name>/<version>/` — the ones staged
+into the workdir in its `.staged/` subdirectory, see
+[Going back to an older agent](#going-back-to-an-older-agent) — and are reused
+across applies: re-applying a plan downloads nothing.
 
 Two mechanisms keep it bounded:
 
@@ -171,3 +245,8 @@ Two mechanisms keep it bounded:
 
 Version the directory, not the file: keeping `<version>` in the path is what lets a
 rollback reuse the previous artifact without downloading it again.
+
+A staged artifact shares its file with the workdir (see
+[Staging into the workdir](#staging-into-the-workdir)), so removing a version's
+cache directory frees nothing while its workdir still names the files; the
+space goes when the last name does.

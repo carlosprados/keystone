@@ -126,6 +126,14 @@ component restart, through one shared code path. By default (fail-closed):
 Missing any of these aborts the install. The certificate comes from the recipe
 (`cert_uri`), `KEYSTONE_LEAF_CERT`, or a sibling file.
 
+The file a component runs is the file that was verified. An artifact without
+`unpack` is staged into the workdir as a hard link to the cached copy, not as a
+copy of it, so a change made to it in place is a change to the cached file, and
+the next verification — at the next start — finds it: the artifact is downloaded
+again, or the start fails if it cannot be. Finding it takes the `sha256`, which
+only `--insecure-skip-verify` makes optional: without one, the cached file is
+reused unchecked and the change stays.
+
 ```toml
 [[artifacts]]
 uri      = "https://example.com/hello-linux-amd64"
