@@ -34,7 +34,7 @@ source <(keystonectl completion bash)   # or zsh, fish, powershell
 | Command | What it does |
 |---|---|
 | `apply <plan.toml>` | Upload and apply a deployment plan |
-| `apply-dry <plan.toml>` | Apply a plan in dry-run mode and show the reconcile |
+| `apply-dry <plan.toml>` | Validate a plan and log the reconcile it would run, changing nothing |
 | `graph` | Show the dependency graph and a valid start order |
 | `reconcile` | Repair the plan in effect |
 | `status` | Show the applied plan, its status and its components |
@@ -110,8 +110,8 @@ keystonectl restart api --wait health --timeout 120s
 Note `stop-plan` (everything) versus `stop <component>` (one thing) — they
 are different commands, and the plural mistake is an outage.
 
-Every command prints the agent's own response. A dry run reports the order it
-would use, not a bare `OK`:
+Every command prints the agent's own response. `restart-dry` reports the
+order it would use, not a bare `OK`:
 
 ```console
 $ keystonectl restart-dry api

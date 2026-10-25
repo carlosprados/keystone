@@ -266,8 +266,8 @@ const ctlOutro = `` +
 Note ` + "`stop-plan`" + ` (everything) versus ` + "`stop <component>`" + ` (one thing) — they
 are different commands, and the plural mistake is an outage.
 
-Every command prints the agent's own response. A dry run reports the order it
-would use, not a bare ` + "`OK`" + `:
+Every command prints the agent's own response. ` + "`restart-dry`" + ` reports the
+order it would use, not a bare ` + "`OK`" + `:
 
 ` + "```console" + `
 $ keystonectl restart-dry api

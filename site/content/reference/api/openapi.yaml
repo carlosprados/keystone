@@ -307,13 +307,15 @@ paths:
         are alive and supervised are left running.'
       operationId: postPlanApply
       parameters:
-      - description: true validates and reports the reconcile without installing or
-          starting anything
+      - description: true validates the plan and installs or starts nothing; the reconcile
+          (stop, start and no-touch sets) goes to the agent's log, and the response
+          has no body
         in: query
         name: dry
         schema:
-          description: true validates and reports the reconcile without installing
-            or starting anything
+          description: true validates the plan and installs or starts nothing; the
+            reconcile (stop, start and no-touch sets) goes to the agent's log, and
+            the response has no body
           examples:
           - "true"
           type: string

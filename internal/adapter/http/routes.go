@@ -215,7 +215,7 @@ func (a *Adapter) routes() []Route {
 			RawTOML:       true,
 			SuccessStatus: http.StatusAccepted,
 			Params: []Param{
-				{Name: "dry", In: "query", Description: "true validates and reports the reconcile without installing or starting anything", Example: "true"},
+				{Name: "dry", In: "query", Description: "true validates the plan and installs or starts nothing; the reconcile (stop, start and no-touch sets) goes to the agent's log, and the response has no body", Example: "true"},
 			},
 			Errors:  []int{http.StatusBadRequest, http.StatusServiceUnavailable, http.StatusInternalServerError},
 			handler: a.handlePlanApply,
