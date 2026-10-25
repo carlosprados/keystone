@@ -162,7 +162,10 @@ across applies — re-applying a plan downloads nothing.
 Two mechanisms keep it bounded:
 
 - **GC**: after a successful apply, directories not referenced by the current plan
-  are removed.
+  are removed. Referenced means a recipe version the plan runs, or the download
+  cache of a dataset one of those recipes declares
+  (`runtime/artifacts/datasets/<name>/`); the cache of a dataset no recipe in the
+  plan declares goes too.
 - **Budget**: `KEYSTONE_ARTIFACT_CACHE_LIMIT_BYTES` (default 2 GiB) evicts oldest
   first once exceeded.
 

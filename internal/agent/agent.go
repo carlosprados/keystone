@@ -1005,16 +1005,7 @@ func (a *Agent) applyPlan(planPath string) error {
 	a.mu.Unlock()
 	a.persistSnapshot()
 	// GC artifacts best-effort: keep ones used by this plan
-	keep := make(map[string]struct{})
-	for _, it := range p.Components {
-		// keep all artifact dirs under component name
-		rcp, _ := recipe.Load(it.RecipePath)
-		if rcp != nil {
-			dir := fmt.Sprintf("%s/%s", rcp.Metadata.Name, rcp.Metadata.Version)
-			keep[dir] = struct{}{}
-		}
-	}
-	_ = artifact.GC("runtime/artifacts", keep)
+	_ = artifact.GC("runtime/artifacts", artifactsInUse(p.Components))
 	// Enforce artifact cache budget
 	_ = artifact.EnforceCacheLimit("runtime/artifacts", a.artifactCacheLimit)
 	// Save plan mapping
@@ -2519,4 +2510,30 @@ func (a *Agent) runComponentShutdownScript(ctx context.Context, name string) err
 		return fmt.Errorf("shutdown script failed for %s: %w", name, err)
 	}
 	return nil
+}
+
+// datasetCacheRoot is the directory under runtime/artifacts that caches the
+// payloads of datasets, one subdirectory per dataset name.
+const datasetCacheRoot = "datasets"
+
+// artifactsInUse is the set artifact.GC keeps after an apply: the cache of
+// every recipe version the plan runs, and the cache of every dataset those
+// recipes declare. A dataset's cache sits two levels down, like a recipe
+// version's, so leaving it out made the GC delete it on every apply and the
+// next refresh download the payload again.
+func artifactsInUse(components []deploy.Component) map[string]struct{} {
+	keep := make(map[string]struct{})
+	for _, it := range components {
+		rcp, _ := recipe.Load(it.RecipePath)
+		if rcp == nil {
+			continue
+		}
+		keep[rcp.Metadata.Name+"/"+rcp.Metadata.Version] = struct{}{}
+		for _, d := range rcp.Datasets {
+			if spec, err := dataset.ParseSpec(d); err == nil {
+				keep[datasetCacheRoot+"/"+spec.Name] = struct{}{}
+			}
+		}
+	}
+	return keep
 }
