@@ -150,6 +150,9 @@ func New(opts Options) *Agent {
 	// can use variables (e.g., tokens for artifact downloads).
 	config.LoadDotEnvDefault()
 
+	// Set when the last plan has to be resumed, and started at the end.
+	var resumeLastPlan func()
+
 	// Create default context - can be overridden via SetContext
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -255,7 +258,7 @@ func New(opts Options) *Agent {
 			if strings.EqualFold(strings.TrimSpace(a.planStatus), "applying") {
 				log.Printf("[agent] previous apply was interrupted (status=applying); recovering by re-applying from scratch")
 			}
-			go func() {
+			resumeLastPlan = func() {
 				log.Printf("[agent] resuming last plan: %s", a.planPath)
 				if err := a.applyPlanAs(a.planPath, false, applyByResume); err != nil {
 					log.Printf("[agent] resume failed: %v", err)
@@ -265,7 +268,7 @@ func New(opts Options) *Agent {
 				// Leaving it alive would mean a process running that nothing
 				// supervises and nothing reports.
 				a.reapSurvivors()
-			}()
+			}
 		}
 	}
 	a.selfUpdateRoot = opts.SelfUpdateRoot
@@ -286,6 +289,13 @@ func New(opts Options) *Agent {
 	}
 	a.startStatePoller()
 	a.startDatasetRefresher()
+	// Last, once the agent is whole. The resume verifies recipe signatures
+	// against the trust pool and honours --insecure-skip-verify, both set
+	// above; started where it is decided, it raced them, and a resume that
+	// lost found no trust bundle and left the device running nothing.
+	if resumeLastPlan != nil {
+		go resumeLastPlan()
+	}
 	return a
 }
 
@@ -1679,17 +1689,18 @@ func (a *Agent) persistSnapshot() {
 			comps[i].PID = pid
 		}
 	}
+	// The plan fields are read under the same lock their writers hold: an
+	// apply, a resume or a stop can be changing them while the state poller
+	// or Close persists, and the snapshot must not mix two moments.
+	plan := state.PlanStatus{Path: a.planPath, Status: a.planStatus, Error: a.planErr}
+	planComps := append([]state.PlanComponent(nil), a.planComps...)
 	a.mu.RUnlock()
+	plan.Updated = time.Now()
 
 	snap := state.Snapshot{
-		Plan: state.PlanStatus{
-			Path:    a.planPath,
-			Status:  a.planStatus,
-			Error:   a.planErr,
-			Updated: time.Now(),
-		},
+		Plan:           plan,
 		Components:     comps,
-		PlanComponents: a.planComps,
+		PlanComponents: planComps,
 		Datasets:       a.datasetSnapshot(),
 	}
 
@@ -1697,7 +1708,7 @@ func (a *Agent) persistSnapshot() {
 	// renames the file every time; skip the write when nothing observable
 	// changed. Updated is deliberately excluded from the fingerprint, or every
 	// tick would look like a change.
-	fingerprint := fmt.Sprintf("%s|%s|%s|%v|%v|%v", a.planPath, a.planStatus, a.planErr, comps, a.planComps, snap.Datasets)
+	fingerprint := fmt.Sprintf("%s|%s|%s|%v|%v|%v", plan.Path, plan.Status, plan.Error, comps, planComps, snap.Datasets)
 	if fingerprint == a.lastSnapshot {
 		return
 	}
@@ -1710,10 +1721,13 @@ func (a *Agent) persistSnapshot() {
 
 // restartFromPlan restarts a single component using the current plan's recipe.
 func (a *Agent) restartFromPlan(name string) error {
-	if a.planPath == "" {
+	a.mu.RLock()
+	planPath := a.planPath
+	a.mu.RUnlock()
+	if planPath == "" {
 		return fmt.Errorf("no plan applied")
 	}
-	p, err := deploy.Load(a.planPath)
+	p, err := deploy.Load(planPath)
 	if err != nil {
 		return err
 	}
